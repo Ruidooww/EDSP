@@ -449,3 +449,228 @@ Controller 只负责 API 参数和响应。
 ```
 
 整体方向正确，建议先修高优先级问题，再继续做真实数据库扫描器和真实采集执行器。
+
+---
+
+## 8. 接下来实施计划
+
+接下来不要再扩展新概念，先进入：
+
+```text
+补基础稳定性 + 打通真实最小链路
+```
+
+核心目标是先把 EDSP 的地基打稳，尤其是：
+
+```text
+真实扫描数据库结构
+Raw 事件标准化
+采集任务状态一致性
+字段映射落库
+幂等和容错
+```
+
+---
+
+### 8.1 下一步先做 5 件事
+
+#### 1. 先修高优先级问题
+
+优先修改：
+
+```text
+1. 时间解析 parseTime 兼容常见格式
+2. JSON 入库前统一校验
+3. standard_events 增加 dedup_key
+4. alerts.standard_event_id 增加外键和索引
+5. 所有 limit 参数加 safeLimit
+6. startRun / finishRun / createStandardEvent 加事务
+```
+
+这一步是为了让当前的 Raw → Standard Event 管道更稳。
+
+---
+
+#### 2. 新增 V5 migration
+
+建议新增文件：
+
+```text
+backend/edsp-core/src/main/resources/db/migration/V5__event_pipeline_hardening.sql
+```
+
+先补：
+
+```sql
+alter table standard_events add column if not exists dedup_key varchar(128);
+
+create unique index if not exists uk_standard_events_dedup_key
+on standard_events(dedup_key)
+where dedup_key is not null;
+
+alter table alerts add column if not exists standard_event_id bigint;
+
+create index if not exists idx_alerts_standard_event
+on alerts(standard_event_id);
+
+alter table raw_logs add column if not exists payload_hash varchar(128);
+alter table raw_imports add column if not exists payload_hash varchar(128);
+alter table raw_imports add column if not exists file_hash varchar(128);
+```
+
+外键可以先加；如果本地已有脏数据导致失败，就先只加索引，等数据清理后再加 FK。
+
+---
+
+#### 3. 把 Controller 核心逻辑抽 Service
+
+先不要全项目重构，优先抽：
+
+```text
+IngestionService
+CollectionTaskService
+SchemaScanService
+```
+
+优先处理：
+
+```text
+createRawEvent
+createStandardEvent
+standardizeRawEvent
+startRun
+finishRun
+createScanRun
+finishScanRun
+```
+
+这些方法需要加：
+
+```java
+@Transactional
+```
+
+这样后面采集任务、游标、Raw 事件、标准事件不会出现半成功状态。
+
+---
+
+#### 4. 做一个“假真实”的数据库扫描器 MVP
+
+先不要追求适配所有厂家。
+
+先做最小真实流程：
+
+```text
+选择一个 SQL Server / PostgreSQL 数据源
+  ↓
+读取 information_schema.tables
+  ↓
+读取 information_schema.columns
+  ↓
+写入 schema_scan_runs
+  ↓
+写入 schema_tables
+  ↓
+写入 schema_fields
+  ↓
+前端 SchemaPage 能看到真实扫描结果
+```
+
+下一阶段目标不是 AI 识别，而是：
+
+```text
+平台真的能扫库
+平台真的能落元数据
+平台真的能核验扫了多少表
+```
+
+这个做完后，数据库识别基础才成立。
+
+---
+
+#### 5. 做 Raw Event → Standard Event 自动转换 Demo
+
+现在已有接口，但还缺自动转换服务。
+
+先做简单版本：
+
+```text
+raw_events.payload_json
+  ↓
+根据字段映射 field_mappings
+  ↓
+生成 standard_events
+```
+
+例如 raw：
+
+```json
+{
+  "event_id": "E001",
+  "event_name": "疑似敏感文件外发",
+  "risk_level": "high",
+  "event_time": "2026-05-20 09:42:00",
+  "user_name": "张三"
+}
+```
+
+映射后生成：
+
+```json
+{
+  "externalId": "E001",
+  "eventType": "data_leakage",
+  "severity": "high",
+  "occurredAt": "2026-05-20 09:42:00",
+  "actor": "张三"
+}
+```
+
+这一步打通后，EDSP 主链路就是：
+
+```text
+外部数据 → raw_events → standard_events
+```
+
+---
+
+### 8.2 本周目标
+
+这周不要做 AI、XGBoost、复杂 Agent。
+
+本周只完成：
+
+```text
+1. V5 migration
+2. IngestionService / CollectionTaskService / SchemaScanService
+3. safeLimit + JSON 校验 + 时间解析
+4. 数据库元数据真实扫描 MVP
+5. raw_events 自动标准化 MVP
+```
+
+---
+
+### 8.3 做完后的验收标准
+
+按下面标准检查：
+
+```text
+1. docker compose up --build 能启动
+2. 前端采集任务页面不报错
+3. 能创建采集任务
+4. 能启动/完成一次 ingestion run
+5. 能写入 raw_event
+6. 能把 raw_event 转成 standard_event
+7. 能登记一次 schema scan run
+8. 能扫描真实数据库表和字段
+9. 前端 SchemaPage 能看到真实表字段
+10. docs/reviews 里的问题至少修掉前 5 个
+```
+
+---
+
+### 8.4 当前最该做的一句话
+
+> **先把“真实扫描数据库结构 + Raw 事件标准化”打通。**
+
+这是 EDSP 后续所有 AI、Agent、XGBoost、告警降噪的地基。地基没稳之前，不建议继续往上堆智能能力。

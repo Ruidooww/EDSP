@@ -1,0 +1,31 @@
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+    gateway:
+      routes:
+        - id: edsp-auth
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/auth/**
+        - id: edsp-core
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/core/**
+        - id: edsp-alert
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/alerts/**
+        - id: edsp-ingest
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/ingest/**
+        - id: edsp-notifications
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/notifications/**
+        - id: edsp-report
+          uri: http://localhost:8084
+          predicates:
+            - Path=/api/reports/**

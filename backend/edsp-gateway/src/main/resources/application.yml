@@ -1,0 +1,43 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: edsp-gateway
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_ENABLED:true}
+        server-addr: ${NACOS_ADDR:nacos:8848}
+    gateway:
+      routes:
+        - id: edsp-auth
+          uri: ${AUTH_SERVICE_URL:http://edsp-auth:8081}
+          predicates:
+            - Path=/api/auth/**
+        - id: edsp-core
+          uri: ${CORE_SERVICE_URL:http://edsp-core:8082}
+          predicates:
+            - Path=/api/core/**
+        - id: edsp-alert
+          uri: ${ALERT_SERVICE_URL:http://edsp-alert:8083}
+          predicates:
+            - Path=/api/alerts/**
+        - id: edsp-ingest
+          uri: ${ALERT_SERVICE_URL:http://edsp-alert:8083}
+          predicates:
+            - Path=/api/ingest/**
+        - id: edsp-notifications
+          uri: ${ALERT_SERVICE_URL:http://edsp-alert:8083}
+          predicates:
+            - Path=/api/notifications/**
+        - id: edsp-report
+          uri: ${REPORT_SERVICE_URL:http://edsp-report:8084}
+          predicates:
+            - Path=/api/reports/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

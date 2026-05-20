@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: ${EDSP_LOCAL_DB_URL:jdbc:h2:file:./data/edsp-local;AUTO_SERVER=TRUE;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;INIT=CREATE DOMAIN IF NOT EXISTS JSONB AS JSON\;CREATE DOMAIN IF NOT EXISTS TIMESTAMPTZ AS TIMESTAMP WITH TIME ZONE}
+    username: ${EDSP_LOCAL_DB_USERNAME:sa}
+    password: ${EDSP_LOCAL_DB_PASSWORD:}
+    driver-class-name: org.h2.Driver
+  cloud:
+    nacos:
+      discovery:
+        enabled: false

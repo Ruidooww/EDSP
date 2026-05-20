@@ -1,0 +1,21 @@
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    name: edsp-alert
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/edsp}
+    username: ${SPRING_DATASOURCE_USERNAME:edsp}
+    password: ${SPRING_DATASOURCE_PASSWORD:edsp}
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_ENABLED:true}
+        server-addr: ${NACOS_ADDR:nacos:8848}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

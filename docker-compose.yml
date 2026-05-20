@@ -1,0 +1,122 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: edsp-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-edsp}
+      POSTGRES_USER: ${POSTGRES_USER:-edsp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edsp-demo-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edsp} -d ${POSTGRES_DB:-edsp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  edsp-auth:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE_MODULE: edsp-auth
+    container_name: edsp-auth
+    environment:
+      SERVER_PORT: 8081
+      NACOS_ENABLED: "false"
+    restart: unless-stopped
+
+  edsp-core:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE_MODULE: edsp-core
+    container_name: edsp-core
+    environment:
+      SERVER_PORT: 8082
+      NACOS_ENABLED: "false"
+      EDSP_DEMO_ENABLED: ${EDSP_DEMO_ENABLED:-true}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-edsp}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-edsp}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-edsp-demo-password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  edsp-alert:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE_MODULE: edsp-alert
+    container_name: edsp-alert
+    environment:
+      SERVER_PORT: 8083
+      NACOS_ENABLED: "false"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-edsp}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-edsp}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-edsp-demo-password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      edsp-core:
+        condition: service_started
+    restart: unless-stopped
+
+  edsp-report:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE_MODULE: edsp-report
+    container_name: edsp-report
+    environment:
+      SERVER_PORT: 8084
+      NACOS_ENABLED: "false"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-edsp}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-edsp}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-edsp-demo-password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      edsp-core:
+        condition: service_started
+    restart: unless-stopped
+
+  edsp-gateway:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE_MODULE: edsp-gateway
+    container_name: edsp-gateway
+    environment:
+      SERVER_PORT: 8080
+      NACOS_ENABLED: "false"
+      AUTH_SERVICE_URL: http://edsp-auth:8081
+      CORE_SERVICE_URL: http://edsp-core:8082
+      ALERT_SERVICE_URL: http://edsp-alert:8083
+      REPORT_SERVICE_URL: http://edsp-report:8084
+    depends_on:
+      - edsp-auth
+      - edsp-core
+      - edsp-alert
+      - edsp-report
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: edsp-frontend
+    ports:
+      - "${FRONTEND_PORT:-18080}:80"
+    depends_on:
+      - edsp-gateway
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

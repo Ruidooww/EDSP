@@ -449,7 +449,7 @@ export default function DataSourcesPage() {
   async function submit() {
     const values = await form.validateFields();
     await apiPost('/api/core/data-sources', buildPayload(values));
-    message.success('外部系统接入配置已保存');
+    message.success('数据源配置已保存');
     setOpen(false);
     setTestResult(null);
     form.resetFields();
@@ -579,7 +579,7 @@ export default function DataSourcesPage() {
   return (
     <Card
       className="dashboard-card"
-      title="外部系统接入"
+      title="数据源管理"
       extra={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>
@@ -592,7 +592,7 @@ export default function DataSourcesPage() {
       }
     >
       <Typography.Paragraph className="section-subtitle">
-        管理本地化服务、数据库、API、Webhook、文件导入和第三方安全平台的接入配置。
+        统一管理本地化系统、数据库、API、Webhook、文件导入和第三方安全平台的接入配置。
       </Typography.Paragraph>
 
       <Table<DataSourceRow>
@@ -605,7 +605,7 @@ export default function DataSourcesPage() {
 
       <Modal
         width={820}
-        title="新增外部系统接入"
+        title="新增数据源"
         open={open}
         onOk={submit}
         onCancel={() => setOpen(false)}

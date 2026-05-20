@@ -2,6 +2,8 @@
 
 > API vs 本地部署 | 大模型 vs 小模型 | 推荐方案 & 成本分析
 
+> 注意：本文保留为后续 AI 能力参考，不属于当前主链路技术底座。当前项目权威约束以 [TECHNICAL_MANUAL.md](./TECHNICAL_MANUAL.md) 为准；AI/Python/本地大模型不得作为现阶段前置依赖，IP-Guard 仅作为样例数据源。
+
 ---
 
 ## 一、核心结论：分层模型架构

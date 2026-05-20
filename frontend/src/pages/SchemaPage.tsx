@@ -1,21 +1,205 @@
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd';
-import { useEffect, useState } from 'react';
+import {
+  BranchesOutlined,
+  CheckCircleOutlined,
+  CloudSyncOutlined,
+  DatabaseOutlined,
+  FileSearchOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  TableOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
+import { Alert, Button, Card, Descriptions, Drawer, Form, Input, Modal, Select, Space, Statistic, Steps, Table, Tag, Typography, message } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost } from '../api';
-import type { SchemaTableRow } from '../types';
+import type { DataSourceRow, SchemaFieldRow, SchemaScanRunRow, SchemaTableRow } from '../types';
+
+interface SchemaMappingRow {
+  id: number;
+  source_field: string;
+  standard_field: string;
+  transform_rule?: string;
+}
+
+interface MetadataCollectValues {
+  dataSourceId: number;
+  collectMode: 'auto_scan' | 'sample_json' | 'file_sample' | 'manual_patch';
+  tableName: string;
+  category: string;
+  samplePayload?: string;
+}
+
+interface SuggestedField {
+  fieldName: string;
+  fieldType: string;
+  nullable: boolean;
+  sampleValue: string;
+  description: string;
+  standardField?: string;
+  transformRule?: string;
+}
+
+const COLLECT_MODE_OPTIONS = [
+  { value: 'auto_scan', label: '自动扫描数据源结构' },
+  { value: 'sample_json', label: '解析样例 JSON' },
+  { value: 'file_sample', label: '导入 CSV / Excel 样例' },
+  { value: 'manual_patch', label: '手工补录少量字段' },
+];
+
+const FIELD_PRESETS: Record<MetadataCollectValues['collectMode'], SuggestedField[]> = {
+  auto_scan: [
+    { fieldName: 'event_id', fieldType: 'varchar', nullable: false, sampleValue: 'EVT-20260520-001', description: '外部事件唯一编号', standardField: 'externalId', transformRule: '直接映射' },
+    { fieldName: 'event_name', fieldType: 'varchar', nullable: false, sampleValue: '疑似敏感文件外发', description: '告警标题', standardField: 'title', transformRule: '直接映射' },
+    { fieldName: 'risk_level', fieldType: 'varchar', nullable: false, sampleValue: 'high', description: '风险等级', standardField: 'severity', transformRule: '等级标准化' },
+    { fieldName: 'event_time', fieldType: 'timestamp', nullable: false, sampleValue: '2026-05-20 09:42:00', description: '事件发生时间', standardField: 'occurredAt', transformRule: '时间格式转换' },
+    { fieldName: 'user_name', fieldType: 'varchar', nullable: true, sampleValue: '张三', description: '涉及账号', standardField: 'actor', transformRule: '直接映射' },
+    { fieldName: 'asset_ip', fieldType: 'varchar', nullable: true, sampleValue: '10.8.12.25', description: '终端 IP', standardField: 'assetRef', transformRule: '资产字段拼接' },
+    { fieldName: 'phone', fieldType: 'varchar', nullable: true, sampleValue: '138****8821', description: '敏感字段候选', standardField: 'detail.phone', transformRule: '脱敏后写入详情' },
+  ],
+  sample_json: [
+    { fieldName: 'id', fieldType: 'string', nullable: false, sampleValue: 'DLP-20260520-008', description: '接口事件编号', standardField: 'externalId', transformRule: '直接映射' },
+    { fieldName: 'alertName', fieldType: 'string', nullable: false, sampleValue: '邮件外发包含敏感附件', description: '接口告警名称', standardField: 'title', transformRule: '直接映射' },
+    { fieldName: 'level', fieldType: 'string', nullable: false, sampleValue: 'medium', description: '接口风险等级', standardField: 'severity', transformRule: '等级标准化' },
+    { fieldName: 'operator', fieldType: 'string', nullable: true, sampleValue: 'lisi', description: '操作账号', standardField: 'actor', transformRule: '直接映射' },
+    { fieldName: 'payload', fieldType: 'json', nullable: true, sampleValue: '{}', description: '原始扩展内容', standardField: 'detail.raw', transformRule: '保留原始 JSON' },
+  ],
+  file_sample: [
+    { fieldName: 'source_file', fieldType: 'varchar', nullable: false, sampleValue: '2026-05-audit.csv', description: '来源文件', standardField: 'detail.sourceFile', transformRule: '写入详情' },
+    { fieldName: 'row_hash', fieldType: 'varchar', nullable: false, sampleValue: 'b3c7e9', description: '行指纹', standardField: 'externalId', transformRule: '作为去重键' },
+    { fieldName: 'event_time', fieldType: 'datetime', nullable: true, sampleValue: '2026-05-20 10:00:00', description: '事件时间', standardField: 'occurredAt', transformRule: '时间格式转换' },
+    { fieldName: 'raw_payload', fieldType: 'text', nullable: true, sampleValue: '{}', description: '原始内容', standardField: 'detail.raw', transformRule: '保留原始行' },
+  ],
+  manual_patch: [
+    { fieldName: 'external_id', fieldType: 'varchar', nullable: false, sampleValue: 'MANUAL-001', description: '外部编号', standardField: 'externalId', transformRule: '直接映射' },
+    { fieldName: 'title', fieldType: 'varchar', nullable: false, sampleValue: '手工补录告警', description: '告警标题', standardField: 'title', transformRule: '直接映射' },
+    { fieldName: 'created_time', fieldType: 'timestamp', nullable: true, sampleValue: '2026-05-20 10:00:00', description: '创建时间', standardField: 'occurredAt', transformRule: '时间格式转换' },
+  ],
+};
+
+const STANDARD_FIELD_LABELS: Record<string, string> = {
+  externalId: '外部告警 ID',
+  title: '告警标题',
+  severity: '风险等级',
+  occurredAt: '发生时间',
+  actor: '账号 / 操作人',
+  assetRef: '资产 / 终端',
+  alertType: '事件类型',
+  'detail.phone': '敏感手机号',
+  'detail.raw': '原始内容',
+  'detail.sourceFile': '来源文件',
+};
+
+function statusTag(value?: string) {
+  if (value === 'confirmed') {
+    return <Tag color="success">已确认</Tag>;
+  }
+  if (value === 'ignored') {
+    return <Tag>已忽略</Tag>;
+  }
+  return <Tag color="warning">待确认</Tag>;
+}
+
+function riskTag(fieldName: string, description?: string) {
+  const name = fieldName.toLowerCase();
+  if (/phone|mobile|id_card|email|bank|address|customer|cert/.test(name) || description?.includes('敏感')) {
+    return <Tag color="red">敏感候选</Tag>;
+  }
+  if (/time|date|occur|created/.test(name)) {
+    return <Tag color="blue">时间字段</Tag>;
+  }
+  if (/user|account|operator|actor|employee/.test(name)) {
+    return <Tag color="purple">账号字段</Tag>;
+  }
+  if (/level|severity|risk/.test(name)) {
+    return <Tag color="orange">等级字段</Tag>;
+  }
+  if (/event|alert|title|name/.test(name)) {
+    return <Tag color="cyan">事件字段</Tag>;
+  }
+  return <Tag>普通字段</Tag>;
+}
+
+function recommendStandardField(fieldName: string) {
+  const name = fieldName.toLowerCase();
+  if (/event_id|incident_no|row_hash|external_id|^id$/.test(name)) return 'externalId';
+  if (/event_name|alert_name|title|name/.test(name)) return 'title';
+  if (/level|severity|risk_level/.test(name)) return 'severity';
+  if (/time|date|occur|created/.test(name)) return 'occurredAt';
+  if (/user|account|operator|actor|employee|sender/.test(name)) return 'actor';
+  if (/asset|host|ip|device/.test(name)) return 'assetRef';
+  if (/type|behavior|operation/.test(name)) return 'alertType';
+  if (/phone|mobile/.test(name)) return 'detail.phone';
+  if (/payload|raw/.test(name)) return 'detail.raw';
+  return '';
+}
+
+function defaultTableName() {
+  const date = new Date();
+  const suffix = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+  return `security_alert_event_${suffix}`;
+}
+
+function formatTime(value?: string | number) {
+  if (!value) {
+    return '-';
+  }
+  const normalizedValue = typeof value === 'number' && value < 100000000000 ? value * 1000 : value;
+  const date = new Date(normalizedValue);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function scanStatusTag(value?: string) {
+  if (value === 'success') {
+    return <Tag color="success">成功</Tag>;
+  }
+  if (value === 'running') {
+    return <Tag color="processing">运行中</Tag>;
+  }
+  if (value === 'failed') {
+    return <Tag color="error">失败</Tag>;
+  }
+  return <Tag>{value || '未开始'}</Tag>;
+}
 
 export default function SchemaPage() {
   const [rows, setRows] = useState<SchemaTableRow[]>([]);
+  const [sources, setSources] = useState<DataSourceRow[]>([]);
+  const [fields, setFields] = useState<SchemaFieldRow[]>([]);
+  const [mappings, setMappings] = useState<SchemaMappingRow[]>([]);
+  const [scanRuns, setScanRuns] = useState<SchemaScanRunRow[]>([]);
+  const [selectedTable, setSelectedTable] = useState<SchemaTableRow | null>(null);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [form] = Form.useForm();
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [collectOpen, setCollectOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [collectForm] = Form.useForm<MetadataCollectValues>();
+  const collectMode = Form.useWatch('collectMode', collectForm) || 'auto_scan';
+  const previewFields = FIELD_PRESETS[collectMode];
 
   async function load() {
     setLoading(true);
     try {
-      setRows(await apiGet<SchemaTableRow[]>('/api/core/schema/tables'));
+      const [schemaRows, sourceRows, scanRunRows] = await Promise.all([
+        apiGet<SchemaTableRow[]>('/api/core/schema/tables'),
+        apiGet<DataSourceRow[]>('/api/core/data-sources'),
+        apiGet<SchemaScanRunRow[]>('/api/core/schema-scans/runs?limit=40'),
+      ]);
+      setRows(schemaRows);
+      setSources(sourceRows);
+      setScanRuns(scanRunRows);
     } catch {
       setRows([]);
+      setSources([]);
+      setScanRuns([]);
     } finally {
       setLoading(false);
     }
@@ -25,64 +209,354 @@ export default function SchemaPage() {
     void load();
   }, []);
 
-  async function submit() {
-    const values = await form.validateFields();
-    await apiPost('/api/core/schema/tables', values);
-    message.success('Schema 表已创建');
-    setOpen(false);
-    form.resetFields();
+  function openCollect() {
+    const firstSource = sources[0];
+    collectForm.setFieldsValue({
+      dataSourceId: firstSource?.id,
+      collectMode: 'auto_scan',
+      tableName: defaultTableName(),
+      category: '告警事件',
+      samplePayload: '{\n  "event_id": "EVT-20260520-001",\n  "event_name": "疑似敏感文件外发",\n  "risk_level": "high"\n}',
+    });
+    setCollectOpen(true);
+  }
+
+  async function startScanRun() {
+    const firstSource = sources[0];
+    if (!firstSource) {
+      message.warning('请先在数据源管理中新增外部系统接入');
+      return;
+    }
+    await apiPost('/api/core/schema-scans/runs', {
+      dataSourceId: firstSource.id,
+      scanType: 'metadata',
+      status: 'running',
+      resultJson: '{}',
+    });
+    message.success('元数据扫描运行已登记');
     await load();
   }
 
-  return (
-    <Card
-      title="Schema 映射"
-      extra={
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>新增表</Button>
-        </Space>
-      }
-    >
-      <Table<SchemaTableRow>
-        rowKey="id"
-        loading={loading}
-        dataSource={rows}
-        columns={[
-          { title: '数据源', dataIndex: 'data_source_name' },
-          { title: '表/文件', dataIndex: 'table_name' },
-          { title: '分类', dataIndex: 'category' },
-          {
-            title: '确认状态',
-            dataIndex: 'confirmation_status',
-            render: (value) => <Tag color={value === 'confirmed' ? 'success' : 'warning'}>{value}</Tag>,
-          },
-        ]}
-        locale={{ emptyText: '暂无 Schema，可在真实数据接入前手动维护字段映射。' }}
-      />
+  async function saveSnapshot() {
+    const values = await collectForm.validateFields();
+    const table = await apiPost<{ id: number }>('/api/core/schema/tables', {
+      dataSourceId: values.dataSourceId,
+      tableName: values.tableName,
+      category: values.category,
+      confirmationStatus: 'confirmed',
+    });
 
-      <Modal title="新增 Schema 表" open={open} onOk={submit} onCancel={() => setOpen(false)} okText="保存">
-        <Form layout="vertical" form={form} initialValues={{ confirmationStatus: 'pending' }}>
-          <Form.Item name="dataSourceId" label="数据源 ID" rules={[{ required: true, message: '请输入数据源 ID' }]}>
-            <InputNumber min={1} className="full-width" />
-          </Form.Item>
-          <Form.Item name="tableName" label="表/文件名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="例如：DOC_LOG、events.csv" />
-          </Form.Item>
-          <Form.Item name="category" label="业务分类">
-            <Input placeholder="例如：file_operation、mail、usb" />
-          </Form.Item>
-          <Form.Item name="confirmationStatus" label="确认状态">
-            <Select
-              options={[
-                { value: 'pending', label: '待确认' },
-                { value: 'confirmed', label: '已确认' },
-                { value: 'ignored', label: '已忽略' },
-              ]}
-            />
-          </Form.Item>
+    await Promise.all(
+      previewFields.map((field) =>
+        apiPost(`/api/core/schema/tables/${table.id}/fields`, {
+          fieldName: field.fieldName,
+          fieldType: field.fieldType,
+          nullable: field.nullable,
+          sampleValue: field.sampleValue,
+          description: field.description,
+        }),
+      ),
+    );
+
+    await Promise.all(
+      previewFields
+        .filter((field) => field.standardField)
+        .map((field) =>
+          apiPost('/api/core/schema/mappings', {
+            schemaTableId: table.id,
+            sourceField: field.fieldName,
+            standardField: field.standardField,
+            transformRule: field.transformRule || '自动推荐',
+          }),
+        ),
+    );
+
+    message.success('元数据快照已保存，字段映射已自动推荐');
+    setCollectOpen(false);
+    collectForm.resetFields();
+    await load();
+  }
+
+  async function openDetail(row: SchemaTableRow) {
+    setSelectedTable(row);
+    setDetailOpen(true);
+    setDetailLoading(true);
+    try {
+      const [fieldRows, mappingRows] = await Promise.all([
+        apiGet<SchemaFieldRow[]>(`/api/core/schema/tables/${row.id}/fields`),
+        apiGet<SchemaMappingRow[]>(`/api/core/schema/tables/${row.id}/mappings`),
+      ]);
+      setFields(fieldRows);
+      setMappings(mappingRows);
+    } catch {
+      setFields([]);
+      setMappings([]);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  const summary = useMemo(() => {
+    const confirmed = rows.filter((row) => row.confirmation_status === 'confirmed').length;
+    const pending = rows.filter((row) => row.confirmation_status !== 'confirmed').length;
+    return {
+      total: rows.length,
+      confirmed,
+      pending,
+      autoHandled: Math.max(0, confirmed - pending),
+    };
+  }, [rows]);
+
+  const sourceOptions = sources.map((source) => ({
+    value: source.id,
+    label: source.name,
+  }));
+
+  const mappingByField = useMemo(() => {
+    const map = new Map<string, SchemaMappingRow>();
+    mappings.forEach((mapping) => map.set(mapping.source_field, mapping));
+    return map;
+  }, [mappings]);
+
+  const tableColumns: ColumnsType<SchemaTableRow> = [
+    { title: '数据源', dataIndex: 'data_source_name' },
+    {
+      title: '表 / 文件 / 事件对象',
+      dataIndex: 'table_name',
+      render: (value: string) => <strong>{value}</strong>,
+    },
+    { title: '业务分类', dataIndex: 'category', render: (value) => value || '-' },
+    {
+      title: '确认状态',
+      dataIndex: 'confirmation_status',
+      width: 120,
+      render: statusTag,
+    },
+    {
+      title: '处理方式',
+      width: 180,
+      render: (_, row) => (row.confirmation_status === 'confirmed' ? <Tag color="success">自动确认</Tag> : <Tag color="warning">待运营确认</Tag>),
+    },
+    {
+      title: '操作',
+      width: 140,
+      align: 'right',
+      render: (_, row) => (
+        <Button size="small" type="link" icon={<BranchesOutlined />} onClick={() => openDetail(row)}>
+          字段映射
+        </Button>
+      ),
+    },
+  ];
+
+  const fieldColumns: ColumnsType<SchemaFieldRow> = [
+    {
+      title: '字段',
+      dataIndex: 'field_name',
+      render: (value: string, row) => (
+        <div>
+          <strong>{value}</strong>
+          <span className="table-subtext">{row.description || '-'}</span>
+        </div>
+      ),
+    },
+    { title: '类型', dataIndex: 'field_type', width: 110 },
+    { title: '识别结果', width: 120, render: (_, row) => riskTag(row.field_name, row.description) },
+    {
+      title: '标准字段',
+      width: 190,
+      render: (_, row) => {
+        const mapped = mappingByField.get(row.field_name);
+        const standard = mapped?.standard_field || recommendStandardField(row.field_name);
+        return standard ? (
+          <div>
+            <Tag color={mapped ? 'success' : 'processing'}>{mapped ? '已映射' : '推荐'}</Tag>
+            <span>{STANDARD_FIELD_LABELS[standard] || standard}</span>
+          </div>
+        ) : (
+          <Tag>不参与规则</Tag>
+        );
+      },
+    },
+    { title: '样例值', dataIndex: 'sample_value', render: (value) => value || '-' },
+  ];
+
+  const previewColumns: ColumnsType<SuggestedField> = [
+    { title: '字段', dataIndex: 'fieldName' },
+    { title: '类型', dataIndex: 'fieldType', width: 110 },
+    { title: '识别结果', width: 120, render: (_, row) => riskTag(row.fieldName, row.description) },
+    {
+      title: '推荐映射',
+      width: 170,
+      render: (_, row) => row.standardField ? <Tag color="processing">{STANDARD_FIELD_LABELS[row.standardField] || row.standardField}</Tag> : <Tag>不参与规则</Tag>,
+    },
+    { title: '说明', dataIndex: 'description' },
+  ];
+
+  const scanColumns: ColumnsType<SchemaScanRunRow> = [
+    {
+      title: '数据源',
+      dataIndex: 'data_source_name',
+      render: (value: string, row) => (
+        <div>
+          <strong>{value}</strong>
+          <span className="table-subtext">{row.scan_type}</span>
+        </div>
+      ),
+    },
+    { title: '状态', dataIndex: 'status', width: 110, render: scanStatusTag },
+    { title: '库', width: 90, render: (_, row) => `${row.scanned_databases || 0}/${row.total_databases || 0}` },
+    { title: '表', width: 90, render: (_, row) => `${row.scanned_tables || 0}/${row.total_tables || 0}` },
+    { title: '字段', width: 100, render: (_, row) => `${row.scanned_fields || 0}/${row.total_fields || 0}` },
+    { title: '开始时间', dataIndex: 'started_at', width: 150, render: formatTime },
+    { title: '完成时间', dataIndex: 'finished_at', width: 150, render: formatTime },
+    { title: '错误信息', dataIndex: 'error_message', render: (value) => value || '-' },
+  ];
+
+  return (
+    <div className="schema-page">
+      <div className="ops-heading">
+        <div>
+          <h3 className="ant-typography">元数据快照</h3>
+          <span>自动采集表、字段、样例值和字段映射，只把关键变更交给用户确认</span>
+        </div>
+        <Space>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>
+            刷新
+          </Button>
+          <Button icon={<FileSearchOutlined />} onClick={startScanRun}>
+            登记扫描运行
+          </Button>
+          <Button type="primary" icon={<CloudSyncOutlined />} onClick={openCollect}>
+            采集元数据
+          </Button>
+        </Space>
+      </div>
+
+      <div className="schema-summary-grid">
+        <Card className="ops-card">
+          <Statistic title="快照对象" value={summary.total} prefix={<TableOutlined />} />
+        </Card>
+        <Card className="ops-card">
+          <Statistic title="自动确认" value={summary.confirmed} prefix={<CheckCircleOutlined />} valueStyle={{ color: '#137c72' }} />
+        </Card>
+        <Card className="ops-card">
+          <Statistic title="待确认" value={summary.pending} prefix={<WarningOutlined />} valueStyle={{ color: summary.pending > 0 ? '#c46a00' : '#137c72' }} />
+        </Card>
+        <Card className="ops-card">
+          <Statistic title="字段映射策略" value="推荐模式" prefix={<SafetyCertificateOutlined />} />
+        </Card>
+      </div>
+
+      <Card className="ops-card" title="扫描运行记录">
+        <Table<SchemaScanRunRow>
+          rowKey="id"
+          loading={loading}
+          dataSource={scanRuns}
+          columns={scanColumns}
+          pagination={{ pageSize: 5 }}
+          scroll={{ x: 960 }}
+          locale={{ emptyText: '暂无扫描运行记录。数据库、API、Webhook 或文件适配器执行结构发现后会写入这里。' }}
+        />
+      </Card>
+
+      <Card className="ops-card" title="快照列表">
+        <Table<SchemaTableRow>
+          rowKey="id"
+          loading={loading}
+          dataSource={rows}
+          columns={tableColumns}
+          pagination={{ pageSize: 8 }}
+          locale={{ emptyText: '暂无元数据快照。先从数据源采集结构或导入样例数据。' }}
+        />
+      </Card>
+
+      <Modal
+        width={980}
+        title="采集元数据"
+        open={collectOpen}
+        onOk={saveSnapshot}
+        onCancel={() => setCollectOpen(false)}
+        okText="保存快照"
+        destroyOnHidden
+      >
+        <Alert
+          className="form-hint"
+          type="info"
+          showIcon
+          message="正式环境会自动扫描数据库结构、解析接口样例或导入文件样例。低风险字段自动纳入快照，关键字段和敏感字段由系统推荐映射。"
+        />
+        <Steps
+          className="metadata-steps"
+          current={2}
+          items={[
+            { title: '选择数据源', icon: <DatabaseOutlined /> },
+            { title: '采集结构', icon: <FileSearchOutlined /> },
+            { title: '智能识别', icon: <SafetyCertificateOutlined /> },
+            { title: '保存快照', icon: <CheckCircleOutlined /> },
+          ]}
+        />
+        <Form form={collectForm} layout="vertical">
+          <Space className="metadata-form-grid" align="start">
+            <Form.Item name="dataSourceId" label="数据源" rules={[{ required: true, message: '请选择数据源' }]}>
+              <Select options={sourceOptions} placeholder="请选择数据源" />
+            </Form.Item>
+            <Form.Item name="collectMode" label="采集方式" rules={[{ required: true }]}>
+              <Select options={COLLECT_MODE_OPTIONS} />
+            </Form.Item>
+          </Space>
+          <Space className="metadata-form-grid" align="start">
+            <Form.Item name="tableName" label="对象名称" rules={[{ required: true, message: '请输入对象名称' }]}>
+              <Input placeholder="例如：security_alert_event、events.json、audit.csv" />
+            </Form.Item>
+            <Form.Item name="category" label="业务分类">
+              <Input placeholder="例如：告警事件、账号行为、文件外发" />
+            </Form.Item>
+          </Space>
+          {(collectMode === 'sample_json' || collectMode === 'file_sample') && (
+            <Form.Item name="samplePayload" label="样例数据">
+              <Input.TextArea rows={5} placeholder="粘贴一条 JSON，或粘贴 CSV 表头和第一行样例" />
+            </Form.Item>
+          )}
         </Form>
+
+        <div className="metadata-auto-summary">
+          <span><b>{previewFields.length}</b> 个字段</span>
+          <span><b>{previewFields.filter((field) => field.standardField).length}</b> 个推荐映射</span>
+          <span><b>{previewFields.filter((field) => /phone|mobile|id_card|email|bank|address|customer/.test(field.fieldName)).length}</b> 个敏感候选</span>
+          <span><b>0</b> 个必须人工处理</span>
+        </div>
+
+        <Table<SuggestedField>
+          size="small"
+          rowKey="fieldName"
+          dataSource={previewFields}
+          columns={previewColumns}
+          pagination={false}
+        />
       </Modal>
-    </Card>
+
+      <Drawer
+        title={selectedTable ? `字段映射：${selectedTable.table_name}` : '字段映射'}
+        width={980}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+      >
+        <Descriptions className="form-hint" bordered size="small" column={2}>
+          <Descriptions.Item label="数据源">{selectedTable?.data_source_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="业务分类">{selectedTable?.category || '-'}</Descriptions.Item>
+          <Descriptions.Item label="确认状态">{statusTag(selectedTable?.confirmation_status)}</Descriptions.Item>
+          <Descriptions.Item label="处理策略">低风险自动确认，关键字段自动推荐</Descriptions.Item>
+        </Descriptions>
+        <Table<SchemaFieldRow>
+          rowKey="id"
+          loading={detailLoading}
+          dataSource={fields}
+          columns={fieldColumns}
+          pagination={{ pageSize: 8 }}
+          locale={{ emptyText: '暂无字段。请先采集元数据或导入样例。' }}
+        />
+      </Drawer>
+    </div>
   );
 }

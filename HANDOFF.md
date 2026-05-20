@@ -1,33 +1,56 @@
 # EDSP Phase 1 骨架 — 交接文档
 
+## 技术底座约束
+
+当前项目权威技术底座是 [TECHNICAL_MANUAL.md](./TECHNICAL_MANUAL.md)。后续交接、开发、重构、Demo 补数据和正式部署规划都必须先遵守该手册。
+
+不可偏离的主线：
+
+```text
+外部系统 / 数据库 / API / Webhook / 文件 / Syslog
+  -> 采集适配器
+  -> raw_events / raw_logs / raw_imports
+  -> 字段映射与标准化
+  -> standard_events
+  -> 规则 / 风险判断
+  -> alerts
+  -> 通知 / 处置 / 报表 / 反馈
+```
+
+当前平台方向不是 IP-Guard 专项适配器，也不是 Python FastAPI 主后端方案。IP-Guard 只能作为首个数据库类数据源样例，后续必须保持多源接入能力。
+
+---
+
 ## 项目位置
 
 `C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
 
 ## 当前状态
 
-**Phase 1 骨架** — 平台框架已搭建，可启动、可配置、可扩展，但所有业务逻辑都是占位实现。
+**Phase 1 技术底座** — 平台框架已搭建，可启动、可配置、可扩展。当前重点已经从单纯占位骨架转为多源接入、元数据快照、采集任务、标准事件链路和 Demo 展示能力的基础建设。
 
 ### 已具备的能力
 
 - 6 模块 Spring Cloud 微服务（Gateway / Auth / Core / Alert / Report / Common），通过 Nacos 注册发现
-- PostgreSQL 初始表结构（Flyway V1 迁移，9 张表）
+- PostgreSQL 初始表结构（Flyway 迁移）
 - **SQL Server 数据源连接器** — 测试连接、浏览数据库/表/字段、采样数据
-- 数据源 / Schema 表与字段 / 字段映射 的 CRUD
+- 数据源 / 元数据快照 / Schema 表与字段 / 字段映射 的 CRUD
+- 外部接入与采集任务页面框架
 - 规则 / 告警 CRUD + 状态流转（占位）
 - 报表任务 CRUD + 空 Excel 模板导出（Apache POI）
 - **总览仪表盘** — 风险态势、数据源健康、告警趋势、Schema 映射进度（真实数据驱动）
-- React 管理台 6 个页面（总览 / 数据源 / Schema / 规则 / 告警 / 报表）
+- React 管理台页面（总览 / 数据源 / 元数据快照 / 外部接入 / 采集任务 / 规则 / 告警 / 通知 / 报表 / 设置）
 - **H2 本地开发 profile** — 无 Docker 也可启动全功能后端
 - Docker Compose 一键启动全栈
 
 ### 明确不在此阶段范围
 
-- 不接真实 SQL Server / IP-Guard 数据源
-- 无 AI / 大模型 / 自学习
-- 无 ClickHouse / Kafka / CDC / K8s
-- 无真实事件采集 / 告警触发
-- 无模拟数据
+- 不把真实 SQL Server / IP-Guard 作为当前开发阻塞前提
+- 不把 IP-Guard、UEBA 或某个固定厂商作为唯一服务对象
+- 不把 AI / 大模型 / 自学习作为当前主链路前置依赖
+- 不引入 ClickHouse / Kafka / CDC / K8s 作为当前阶段必要依赖
+- 不绕过 raw 层和 `standard_events` 直接生成生产告警
+- Demo 可以使用演示数据，但演示数据必须与真实客户数据隔离
 
 ---
 
@@ -205,10 +228,57 @@ cd frontend && npm install && npm run dev
 1. **修复 SQL 注入** — `SqlServerMetadataService.sample()` 字符串拼接改为参数化查询（严重安全隐患）
 2. **补 sourceRow 异常处理** — `DataSourceController` 中不存在的 ID 应返回 404 而非 500
 3. **补认证鉴权** — 引入 Spring Security + JWT，所有后续开发依赖此基础
-4. **同步文档技术栈** — README 顶部注明实际为 Java Spring Cloud（已与 Python 设计偏离）
-5. **Flayway V2 迁移** — 补索引：`alerts(severity, status)`、`rules(enabled)`、`data_sources(status)`；补函数索引 `lower(severity)`
+4. **按技术手册补齐数据链路** — 建立 raw 层、`standard_events`、采集任务、采集运行记录和元数据扫描完整性核验
+5. **Flyway V2 迁移** — 补索引：`alerts(severity, status)`、`rules(enabled)`、`data_sources(status)`；补函数索引 `lower(severity)`
 6. **规则引擎实现** — 基于真实告警字段实现规则表达式求值（替换占位）
 7. **分页统一接入** — 列表接口接入 `PageResult`，前端加搜索/分页
 8. **补充测试** — 至少覆盖 API 响应格式、Flyway 迁移、SQL Server 连接器
 9. **基础设施加固** — Redis 加 volume、alert/report 服务加 postgres 健康检查依赖
 10. **提取共享工具** — `severityColor`/`severityLabel`/`statusTag` 抽取到 `src/utils.tsx`
+
+---
+
+## Git / GitHub 推送记录
+
+**日期：** 2026-05-20
+
+**仓库：** `git@github.com:Ruidooww/-.git`
+
+### .gitignore 配置
+
+在原有规则基础上新增了以下忽略项：
+
+```
+logs/
+*.log
+data/
+.env
+*.tar.gz
+```
+
+**被排除的内容：** `node_modules`、构建产物（`target/`、`dist/`、`.vite/`）、IDE 配置、日志文件、data 目录、敏感配置 `.env`、部署包 `*.tar.gz`
+
+### 初始化操作
+
+在项目根目录执行（需先删除旧的损坏 `.git` 文件夹）：
+
+```bash
+cd "C:\Users\Ruidoww\Desktop\预警分析平台推送对接"
+
+git init
+git add .
+git commit -m "Initial commit: 预警分析平台推送对接"
+git remote add origin git@github.com:Ruidooww/-.git
+git push -u origin master
+```
+
+### 注意事项
+
+1. 本地 Git 用户信息未全局配置，需在仓库内设置：
+   ```bash
+   git config user.name "Ruidooww"
+   git config user.email "你的邮箱"
+   ```
+2. 使用 SSH 方式认证（`git@github.com`），需确保本地 SSH 密钥已添加到 GitHub 账户
+3. 测试 SSH 连接：`ssh -T git@github.com`，返回 "Hi Ruidooww!" 即为成功
+4. 原始 `.git` 目录在挂载环境中出现配置损坏（config 文件含空字节），已指导用户手动删除后重建

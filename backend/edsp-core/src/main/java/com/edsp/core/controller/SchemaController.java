@@ -66,6 +66,16 @@ public class SchemaController {
         return ApiResponse.ok(Map.of("id", id), "created");
     }
 
+    @GetMapping("/tables/{tableId}/mappings")
+    public ApiResponse<List<Map<String, Object>>> mappings(@PathVariable long tableId) {
+        return ApiResponse.ok(jdbcTemplate.queryForList("""
+            select id, source_field, standard_field, transform_rule, created_at
+            from field_mappings
+            where schema_table_id = ?
+            order by id
+            """, tableId));
+    }
+
     @PostMapping("/mappings")
     public ApiResponse<Map<String, Object>> createMapping(@Valid @RequestBody FieldMappingRequest request) {
         var id = jdbcTemplate.queryForObject("""

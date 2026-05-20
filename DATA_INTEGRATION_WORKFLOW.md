@@ -1,414 +1,354 @@
-# 全流程数据对接体系
+# 数据接入与采集流程
 
-> 数据库直连 | API对接 | CLI工具 | 控制台管理 | 自动发现数据字典
+> 权威基线：本流程必须服从 [TECHNICAL_MANUAL.md](./TECHNICAL_MANUAL.md)。  
+> 本文只描述数据接入工作流，不替代技术手册中的产品定位和数据模型。
 
 ---
 
-## 一、数据接入全流程
+## 1. 接入目标
 
-```
-用户操作                       系统自动                         产出
-────────                      ────────                        ────
+平台需要接入的不只是 IP-Guard，也包括其他 DLP、终端安全、安防、网关、OA、邮件、安全设备、日志平台和自定义业务系统。
 
-① 添加数据源
-   ├─ 选择产品类型              → 加载预置模板
-   ├─ 填写连接信息              → 测试连通性
-   └─ 选择认证方式              → 加密存储凭据
-                                      │
-② 自动发现                              ▼
-   (系统自动执行)               → 扫描表/集合/索引
-                                → 提取字段名+类型+注释
-                                → 采样数据(前100行)
-                                → 生成数据字典草稿
-                                      │
-③ 人工确认                              ▼
-   ├─ 审阅自动发现的表清单
-   ├─ 标记核心表 vs 忽略表
-   ├─ 确认字段映射关系
-   └─ 设置敏感字段脱敏规则
-                                      │
-④ 配置同步策略                          ▼
-   ├─ 选择同步模式(实时/定时/手动)
-   ├─ 设置增量字段
-   ├─ 配置数据保留策略
-   └─ 设置告警(延迟/断连)
-                                      │
-⑤ 激活运行                              ▼
-                                → 首次全量同步
-                                → 持续增量同步
-                                → 健康监控
-                                → 数据质量报告
+无论外部系统通过数据库、API、Webhook、文件、Syslog 还是 Agent 接入，最终都必须进入统一链路：
+
+```text
+外部系统
+  -> 采集适配器
+  -> raw_events / raw_logs / raw_imports
+  -> 字段映射与标准化
+  -> standard_events
+  -> 规则 / 风险判断
+  -> alerts
+  -> 通知 / 处置 / 报表 / 反馈
 ```
 
 ---
 
-## 二、接入方式矩阵
+## 2. 标准接入流程
 
-### 2.1 四种接入方式
+### 2.1 注册数据源
 
-| 方式 | 适用场景 | 实时性 | 复杂度 | 典型产品 |
-|------|---------|--------|--------|---------|
-| **数据库直连** | 有数据库只读权限 | 分钟级(T+1) | ⭐ 低 | IP-Guard, 爱数 |
-| **REST API** | 产品提供API | 秒级 | ⭐⭐ 中 | 360天擎, CrowdStrike |
-| **Syslog/File** | 网络设备/服务器 | 实时 | ⭐ 低 | 防火墙, Linux |
-| **CLI Agent** | 无API/无DB权限 | 按需 | ⭐⭐⭐ 高 | 遗留系统 |
+用户先创建外部系统数据源：
 
-### 2.2 数据库直连流程（以 IP-Guard 为例）
+| 字段 | 说明 |
+|---|---|
+| 数据源名称 | 客户可理解的系统名称，例如“终端安全平台”“邮件网关”“IP-Guard” |
+| 数据源类型 | 数据库、REST API、Webhook、文件、Syslog、Agent |
+| 产品类型 | 已知产品模板或自定义来源 |
+| 连接信息 | 地址、端口、库名、认证方式、API 地址、Webhook 密钥等 |
+| 安全配置 | 是否加密、证书校验、最小权限说明 |
 
-```
-管理控制台                          SQL Server
-─────────                          ──────────
+正式部署中，凭据必须加密存储，不允许在列表、详情、日志或错误信息中回显。
 
-1. 填写连接信息:
-   ┌─────────────────────────┐
-   │ 产品: IP-Guard           │
-   │ 类型: SQL Server         │
-   │ 主机: 172.16.34.134     │
-   │ 端口: 1433              │
-   │ 账号: ipguard_reader     │
-   │ 密码: ********            │
-   │ [测试连接] [保存]        │
-   └─────────────────────────┘
-            │
-            ▼ 测试连接
-   ┌─────────────────────────┐     ──→ SELECT 1
-   │ ✅ 连接成功              │ ←── 返回: OK
-   │ SQL Server 2019         │
-   │ 发现 21 个数据库         │
-   └─────────────────────────┘
-            │
-            ▼ 自动发现
-   ┌─────────────────────────┐     ──→ SELECT name FROM sys.databases
-   │ 发现数据库:              │         WHERE name LIKE 'OCULAR3%'
-   │ ☑ OCULAR3 (主配置库)     │
-   │ ☑ OCULAR3_DATA.* (18个)  │     ──→ SELECT TABLE_NAME FROM
-   │ ☑ OCULAR3_REPORT2        │         INFORMATION_SCHEMA.TABLES
-   │ ☑ OCULAR3_LATTICE       │
-   │ 共 21 个数据库, 953 张表  │     ──→ SELECT COLUMN_NAME, DATA_TYPE
-   └─────────────────────────┘         FROM INFORMATION_SCHEMA.COLUMNS
-            │                          WHERE TABLE_NAME = 'DOC_LOG'
-            ▼ 人工确认
-   ┌─────────────────────────┐
-   │ 核心日志表:              │
-   │ ☑ DOC_LOG (文档操作)     │
-   │ ☑ UDISK_LOG (USB)       │
-   │ ☑ MAIL_LOG (邮件)       │
-   │ ☑ PRINT_LOG (打印)      │
-   │ ☑ URL_LOG (网页)        │
-   │ ☐ AGENT_LOG (忽略)      │
-   │ [确认映射]               │
-   └─────────────────────────┘
-            │
-            ▼ 字段映射确认
-   ┌─────────────────────────────────────────┐
-   │ DOC_LOG 字段映射:                        │
-   │ 用户列: DOC_USR_ID → actor.user_id      │
-   │ 时间列: DOC_TIME → timestamp            │
-   │ 操作列: DOC_TYPE → action               │
-   │ 路径列: DOC_SRC_PATH → target.file_path │
-   │ 大小列: DOC_FILE_SIZE → target.file_size│
-   │ [自动推断] [手动修改]                     │
-   └─────────────────────────────────────────┘
+### 2.2 连接和权限测试
+
+保存前或保存后都要支持连接测试。
+
+数据库类数据源至少测试：
+
+- 网络可达性。
+- 账号是否可登录。
+- 是否具备读取系统元数据权限。
+- 是否具备读取目标业务表权限。
+- 数据库版本、字符集、默认库。
+
+API 类数据源至少测试：
+
+- API 地址是否可达。
+- Token 或签名是否有效。
+- 时间窗口查询是否可用。
+- 分页、限流、错误码格式。
+
+Webhook 类数据源至少测试：
+
+- 回调地址是否生成。
+- 签名密钥是否配置。
+- 示例 payload 是否能入 raw 层。
+
+### 2.3 元数据快照
+
+连接成功后，系统自动生成元数据快照。
+
+数据库快照内容：
+
+```text
+数据库列表
+Schema 列表
+表 / 视图列表
+字段名称、类型、长度、可空、默认值
+主键、索引、唯一约束
+行数估算
+更新时间字段候选
+样本数据脱敏摘要
 ```
 
-### 2.3 API 接入流程（以 360 天擎为例）
+API / Webhook / 文件快照内容：
 
-```
-管理控制台                          360天擎 API
-─────────                          ────────────
-
-1. 填写API信息:
-   ┌─────────────────────────┐
-   │ 产品: 360天擎            │
-   │ 类型: REST API           │
-   │ 地址: https://360.example.com│
-   │ 认证: API Key            │
-   │ Key: sk-****             │
-   │ [测试连接]               │
-   └─────────────────────────┘
-            │
-            ▼ 调用 /api/v1/info
-   ┌─────────────────────────┐
-   │ ✅ 连接成功              │
-   │ 产品版本: 天擎V10        │
-   │ 终端数: 1,250            │
-   │ 可用端点:                │
-   │  /api/v1/events (事件)   │
-   │  /api/v1/threats (威胁)  │
-   │  /api/v1/assets (资产)   │
-   └─────────────────────────┘
-            │
-            ▼ 配置拉取策略
-   ┌─────────────────────────┐
-   │ 同步模式: 定时拉取        │
-   │ 间隔: 5分钟              │
-   │ 批量大小: 1000条/次      │
-   │ 增量字段: event_time     │
-   │ 保留天数: 90天           │
-   └─────────────────────────┘
+```text
+payload 样例
+字段路径
+字段类型
+数组结构
+时间字段候选
+主键 / 外部 ID 候选
+事件类型候选
 ```
 
----
+### 2.4 扫描完整性核验
 
-## 三、CLI 工具设计
+系统不能只展示“扫到了哪些表”，还要说明“是否扫完整”。
 
-### 3.1 命令行对接工具
+每次扫描必须记录：
 
-```bash
-# edsp CLI — 企业数据安全平台命令行工具
+```text
+scan_id
+source_id
+started_at / finished_at
+total_databases
+scanned_databases
+failed_databases
+total_tables
+scanned_tables
+failed_tables
+total_fields
+scanned_fields
+scan_status
+error_message
+```
 
-# 安装
-pip install edsp-cli
+状态定义：
 
-# 初始化配置
-edsp config init --server http://localhost:8000 --token <api_key>
+| 状态 | 含义 |
+|---|---|
+| success | 已完整扫描 |
+| partial | 部分成功，存在失败库表 |
+| failed | 扫描失败 |
+| permission_limited | 权限不足 |
+| timeout | 超时 |
 
-# ── 数据源管理 ──
+### 2.5 语义识别和模板匹配
 
-# 列出所有数据源
-edsp source list
-# ┌──────────┬──────────┬──────────┬──────────┐
-# │ 名称      │ 类型      │ 状态      │ 事件数    │
-# ├──────────┼──────────┼──────────┼──────────┤
-# │ IP-Guard │ SQL Server│ ✅ 运行中 │ 12.5M   │
-# │ 360天擎   │ REST API  │ ✅ 运行中 │ 3.2M    │
-# │ 防火墙     │ Syslog   │ ✅ 运行中 │ 45.8M   │
-# └──────────┴──────────┴──────────┴──────────┘
+系统基于表名、字段名、注释、类型、样本值和已知模板自动识别语义。
 
-# 添加新数据源 (交互式引导)
-edsp source add
-# ? 选择产品类型: [数据库] API Syslog 文件 自定义
-# ? 数据库类型: SQL Server
-# ? 主机地址: 172.16.34.134
-# ? 端口: 1433
-# ? 用户名: ipguard_reader
-# ? 密码: ********
-# ? 数据库名: OCULAR3
-#   🔍 正在连接... ✅
-#   🔍 发现 164 张表
-#   🔍 自动识别 12 个核心日志表
-# ? 确认添加? [Y/n]
+识别目标：
 
-# 添加数据源 (非交互式)
-edsp source add \
-  --type sqlserver \
-  --host 172.16.34.134 \
-  --port 1433 \
-  --user ipguard_reader \
-  --password ipg@1234 \
-  --database OCULAR3 \
-  --product ipguard
+- 哪些表像事件表。
+- 哪些表像人员、设备、资产、策略、组织、字典表。
+- 哪些字段像时间、用户、设备、IP、文件、动作、结果、风险等级。
+- 是否命中已知产品模板。
+- 是否可以生成默认采集计划。
 
-# 查看数据源详情
-edsp source show ipguard
-# 输出完整的数据字典和表结构
+客户默认看到的是识别结果和建议，不应被要求逐字段手写映射。
 
-# 测试连接
-edsp source test ipguard
-# ✅ Connection OK | Latency: 12ms | Tables: 164
+### 2.6 生成采集计划
 
-# 同步数据
-edsp source sync ipguard --since "2026-05-01" --mode incremental
+采集计划由系统生成，人工只确认关键项。
 
-# 导出数据字典
-edsp source schema ipguard --format markdown --output schema.md
-edsp source schema ipguard --format excel --output schema.xlsx
+采集计划包括：
 
-# ── Agent 管理 ──
+```text
+采集对象
+采集周期
+增量字段
+去重键
+字段映射
+事件类型
+落 raw 表策略
+标准化目标字段
+失败重试策略
+数据保留策略
+```
 
-edsp agent list                    # 列出所有Agent
-edsp agent train file_agent        # 训练指定Agent
-edsp agent stats file_agent        # Agent准确率统计
+### 2.7 影子试运行
 
-# ── 告警查询 ──
+新接入源或新采集计划必须先影子试运行。
 
-edsp alert list --severity high --since "2026-05-01"
-edsp alert show ALT-20260509-0042
+影子试运行做三件事：
 
-# ── 报告导出 ──
+1. 采集少量数据进入 raw 层。
+2. 试映射到 `standard_events`。
+3. 生成质量报告，但不直接推送真实告警。
 
-edsp report generate --type weekly --output weekly_report.xlsx
-edsp report generate --type incident --user-id 1001 --output incident.docx
+质量报告至少包含：
+
+- 读取行数。
+- 成功标准化行数。
+- 丢弃行数。
+- 缺失关键字段数量。
+- 时间字段异常数量。
+- 去重命中数量。
+- 推荐是否启用正式采集。
+
+### 2.8 启用采集任务
+
+试运行通过后启用正式采集任务。
+
+采集任务需要记录：
+
+```text
+任务状态
+上次运行时间
+下次运行时间
+当前游标
+读取数量
+成功数量
+失败数量
+异常原因
+重试次数
 ```
 
 ---
 
-## 四、管理控制台设计
+## 3. 接入方式
 
-### 4.1 数据源管理页面
+### 3.1 数据库只读连接
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  🔌 数据源管理                              [+ 添加数据源]    │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ 🟢 IP-Guard                    SQL Server │ 已运行 3天 │   │
-│  │    172.16.34.134:1433         21库 953表   │ 12.5M事件 │   │
-│  │    [详情] [同步] [Schema] [暂停] [删除]              │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ 🟢 360天擎                      REST API  │ 已运行 1天 │   │
-│  │    https://360.example.com     3端点       │ 3.2M事件   │   │
-│  │    [详情] [同步] [测试] [暂停] [删除]                  │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ 🟡 爱数(适配中)                  数据库   │ 配置中      │   │
-│  │    192.168.1.50:3306          待发现      │ 0事件       │   │
-│  │    [配置] [测试连接] [删除]                            │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ 🔴 防火墙 Syslog                UDP 514  │ 连接失败    │   │
-│  │    0.0.0.0:514                端口占用    │ 0事件       │   │
-│  │    [重试] [修改配置] [删除]                            │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+适用场景：
 
-### 4.2 Schema 自动发现结果页
+- 客户本地化部署的安全产品。
+- 产品不开放 API，但允许读取数据库。
+- 需要做连接心跳、元数据扫描、增量采集。
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  📋 IP-Guard — 数据字典                                     │
-│  自动发现时间: 2026-05-09 14:30  |  953表 |  已确认 12表     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  搜索: [                ]  [全部] [已确认] [待确认] [已忽略]  │
-│                                                             │
-│  ☑ DOC_LOG             26字段  0行  [文件操作日志]          │
-│    用户列: DOC_USR_ID ✓  时间列: DOC_TIME ✓                 │
-│    核心字段: DOC_TYPE, DOC_SRC_PATH, DOC_DEST_PATH,         │
-│              DOC_FILE_SIZE, DOC_APP_NAME                    │
-│    [查看全部字段] [编辑映射] [标记为核心]                     │
-│                                                             │
-│  ☑ UDISK_LOG           35字段  0行  [USB存储日志]           │
-│    用户列: UD_USR_ID ✓   时间列: UD_TIME ✓                  │
-│    [查看全部字段] [编辑映射]                                  │
-│                                                             │
-│  ☑ MAIL_LOG            28字段  0行  [邮件日志]              │
-│    [查看全部字段] [编辑映射]                                  │
-│                                                             │
-│  ☐ AGENT_LOG           13字段  0行  [Agent状态日志]         │
-│    ⚠️ 未发现用户列     ⚠️ 可能不是核心日志表                 │
-│    [手动指定] [忽略此表]                                     │
-│                                                             │
-│  ☐ AUTH_REQUEST_LOG    40字段  0行  [审批请求日志]          │
-│    [手动指定] [忽略此表]                                     │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+要求：
+
+- 使用只读账号。
+- 不要求固定账号、固定库名、固定字段。
+- 系统通过元数据快照和模板识别找出候选事件表。
+- 新增库表字段要先进入元数据变更和 raw 层，不应阻断采集。
+
+### 3.2 REST API
+
+适用场景：
+
+- 外部系统开放事件、告警、资产、用户、审计 API。
+- API 支持时间窗口、分页或游标。
+
+要求：
+
+- 支持 Token、API Key、签名等认证方式。
+- 支持限流和失败重试。
+- 支持字段路径识别和标准化映射。
+
+### 3.3 Webhook
+
+适用场景：
+
+- 外部系统主动推送告警或事件。
+- 希望低延迟触发通知。
+
+要求：
+
+- 每个 Webhook 具备独立密钥。
+- 支持签名校验。
+- 原始 payload 必须先进入 raw 层。
+- 幂等键可由外部 ID、事件时间、事件摘要组合生成。
+
+### 3.4 文件导入
+
+适用场景：
+
+- 客户只能导出 CSV、JSON、XML、Excel 或日志文件。
+- 离线 Demo、审计材料、历史数据补录。
+
+要求：
+
+- 文件导入进入 `raw_imports`。
+- 系统自动识别列名、类型、样本值。
+- 导入后再生成标准事件和告警。
+
+### 3.5 Syslog
+
+适用场景：
+
+- 防火墙、交换机、网关、堡垒机、Linux/Windows 日志。
+
+要求：
+
+- 原始日志进入 `raw_logs`。
+- 解析器按设备类型或日志格式匹配。
+- 解析失败日志必须保留，不能直接丢弃。
+
+### 3.6 Agent / CLI
+
+适用场景：
+
+- 外部系统不开放数据库、不开放 API。
+- 需要部署本地轻量采集器读取日志或调用厂商 CLI。
+
+要求：
+
+- Agent 与平台通信必须鉴权。
+- Agent 上报原始数据或标准事件草稿，不直接生成告警。
+- Agent 运行状态进入采集任务监控。
+
+---
+
+## 4. 新增字段处理
+
+正式部署后，如果外部数据库或 API 新增字段，默认处理方式如下：
+
+1. 元数据快照发现新字段，记录到 `schema_fields`。
+2. 新字段原始值继续进入 raw 层，不阻断采集。
+3. 高置信度字段自动映射到标准字段或 `standard_events.extra`。
+4. 低置信度字段进入待确认队列，但不要求客户逐字段维护。
+5. 如果字段变化影响采集游标、去重键、时间字段或风险字段，才触发管理员提醒。
+6. 经过确认或自动学习后，沉淀为模板，下次同类数据源复用。
+
+这样可以避免客户面对大量字段变动时被迫手工处理。
+
+---
+
+## 5. 客户交互原则
+
+客户侧默认应看到：
+
+- 系统识别出的数据源结构。
+- 推荐的采集对象。
+- 推荐的事件类型。
+- 推荐的字段映射。
+- 推荐的规则模板。
+- 试运行质量报告。
+
+客户不应默认填写：
+
+- 原始表名规则表达式。
+- 大量字段映射。
+- 原始 SQL 条件。
+- 内部字段名如 `file_size`、`after_hours`、`doc_usr_id`。
+
+规则和采集配置应该以业务语言表达，例如：
+
+```text
+非工作时间大量文件操作
+移动存储高风险拷贝
+外发邮件携带敏感附件
+短时间多终端登录
+权限策略异常变更
 ```
 
 ---
 
-## 五、凭据安全管理
+## 6. 最小可用优先级
 
-```
-凭据存储策略:
-  ├── 传输: TLS 1.3 加密
-  ├── 存储: AES-256-GCM 加密 (密钥存于环境变量/密钥管理服务)
-  ├── 内存: 使用后立即清除明文
-  ├── 访问控制: RBAC (只有管理员可查看/修改)
-  └── 审计: 所有凭据访问操作记录日志
+### P1
 
-账户类型:
-  ├── 只读账户 (推荐) — 只有 SELECT 权限
-  ├── API Key — 最小权限原则
-  └── 服务账户 — 专用账户，定期轮换密码
+- 数据库只读连接。
+- REST API 拉取。
+- Webhook 推送。
+- 元数据快照。
+- raw 层和 `standard_events`。
+- 采集任务和试运行。
 
-# 凭据存储结构
-{
-  "source_id": "ipguard_01",
-  "credentials": {
-    "type": "sqlserver",
-    "host": "172.16.34.134",
-    "port": 1433,
-    "username": "ipguard_reader",
-    "password_encrypted": "AES256...",
-    "encryption_key_id": "key_2026"
-  },
-  "rotation": {
-    "last_rotated": "2026-05-01",
-    "rotation_days": 90,
-    "next_rotation": "2026-07-30"
-  },
-  "audit": {
-    "created_by": "admin",
-    "created_at": "2026-05-01T10:00:00Z",
-    "last_used": "2026-05-09T14:30:00Z"
-  }
-}
-```
+### P2
 
----
+- 文件导入。
+- Syslog。
+- 字段模板沉淀。
+- 规则模板参数化。
 
-## 六、通用接口规范
+### P3
 
-### 6.1 数据源注册 API
-
-```yaml
-POST /api/sources/register
-  Request:
-    product: "ipguard" | "aishu" | "antivirus" | "syslog" | "custom"
-    connection:
-      type: "sqlserver" | "mysql" | "postgresql" | "rest_api" | "syslog" | "file"
-      host: string
-      port: integer
-      username: string
-      password: string       # 仅传输时使用，存储后立即加密
-      database: string       # 数据库类型时
-      api_base: string       # API类型时
-    options:
-      sync_mode: "incremental" | "full" | "manual"
-      sync_interval_minutes: integer
-      retention_days: integer
-      tables_filter: [string] # 可选，只同步指定表
-  
-  Response:
-    source_id: "src_abc123"
-    status: "connected"
-    discovered:
-      databases: 21
-      tables: 953
-      core_tables: 12
-```
-
-### 6.2 Schema 查询 API
-
-```yaml
-GET /api/sources/{source_id}/schema
-  Response:
-    tables:
-      - name: "DOC_LOG"
-        columns: [...]
-        row_count: 0
-        suggested_category: "file_operation"
-        user_column: "DOC_USR_ID"      # 自动推断
-        time_column: "DOC_TIME"         # 自动推断
-        status: "confirmed" | "pending" | "ignored"
-
-POST /api/sources/{source_id}/schema/mapping
-  Request:
-    table: "DOC_LOG"
-    mappings:
-      user_column: "DOC_USR_ID"
-      time_column: "DOC_TIME"
-      action_column: "DOC_TYPE"
-      target_path_column: "DOC_DEST_PATH"
-      file_size_column: "DOC_FILE_SIZE"
-```
-
-### 6.3 CLI 接口
-
-```bash
-# 所有管理操作都有对应的CLI命令
-edsp source add       → POST /api/sources/register
-edsp source list      → GET /api/sources
-edsp source show      → GET /api/sources/{id}
-edsp source schema    → GET /api/sources/{id}/schema
-edsp source sync      → POST /api/sources/{id}/sync
-edsp source test      → POST /api/sources/{id}/test
-```
+- Agent / CLI。
+- MQ / 日志平台。
+- CDC / 大规模日志存储。
+- AI 模型服务。

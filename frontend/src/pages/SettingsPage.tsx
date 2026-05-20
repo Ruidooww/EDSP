@@ -28,7 +28,7 @@ export default function SettingsPage() {
             <Descriptions.Item label="运行模式">
               <Tag color="blue">本地化部署</Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="外部接入">数据库、API、Webhook 适配器扩展</Descriptions.Item>
+            <Descriptions.Item label="外部接入">数据库、API、Webhook、文件导入、安全平台</Descriptions.Item>
           </Descriptions>
         </Card>
 

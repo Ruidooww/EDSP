@@ -187,3 +187,90 @@ export interface OverviewData {
   };
   recentDataSources: OverviewDataSourceRow[];
 }
+
+export interface CollectionTaskRow {
+  id: number;
+  name: string;
+  task_type: string;
+  schedule_mode: string;
+  interval_seconds: number;
+  status: string;
+  enabled: boolean;
+  last_run_at?: string;
+  next_run_at?: string;
+  data_source_name: string;
+  source_type: string;
+  adapter_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IngestionRunRow {
+  id: number;
+  task_id?: number;
+  task_name?: string;
+  data_source_name?: string;
+  run_type: string;
+  status: string;
+  started_at: string;
+  finished_at?: string;
+  read_count: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  error_message?: string;
+}
+
+export interface RawEventRow {
+  id: number;
+  data_source_id?: number;
+  data_source_name?: string;
+  task_id?: number;
+  run_id?: number;
+  source_system?: string;
+  external_id?: string;
+  event_type?: string;
+  occurred_at?: string;
+  received_at: string;
+  status: string;
+  standard_event_id?: number;
+}
+
+export interface StandardEventRow {
+  id: number;
+  data_source_id?: number;
+  data_source_name?: string;
+  source_system: string;
+  external_id?: string;
+  event_type: string;
+  occurred_at?: string;
+  actor?: string;
+  asset_ref?: string;
+  subject_type?: string;
+  subject_ref?: string;
+  action?: string;
+  result?: string;
+  severity: Severity;
+  risk_score: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SchemaScanRunRow {
+  id: number;
+  data_source_id: number;
+  data_source_name: string;
+  scan_type: string;
+  status: string;
+  started_at: string;
+  finished_at?: string;
+  total_databases: number;
+  scanned_databases: number;
+  failed_databases: number;
+  total_tables: number;
+  scanned_tables: number;
+  failed_tables: number;
+  total_fields: number;
+  scanned_fields: number;
+  error_message?: string;
+}

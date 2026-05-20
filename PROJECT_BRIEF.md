@@ -2,6 +2,8 @@
 
 > 适用于任何AI工具理解项目全貌，可直接分享使用
 
+> 注意：本文保留为历史需求参考。当前项目权威技术底座以 [TECHNICAL_MANUAL.md](./TECHNICAL_MANUAL.md) 为准。若本文中的 IP-Guard 优先、Python FastAPI 主后端、ClickHouse/Kafka/AI 前置、自学习已完成等描述与技术手册冲突，均以技术手册为准。
+
 ---
 
 ## 一、项目定位

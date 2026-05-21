@@ -1,13 +1,17 @@
-# EDSP Phase 1 骨架 — 交接文档
+﻿# 数据安全预警分析平台 handoff
 
-## 技术底座约束
+> 更新时间：2026-05-21
+> 当前提交：`6f44ad8 feat: implement core event pipeline`
+> 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
 
-当前项目权威技术底座是 [TECHNICAL_MANUAL.md](./TECHNICAL_MANUAL.md)。后续交接、开发、重构、Demo 补数据和正式部署规划都必须先遵守该手册。
+## 1. 项目定位
 
-不可偏离的主线：
+本项目是“数据安全预警分析平台”，不是 IP-Guard 专用适配器，也不是单纯数据库读取工具。
+
+当前技术底座必须继续围绕下面这条主链路推进：
 
 ```text
-外部系统 / 数据库 / API / Webhook / 文件 / Syslog
+外部系统 / 数据库 / API / Webhook / 文件 / Syslog / Agent
   -> 采集适配器
   -> raw_events / raw_logs / raw_imports
   -> 字段映射与标准化
@@ -17,268 +21,283 @@
   -> 通知 / 处置 / 报表 / 反馈
 ```
 
-当前平台方向不是 IP-Guard 专项适配器，也不是 Python FastAPI 主后端方案。IP-Guard 只能作为首个数据库类数据源样例，后续必须保持多源接入能力。
+权威约束文档是 `TECHNICAL_MANUAL.md`。后续除非项目负责人明确调整，否则不要偏离该手册定义的产品方向、数据链路和架构边界。
 
----
+## 2. 当前技术栈
 
-## 项目位置
-
-`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
-
-## 当前状态
-
-**Phase 1 技术底座** — 平台框架已搭建，可启动、可配置、可扩展。当前重点已经从单纯占位骨架转为多源接入、元数据快照、采集任务、标准事件链路和 Demo 展示能力的基础建设。
-
-### 已具备的能力
-
-- 6 模块 Spring Cloud 微服务（Gateway / Auth / Core / Alert / Report / Common），通过 Nacos 注册发现
-- PostgreSQL 初始表结构（Flyway 迁移）
-- **SQL Server 数据源连接器** — 测试连接、浏览数据库/表/字段、采样数据
-- 数据源 / 元数据快照 / Schema 表与字段 / 字段映射 的 CRUD
-- 外部接入与采集任务页面框架
-- 规则 / 告警 CRUD + 状态流转（占位）
-- 报表任务 CRUD + 空 Excel 模板导出（Apache POI）
-- **总览仪表盘** — 风险态势、数据源健康、告警趋势、Schema 映射进度（真实数据驱动）
-- React 管理台页面（总览 / 数据源 / 元数据快照 / 外部接入 / 采集任务 / 规则 / 告警 / 通知 / 报表 / 设置）
-- **H2 本地开发 profile** — 无 Docker 也可启动全功能后端
-- Docker Compose 一键启动全栈
-
-### 明确不在此阶段范围
-
-- 不把真实 SQL Server / IP-Guard 作为当前开发阻塞前提
-- 不把 IP-Guard、UEBA 或某个固定厂商作为唯一服务对象
-- 不把 AI / 大模型 / 自学习作为当前主链路前置依赖
-- 不引入 ClickHouse / Kafka / CDC / K8s 作为当前阶段必要依赖
-- 不绕过 raw 层和 `standard_events` 直接生成生产告警
-- Demo 可以使用演示数据，但演示数据必须与真实客户数据隔离
-
----
-
-## 技术栈
-
-| 层 | 技术 |
+| 层级 | 当前选型 |
 |---|---|
-| 后端框架 | Java 21 / Spring Boot 3.3.5 / Spring Cloud 2023.0.3 / Spring Cloud Alibaba 2023.0.1.2 |
-| 注册配置 | Nacos 2.4.3 |
-| 数据库 | PostgreSQL 16（Flyway 迁移）+ H2（本地无 Docker 开发） |
-| 缓存 | Redis 7 |
-| 前端 | React 18 / TypeScript / Ant Design 5 / Vite 5 |
-| 构建 | Maven（后端）+ npm（前端） |
+| 后端 | Java 21 / Spring Boot 3.3.5 / Spring Cloud 2023.0.3 / Spring Cloud Alibaba 2023.0.1.2 |
+| 网关 | Spring Cloud Gateway |
+| 数据库 | PostgreSQL 16，Flyway 管理迁移 |
+| 本地开发库 | H2 PostgreSQL mode |
+| 前端 | React 18 / TypeScript / Ant Design 5 / Vite |
 | 部署 | Docker Compose |
 
----
+后端模块：
 
-## 目录结构
-
-```
+```text
 backend/
-  pom.xml                 # 父 POM，依赖版本管理
-  edsp-common/            # ApiResponse<T> / PageResult<T> / OptionItem
-  edsp-gateway/           # Spring Cloud Gateway，路由转发
-  edsp-auth/              # 登录占位，/api/auth/**
-  edsp-core/              # 数据源 + Schema CRUD + Flyway V1 迁移
-    service/SqlServerMetadataService.java  # SQL Server 元数据扫描与连接测试
-    controller/OverviewController.java     # /api/core/overview 总览聚合
-  edsp-alert/             # 规则 + 告警 CRUD
-  edsp-report/            # 报表任务 + Excel 导出
-  */resources/
-    application.yml         # 默认配置（Docker 环境）
-    application-local.yml   # H2 本地开发覆盖（nacos.discovery.enabled=false）
-  Dockerfile              # 多阶段构建：maven build → jre run
-frontend/
-  src/api.ts              # apiGet / apiPost 封装
-  src/types.ts            # TS 类型定义（含 OverviewData）
-  src/App.tsx             # 布局 + 导航 + 用户菜单
-  src/pages/
-    DashboardPage.tsx       # 总览仪表盘（环形图、趋势柱状图、实时指标）
-    DataSourcesPage.tsx     # SQL Server 连接配置 + 测试 + 库表扫描 UI
-    SchemaPage.tsx          # Schema 映射管理
-    RulesPage.tsx           # 规则中心
-    AlertsPage.tsx          # 告警中心
-    ReportsPage.tsx         # 报表中心
-  Dockerfile              # node build → nginx serve
-  nginx.conf              # /api 代理到 gateway
-docker-compose.yml
-scripts/                  # PowerShell 本地开发脚本
+  edsp-common   公共响应模型
+  edsp-gateway 统一 API 网关
+  edsp-auth    登录和账号信息
+  edsp-core    数据源、元数据、采集、raw/standard 事件、总览
+  edsp-alert   告警、规则、通知
+  edsp-report  报表任务
 ```
 
----
+## 3. 最新完成内容
 
-## 本地启动
+最近一次提交：
 
-### Docker 方式
-
-```powershell
-Copy-Item .env.example .env
-docker compose up --build
+```text
+6f44ad8 feat: implement core event pipeline
 ```
 
-启动后：
-- 前端：`http://localhost:3000`
-- 网关：`http://localhost:8080`
-- Nacos：`http://localhost:8848/nacos`
+这次提交主要完成：
 
-### 无 Docker 方式（H2 内存库）
+- 新增 `raw_events` / `standard_events` / `ingestion_runs` 等核心事件链路结构。
+- 新增采集任务服务 `CollectionTaskService`。
+- 新增事件写入服务 `IngestionService`。
+- 新增元数据扫描和变更检测服务：
+  - `JdbcMetadataScanService`
+  - `SchemaScanService`
+- 完善 `SchemaController`、`SchemaScanController`、`CollectionTaskController`、`IngestionController`。
+- 前端完善元数据快照、采集任务执行反馈和类型定义。
+- 新增 `CollectionTaskServiceTest`，覆盖采集任务从元数据映射到 raw/standard 事件的闭环。
+- 新增审查记录：`docs/reviews/2026-05-20-core-event-pipeline-review.md`。
+
+## 4. 当前可运行状态
+
+本地开发模式可使用 H2，不依赖 Docker。
+
+后端启动：
 
 ```powershell
 .\scripts\start-local-backend.ps1
-
-cd frontend && npm install && npm run dev
-# → http://localhost:5173
 ```
 
----
+前端启动：
 
-## 代码中的已知占位点
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-| 位置 | 占位内容 | 待替换为 |
-|------|----------|----------|
-| `AuthController.login()` | 不校验密码，Base64 假 token | Spring Security + JWT |
-| `AuthController.me()` | 硬编码 admin 用户 | 数据库查用户 |
-| `ReportController.emptyTemplate()` | 静态 2 行 Excel | 真实数据填充 |
-| **所有 Controller** | **无任何鉴权** | 认证拦截器 |
-| `DashboardPage` 告警 Badge | 硬编码 `count={12}` | 真实开放告警数 |
+默认访问：
 
-> 已修复：
-> - ~~`DataSourceController.testConnection()` 固定返回 "not_configured"~~ → `SqlServerMetadataService.test()` 实现真实 JDBC 连接测试
-> - ~~`DashboardPage` 指标卡片全为 0~~ → `OverviewController` + `/api/core/overview` 提供真实聚合数据
+```text
+前端：http://localhost:5173/
+网关：http://localhost:8080/
+core health：http://localhost:8082/actuator/health
+```
 
----
+Docker Compose 部署：
 
-## 已知问题（两轮审查汇总）
+```powershell
+Copy-Item .env.example .env
+docker compose up -d --build
+```
 
-### 审查时间线
-- **第一轮**（Phase 1 骨架初建）：14 项
-- **第二轮**（新增 SQL Server 连接器 + 总览仪表盘）：13 项
+默认 Docker 前端端口由 `.env` 的 `FRONTEND_PORT` 控制，当前 `.env.example` 默认值是 `18080`。
 
----
+## 5. 已验证结果
 
-### 严重（5 项）⚠️ 需优先修复
+本地最近一次验证结果：
 
-| # | 轮次 | 问题 | 位置 |
-|---|------|------|------|
-| 1 | R1 | **登录不校验密码** — 任意用户名+密码获得 token，token 只是 Base64(username:timestamp)，无签名无过期 | `AuthController.login()` |
-| 2 | R1 | **全平台无鉴权** — 所有 API 端点对外开放，Gateway 无认证 filter | 全部 Controller |
-| 3 | R1 | **文档与代码技术栈不一致** — `PROJECT_BRIEF.md` 描述 Python FastAPI，实际 Java Spring Cloud | 项目文档 |
-| 4 | **R2** | **SQL 注入** — `SqlServerMetadataService.sample()` 用字符串拼接构建 SQL，`quoteIdentifier()` 仅检测 `]` 字符，可绕过 | `SqlServerMetadataService.java:138` |
-| 5 | **R2** | **未处理异常导致 500** — `DataSourceController.sourceRow()` 调用 `queryForMap`，ID 不存在时抛 `EmptyResultDataAccessException`，无 catch，影响 testConnection/tables/columns/sample 四个端点 | `DataSourceController.java:139-145` |
+```powershell
+mvn -pl edsp-core -am test
+```
 
-### 中等（7 项）
+结果：通过。
 
-| # | 轮次 | 问题 | 位置 |
-|---|------|------|------|
-| 6 | R1 | 零测试文件（6 个 Maven 模块 + 前端） | 全项目 |
-| 7 | R1 | 所有列表接口无分页（`PageResult` 类已定义但未使用） | 全部 Controller |
-| 8 | R1 | 缺少关键数据库索引（`alerts.severity`、`alerts.status`、`rules.enabled` 等） | `V1__init.sql` |
-| 9 | R1 | Redis 无持久化 volume | `docker-compose.yml` |
-| 10 | R1 | 前端 submit 函数无 try/catch，API 失败用户无感知 | 部分页面 |
-| 11 | **R2** | **密码存储与回流风险** — `config_json` 含明文密码存入数据库，通过 `sourceRow()` 读取后虽未直接返回 password 字段，但缺乏白名单过滤 | `SqlServerMetadataService` |
-| 12 | **R2** | **INSERT 失败静默返回 id=0** — `DataSourceController.create()` 中 keyHolder 取不到 id 时返回 `{"id": 0, "message": "created"}`，调用方误以为成功 | `DataSourceController.java:60-61` |
+```text
+Tests run: 1, Failures: 0, Errors: 0
+BUILD SUCCESS
+```
 
-### 低（12 项）
+```powershell
+mvn -pl edsp-core -am package -DskipTests
+```
 
-| # | 轮次 | 问题 | 位置 |
-|---|------|------|------|
-| 13 | R1 | `severityColor` 在 `RulesPage.tsx` 和 `AlertsPage.tsx` 中重复定义（DashboardPage 已统一但未复用） | 前端 |
-| 14 | R1 | 前端 `api.ts` 缺少 `apiPut` / `apiDelete` | `api.ts` |
-| 15 | R1 | Actuator health 端点公开 | 各 `application.yml` |
-| 16 | R1 | `alert_notes` 表缺少 `updated_at` 字段 | `V1__init.sql` |
-| 17 | ~~R1~~ | ~~`configJson`/`paramsJson` 硬编码~~ → **已修复**（`buildPayload()` 动态生成） | — |
-| 18 | **R2** | `OverviewController.alertTrend()` 循环 7 次独立 SQL，不如一次 `GROUP BY date` | `OverviewController.java:191-203` |
-| 19 | **R2** | `OverviewController.countBy()` 全表扫描 `alerts` 做 `group by lower(severity)`，无函数索引 | `OverviewController.java:205-215` |
-| 20 | **R2** | `DataSourceController.columns()` 的 `database` 参数冗余（service 层未使用） | `DataSourceController.java:114-125` |
-| 21 | **R2** | `AlertController.createAlert()` 用 `queryForObject(... returning id)`，与 `DataSourceController` 的 `GeneratedKeyHolder` 方式不一致 | `AlertController.java:38-45` |
-| 22 | **R2** | CSS 中三处静态 `conic-gradient` 与 JS 动态生成的 `conicGradient()` 同时存在，数据源不同时视觉不一致 | `styles.css` |
-| 23 | **R2** | H2 local profile 的 Flyway 兼容性 — `V1__init.sql` 中 `bigserial`、`references ... on delete cascade` 等语法依赖 H2 PostgreSQL 模式的完整度 | `application-local.yml` |
-| 24 | **R2** | `App.tsx` 告警 Badge 硬编码 `count={12}`，不是真实数据 | `App.tsx:51` |
+结果：通过。
 
----
+```powershell
+npm run build
+```
 
-## SQL Server 连接器 API 速查
+结果：通过。保留 Vite chunk size warning，当前不是阻塞项。
 
-| 端点 | 方法 | 用途 |
-|------|------|------|
-| `/api/core/data-sources/test` | POST | 新建前测试连接（不保存） |
-| `/api/core/data-sources/{id}/test` | POST | 已保存数据源的连接测试，回写 status |
-| `/api/core/data-sources/{id}/tables?database=&keyword=&limit=` | GET | 扫描库下表列表 |
-| `/api/core/data-sources/{id}/columns?database=&schema=&table=` | GET | 查看表的字段结构 |
-| `/api/core/data-sources/{id}/sample?database=&schema=&table=&limit=` | GET | 采样表数据 |
-| `/api/core/overview` | GET | 总览聚合（数据源/规则/告警/报表/Schema进度） |
+本地服务验证：
 
-### config_json 格式
+```powershell
+(Invoke-RestMethod -Uri 'http://localhost:8082/actuator/health').status
+```
+
+结果：`UP`。
+
+采集闭环验证：
+
+```text
+POST /api/core/collection-tasks/{id}/runs?runType=manual
+```
+
+验证结果：
 
 ```json
 {
-  "host": "172.16.34.134",
-  "port": 1433,
-  "database": "OCULAR3",
-  "username": "ipguard_reader",
-  "password": "***",
-  "encrypt": false,
-  "trustServerCertificate": true
+  "status": "success",
+  "readCount": 1,
+  "successCount": 1,
+  "failedCount": 0,
+  "standardizedCount": 1
 }
 ```
 
----
+已确认该执行会产生：
 
-## 下一步开发建议（按优先级）
+- 1 条 `raw_events`
+- 1 条 `standard_events`
+- 1 条成功的 `ingestion_runs`
 
-**当前阶段已完成：** SQL Server 连接器 + 总览仪表盘。代码已从纯占位骨架演进到具备元数据浏览和平台级数据聚合。
+## 6. 当前菜单和页面方向
 
-1. **修复 SQL 注入** — `SqlServerMetadataService.sample()` 字符串拼接改为参数化查询（严重安全隐患）
-2. **补 sourceRow 异常处理** — `DataSourceController` 中不存在的 ID 应返回 404 而非 500
-3. **补认证鉴权** — 引入 Spring Security + JWT，所有后续开发依赖此基础
-4. **按技术手册补齐数据链路** — 建立 raw 层、`standard_events`、采集任务、采集运行记录和元数据扫描完整性核验
-5. **Flyway V2 迁移** — 补索引：`alerts(severity, status)`、`rules(enabled)`、`data_sources(status)`；补函数索引 `lower(severity)`
-6. **规则引擎实现** — 基于真实告警字段实现规则表达式求值（替换占位）
-7. **分页统一接入** — 列表接口接入 `PageResult`，前端加搜索/分页
-8. **补充测试** — 至少覆盖 API 响应格式、Flyway 迁移、SQL Server 连接器
-9. **基础设施加固** — Redis 加 volume、alert/report 服务加 postgres 健康检查依赖
-10. **提取共享工具** — `severityColor`/`severityLabel`/`statusTag` 抽取到 `src/utils.tsx`
+当前前端信息架构应保持：
 
----
-
-## Git / GitHub 推送记录
-
-**日期：** 2026-05-20
-
-**仓库：** `git@github.com:Ruidooww/-.git`
-
-### .gitignore 配置
-
-在原有规则基础上新增了以下忽略项：
-
-```
-logs/
-*.log
-data/
-.env
-*.tar.gz
+```text
+总览
+数据源
+  - 数据源管理
+  - 元数据快照
+  - 外部接入
+  - 采集任务
+告警中心
+规则中心
+通知中心
+报表
+设置
 ```
 
-**被排除的内容：** `node_modules`、构建产物（`target/`、`dist/`、`.vite/`）、IDE 配置、日志文件、data 目录、敏感配置 `.env`、部署包 `*.tar.gz`
+注意：
 
-### 初始化操作
+- `元数据快照` 是数据源下的二级能力。
+- 字段映射应整合到 `元数据快照`，不要作为孤立主流程。
+- `外部接入` 和 `采集任务` 也属于数据源体系下的二级能力。
+- 规则中心不能要求客户手写底层字段名或表达式作为默认体验，后续应做模板化和参数化。
 
-在项目根目录执行（需先删除旧的损坏 `.git` 文件夹）：
+## 7. 已知问题和风险
 
-```bash
-cd "C:\Users\Ruidoww\Desktop\预警分析平台推送对接"
+当前仍需处理：
 
-git init
-git add .
-git commit -m "Initial commit: 预警分析平台推送对接"
-git remote add origin git@github.com:Ruidooww/-.git
-git push -u origin master
+1. 认证和鉴权仍是占位能力，后续必须补 Spring Security + JWT 或等价方案。
+2. 密码、Webhook token、API token 等敏感信息后续不能明文保存。
+3. 规则中心还没有真正的规则执行引擎。
+4. 通知中心目前以配置和展示为主，真实企微、飞书、短信、邮件投递链路还要补。
+5. 报表中心仍需补真实统计、导出内容和任务调度。
+6. 当前字段映射模板还不够完整，部分标准字段可能为空，例如 `actor`、`asset_ref`、`action`。
+7. 演示数据和正式数据必须隔离，不能把 demo seed 当作生产数据来源。
+8. 大库扫描和新增字段处理需要继续完善自动识别、置信度、低风险自动归档和高风险变更提醒。
+9. `agent.md` 当前是未跟踪文件，最近一次 commit 没有包含它。
+
+## 8. 下一步建议
+
+优先级建议：
+
+1. 完善元数据自动识别和字段映射模板。
+   - 目标：客户不需要逐表逐字段录入。
+   - 做法：基于表名、字段名、样例值、注释和已有模板生成推荐映射。
+
+2. 完善新增字段处理策略。
+   - 默认不阻塞采集。
+   - 高置信度字段自动进入 `standard_events` 标准字段或扩展字段。
+   - 低置信度字段进入待确认队列。
+   - 只有影响风险判断的字段变更才触发运营提醒。
+
+3. 实现规则模板化。
+   - 规则中心不直接暴露 `file_size > 104857600 && after_hours == true` 这类表达式给客户。
+   - 改为场景模板，例如“大文件外发”“非工作时间下载”“敏感文件传输”。
+   - 客户只填阈值、时间范围、人员范围、数据源范围等参数。
+
+4. 打通 `standard_events -> alert_rules -> alerts`。
+   - 当前已完成 raw/standard 基础链路。
+   - 下一步应让规则基于标准事件产生真实告警。
+
+5. 完善通知投递闭环。
+   - Webhook 优先。
+   - 后续扩展企业微信、飞书、短信、邮件。
+   - 所有投递结果进入 `notification_deliveries`。
+
+6. 加固生产部署能力。
+   - 密钥加密存储。
+   - 权限控制。
+   - 审计日志。
+   - PostgreSQL 初始化和迁移验证。
+   - Docker Compose 环境变量和健康检查。
+
+## 9. 常用命令
+
+查看工作区状态：
+
+```powershell
+git status --short
 ```
 
-### 注意事项
+后端测试：
 
-1. 本地 Git 用户信息未全局配置，需在仓库内设置：
-   ```bash
-   git config user.name "Ruidooww"
-   git config user.email "你的邮箱"
-   ```
-2. 使用 SSH 方式认证（`git@github.com`），需确保本地 SSH 密钥已添加到 GitHub 账户
-3. 测试 SSH 连接：`ssh -T git@github.com`，返回 "Hi Ruidooww!" 即为成功
-4. 原始 `.git` 目录在挂载环境中出现配置损坏（config 文件含空字节），已指导用户手动删除后重建
+```powershell
+cd backend
+mvn -pl edsp-core -am test
+```
+
+后端打包：
+
+```powershell
+cd backend
+mvn -pl edsp-core -am package -DskipTests
+```
+
+前端构建：
+
+```powershell
+cd frontend
+npm run build
+```
+
+停止本地后端：
+
+```powershell
+.\scripts\stop-local-backend.ps1
+```
+
+查看本地后端状态：
+
+```powershell
+.\scripts\status-local-backend.ps1
+```
+
+Docker 部署：
+
+```powershell
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=200 edsp-core
+```
+
+## 10. 给下一位开发者的注意事项
+
+- 不要把 IP-Guard 当成唯一目标，IP-Guard 只是首个数据库类外部源样例。
+- 不要绕过 raw 层直接生成告警。
+- 不要让客户逐字段维护映射作为默认交付流程。
+- 不要把 demo 数据、mock 数据、临时逻辑混入正式链路。
+- 修改数据库结构必须走 Flyway migration。
+- 修改接口后同步更新前端 `frontend/src/types.ts`。
+- 提交前至少跑：
+
+```powershell
+cd backend
+mvn -pl edsp-core -am test
+
+cd ..\frontend
+npm run build
+```

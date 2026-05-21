@@ -3,6 +3,7 @@ package com.edsp.core.controller;
 import com.edsp.common.api.ApiResponse;
 import com.edsp.core.dto.DataSourceRequest;
 import com.edsp.core.service.SqlServerMetadataService;
+import com.edsp.core.support.CoreRequestSupport;
 import jakarta.validation.Valid;
 import java.sql.Statement;
 import java.util.LinkedHashMap;
@@ -25,10 +26,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class DataSourceController {
     private final JdbcTemplate jdbcTemplate;
     private final SqlServerMetadataService sqlServerMetadataService;
+    private final CoreRequestSupport support;
 
-    public DataSourceController(JdbcTemplate jdbcTemplate, SqlServerMetadataService sqlServerMetadataService) {
+    public DataSourceController(
+        JdbcTemplate jdbcTemplate,
+        SqlServerMetadataService sqlServerMetadataService,
+        CoreRequestSupport support
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.sqlServerMetadataService = sqlServerMetadataService;
+        this.support = support;
     }
 
     @GetMapping
@@ -43,6 +50,7 @@ public class DataSourceController {
 
     @PostMapping
     public ApiResponse<Map<String, Object>> create(@Valid @RequestBody DataSourceRequest request) {
+        var configJson = support.jsonOrEmpty(request.configJson(), "configJson");
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             var statement = connection.prepareStatement("""
@@ -53,7 +61,7 @@ public class DataSourceController {
             statement.setString(2, request.sourceType());
             statement.setString(3, request.connectionKind());
             statement.setString(4, request.description());
-            statement.setString(5, request.configJson());
+            statement.setString(5, configJson);
             statement.setString(6, initialStatus(request));
             statement.setBoolean(7, request.enabled());
             return statement;
@@ -65,21 +73,23 @@ public class DataSourceController {
 
     @PostMapping("/test")
     public ApiResponse<Map<String, Object>> testUnsaved(@Valid @RequestBody DataSourceRequest request) {
+        var configJson = support.jsonOrEmpty(request.configJson(), "configJson");
         if (!isSqlServer(request.sourceType())) {
             return ApiResponse.ok(configuredResult(request.sourceType(), request.connectionKind()));
         }
-        return ApiResponse.ok(sqlServerMetadataService.test(request));
+        return ApiResponse.ok(sqlServerMetadataService.test(request.sourceType(), configJson));
     }
 
     @PutMapping("/{id}")
     public ApiResponse<Map<String, Object>> update(@PathVariable("id") long id, @Valid @RequestBody DataSourceRequest request) {
+        var configJson = support.jsonOrEmpty(request.configJson(), "configJson");
         jdbcTemplate.update("""
             update data_sources
             set name = ?, source_type = ?, connection_kind = ?, description = ?,
                 config_json = cast(? as jsonb), status = ?, enabled = ?, updated_at = now()
             where id = ?
             """, request.name(), request.sourceType(), request.connectionKind(), request.description(),
-            request.configJson(), initialStatus(request), request.enabled(), id);
+            configJson, initialStatus(request), request.enabled(), id);
         return ApiResponse.ok(Map.of("id", id), "updated");
     }
 
@@ -120,7 +130,7 @@ public class DataSourceController {
     ) {
         var row = sourceRow(id);
         return ApiResponse.ok(sqlServerMetadataService.tables(
-            row.get("source_type").toString(), row.get("config_json"), database, keyword, limit));
+            row.get("source_type").toString(), row.get("config_json"), database, keyword, support.safeLimit(limit)));
     }
 
     @GetMapping("/{id}/columns")
@@ -145,7 +155,7 @@ public class DataSourceController {
     ) {
         var row = sourceRow(id);
         return ApiResponse.ok(sqlServerMetadataService.sample(
-            row.get("source_type").toString(), row.get("config_json"), database, schema, table, limit));
+            row.get("source_type").toString(), row.get("config_json"), database, schema, table, support.safeLimit(limit, 50)));
     }
 
     private Map<String, Object> sourceRow(long id) {

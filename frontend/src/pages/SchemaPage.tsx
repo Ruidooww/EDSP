@@ -12,8 +12,8 @@ import {
 import { Alert, Button, Card, Descriptions, Drawer, Form, Input, Modal, Select, Space, Statistic, Steps, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
-import { apiGet, apiPost } from '../api';
-import type { DataSourceRow, SchemaFieldRow, SchemaScanRunRow, SchemaTableRow } from '../types';
+import { apiGet, apiPost, apiPut } from '../api';
+import type { DataSourceRow, SchemaChangeEventRow, SchemaFieldRow, SchemaScanRunRow, SchemaTableRow } from '../types';
 
 interface SchemaMappingRow {
   id: number;
@@ -170,15 +170,63 @@ function scanStatusTag(value?: string) {
   return <Tag>{value || '未开始'}</Tag>;
 }
 
+function changeTypeTag(value?: string) {
+  const labels: Record<string, string> = {
+    added: '新增',
+    removed: '删除',
+    type_changed: '类型变化',
+    nullability_changed: '约束变化',
+    reappeared: '重新出现',
+  };
+  const color = value === 'removed' || value === 'type_changed'
+    ? 'red'
+    : value === 'added'
+      ? 'green'
+      : 'blue';
+  return <Tag color={color}>{labels[value || ''] || value || '-'}</Tag>;
+}
+
+function changeStatusTag(value?: string) {
+  if (value === 'pending') {
+    return <Tag color="warning">待确认</Tag>;
+  }
+  if (value === 'auto_accepted') {
+    return <Tag color="success">自动处理</Tag>;
+  }
+  if (value === 'accepted') {
+    return <Tag color="success">已确认</Tag>;
+  }
+  if (value === 'ignored') {
+    return <Tag>已忽略</Tag>;
+  }
+  return <Tag>{value || '-'}</Tag>;
+}
+
+function severityTag(value?: string) {
+  if (value === 'high' || value === 'critical') {
+    return <Tag color="red">高</Tag>;
+  }
+  if (value === 'medium') {
+    return <Tag color="orange">中</Tag>;
+  }
+  if (value === 'low') {
+    return <Tag color="blue">低</Tag>;
+  }
+  return <Tag>提示</Tag>;
+}
+
 export default function SchemaPage() {
   const [rows, setRows] = useState<SchemaTableRow[]>([]);
   const [sources, setSources] = useState<DataSourceRow[]>([]);
   const [fields, setFields] = useState<SchemaFieldRow[]>([]);
   const [mappings, setMappings] = useState<SchemaMappingRow[]>([]);
   const [scanRuns, setScanRuns] = useState<SchemaScanRunRow[]>([]);
+  const [changes, setChanges] = useState<SchemaChangeEventRow[]>([]);
   const [selectedTable, setSelectedTable] = useState<SchemaTableRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [changeActionId, setChangeActionId] = useState<number | null>(null);
+  const [batchActionLoading, setBatchActionLoading] = useState(false);
   const [collectOpen, setCollectOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [collectForm] = Form.useForm<MetadataCollectValues>();
@@ -188,18 +236,21 @@ export default function SchemaPage() {
   async function load() {
     setLoading(true);
     try {
-      const [schemaRows, sourceRows, scanRunRows] = await Promise.all([
+      const [schemaRows, sourceRows, scanRunRows, changeRows] = await Promise.all([
         apiGet<SchemaTableRow[]>('/api/core/schema/tables'),
         apiGet<DataSourceRow[]>('/api/core/data-sources'),
         apiGet<SchemaScanRunRow[]>('/api/core/schema-scans/runs?limit=40'),
+        apiGet<SchemaChangeEventRow[]>('/api/core/schema-scans/changes?limit=40'),
       ]);
       setRows(schemaRows);
       setSources(sourceRows);
       setScanRuns(scanRunRows);
+      setChanges(changeRows);
     } catch {
       setRows([]);
       setSources([]);
       setScanRuns([]);
+      setChanges([]);
     } finally {
       setLoading(false);
     }
@@ -222,19 +273,78 @@ export default function SchemaPage() {
   }
 
   async function startScanRun() {
-    const firstSource = sources[0];
+    const firstSource = sources.find((source) => source.connection_kind === 'database') || sources[0];
     if (!firstSource) {
       message.warning('请先在数据源管理中新增外部系统接入');
       return;
     }
-    await apiPost('/api/core/schema-scans/runs', {
-      dataSourceId: firstSource.id,
-      scanType: 'metadata',
-      status: 'running',
-      resultJson: '{}',
-    });
-    message.success('元数据扫描运行已登记');
+    const result = await apiPost<{
+      status: string;
+      scannedTables?: number;
+      scannedFields?: number;
+      changeCount?: number;
+      pendingChangeCount?: number;
+      autoAcceptedChangeCount?: number;
+      errorMessage?: string;
+    }>(
+      '/api/core/schema-scans/execute',
+      {
+        dataSourceId: firstSource.id,
+        tableLimit: 200,
+        fieldLimit: 300,
+        includeViews: false,
+      },
+    );
+    if (result.status === 'success') {
+      message.success(
+        `元数据扫描完成：${result.scannedTables || 0} 张表，${result.scannedFields || 0} 个字段；${result.changeCount || 0} 项变化，${result.pendingChangeCount || 0} 项待确认`,
+      );
+    } else {
+      message.error(result.errorMessage || '元数据扫描失败');
+    }
     await load();
+  }
+
+  async function updateChangeStatus(id: number, action: 'accept' | 'ignore' | 'reopen') {
+    setChangeActionId(id);
+    try {
+      await apiPut<SchemaChangeEventRow>(`/api/core/schema-scans/changes/${id}/status`, {
+        action,
+        operator: 'admin',
+      });
+      message.success(action === 'accept' ? '结构变化已确认' : action === 'ignore' ? '结构变化已忽略' : '结构变化已重新打开');
+      await load();
+    } finally {
+      setChangeActionId(null);
+    }
+  }
+
+  function confirmPendingChanges() {
+    const ids = changes.filter((change) => change.status === 'pending').map((change) => change.id);
+    if (!ids.length) {
+      message.info('当前没有待确认的结构变化');
+      return;
+    }
+    Modal.confirm({
+      title: '批量确认待处理结构变化',
+      content: `将确认 ${ids.length} 项结构变化，确认后采集和字段映射可以继续按当前快照执行。`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchActionLoading(true);
+        try {
+          await apiPost('/api/core/schema-scans/changes/batch-status', {
+            ids,
+            action: 'accept',
+            operator: 'admin',
+          });
+          message.success(`已确认 ${ids.length} 项结构变化`);
+          await load();
+        } finally {
+          setBatchActionLoading(false);
+        }
+      },
+    });
   }
 
   async function saveSnapshot() {
@@ -299,13 +409,17 @@ export default function SchemaPage() {
   const summary = useMemo(() => {
     const confirmed = rows.filter((row) => row.confirmation_status === 'confirmed').length;
     const pending = rows.filter((row) => row.confirmation_status !== 'confirmed').length;
+    const pendingChanges = changes.filter((change) => change.status === 'pending').length;
+    const autoAcceptedChanges = changes.filter((change) => change.status === 'auto_accepted').length;
     return {
       total: rows.length,
       confirmed,
       pending,
+      pendingChanges,
+      autoAcceptedChanges,
       autoHandled: Math.max(0, confirmed - pending),
     };
-  }, [rows]);
+  }, [changes, rows]);
 
   const sourceOptions = sources.map((source) => ({
     value: source.id,
@@ -413,6 +527,59 @@ export default function SchemaPage() {
     { title: '错误信息', dataIndex: 'error_message', render: (value) => value || '-' },
   ];
 
+  const changeColumns: ColumnsType<SchemaChangeEventRow> = [
+    {
+      title: '对象',
+      dataIndex: 'object_name',
+      render: (value: string, row) => (
+        <div>
+          <strong>{value}</strong>
+          <span className="table-subtext">{row.data_source_name}</span>
+        </div>
+      ),
+    },
+    { title: '变化类型', dataIndex: 'change_type', width: 120, render: changeTypeTag },
+    { title: '风险', dataIndex: 'severity', width: 90, render: severityTag },
+    { title: '处理状态', dataIndex: 'status', width: 120, render: changeStatusTag },
+    { title: '原因', dataIndex: 'reason', render: (value) => value || '-' },
+    { title: '发现时间', dataIndex: 'created_at', width: 150, render: formatTime },
+    {
+      title: '操作',
+      width: 170,
+      align: 'right',
+      render: (_, row) => row.status === 'pending' ? (
+        <Space size={4}>
+          <Button
+            size="small"
+            type="link"
+            loading={changeActionId === row.id}
+            onClick={() => updateChangeStatus(row.id, 'accept')}
+          >
+            确认
+          </Button>
+          <Button
+            size="small"
+            type="link"
+            danger
+            loading={changeActionId === row.id}
+            onClick={() => updateChangeStatus(row.id, 'ignore')}
+          >
+            忽略
+          </Button>
+        </Space>
+      ) : (
+        <Button
+          size="small"
+          type="link"
+          loading={changeActionId === row.id}
+          onClick={() => updateChangeStatus(row.id, 'reopen')}
+        >
+          重新打开
+        </Button>
+      ),
+    },
+  ];
+
   return (
     <div className="schema-page">
       <div className="ops-heading">
@@ -425,7 +592,7 @@ export default function SchemaPage() {
             刷新
           </Button>
           <Button icon={<FileSearchOutlined />} onClick={startScanRun}>
-            登记扫描运行
+            立即扫描元数据
           </Button>
           <Button type="primary" icon={<CloudSyncOutlined />} onClick={openCollect}>
             采集元数据
@@ -444,7 +611,10 @@ export default function SchemaPage() {
           <Statistic title="待确认" value={summary.pending} prefix={<WarningOutlined />} valueStyle={{ color: summary.pending > 0 ? '#c46a00' : '#137c72' }} />
         </Card>
         <Card className="ops-card">
-          <Statistic title="字段映射策略" value="推荐模式" prefix={<SafetyCertificateOutlined />} />
+          <Statistic title="字段变化待确认" value={summary.pendingChanges} prefix={<WarningOutlined />} valueStyle={{ color: summary.pendingChanges > 0 ? '#c46a00' : '#137c72' }} />
+        </Card>
+        <Card className="ops-card">
+          <Statistic title="变化自动处理" value={summary.autoAcceptedChanges} prefix={<SafetyCertificateOutlined />} valueStyle={{ color: '#137c72' }} />
         </Card>
       </div>
 
@@ -457,6 +627,26 @@ export default function SchemaPage() {
           pagination={{ pageSize: 5 }}
           scroll={{ x: 960 }}
           locale={{ emptyText: '暂无扫描运行记录。数据库、API、Webhook 或文件适配器执行结构发现后会写入这里。' }}
+        />
+      </Card>
+
+      <Card
+        className="ops-card"
+        title="结构变化记录"
+        extra={(
+          <Button size="small" loading={batchActionLoading} onClick={confirmPendingChanges}>
+            批量确认待处理
+          </Button>
+        )}
+      >
+        <Table<SchemaChangeEventRow>
+          rowKey="id"
+          loading={loading}
+          dataSource={changes}
+          columns={changeColumns}
+          pagination={{ pageSize: 6 }}
+          scroll={{ x: 1120 }}
+          locale={{ emptyText: '暂无结构变化。二次扫描发现新增字段、删除字段或类型变化后会显示在这里。' }}
         />
       </Card>
 

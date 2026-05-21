@@ -13,20 +13,33 @@ export interface DataSourceRow {
 
 export interface SchemaTableRow {
   id: number;
+  data_source_id?: number;
+  scan_run_id?: number;
   data_source_name: string;
+  schema_name?: string;
   table_name: string;
+  table_type?: string;
   category: string;
+  row_count?: number;
   confirmation_status: string;
+  lifecycle_status?: string;
   updated_at: string;
 }
 
 export interface SchemaFieldRow {
   id: number;
+  scan_run_id?: number;
   field_name: string;
   field_type: string;
   nullable: boolean;
   sample_value?: string;
   description?: string;
+  ordinal_position?: number;
+  semantic_type?: string;
+  confidence?: number;
+  is_candidate_key?: boolean;
+  is_time_candidate?: boolean;
+  lifecycle_status?: string;
 }
 
 export interface RuleRow {
@@ -273,4 +286,21 @@ export interface SchemaScanRunRow {
   total_fields: number;
   scanned_fields: number;
   error_message?: string;
+}
+
+export interface SchemaChangeEventRow {
+  id: number;
+  data_source_id: number;
+  data_source_name: string;
+  scan_run_id?: number;
+  schema_table_id?: number;
+  schema_field_id?: number;
+  object_type: string;
+  change_type: string;
+  object_name: string;
+  severity: Severity;
+  status: string;
+  reason?: string;
+  created_at: string | number;
+  updated_at?: string | number;
 }

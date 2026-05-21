@@ -249,8 +249,21 @@ export default function CollectionTasksPage() {
   }
 
   async function startRun(row: CollectionTaskRow) {
-    await apiPost(`/api/core/collection-tasks/${row.id}/runs?runType=manual`, {});
-    message.success('采集运行已启动');
+    const result = await apiPost<{
+      readCount?: number;
+      successCount?: number;
+      standardizedCount?: number;
+      failedCount?: number;
+      status?: string;
+    }>(`/api/core/collection-tasks/${row.id}/runs?runType=manual`, {});
+    const readCount = result.readCount ?? 0;
+    const standardizedCount = result.standardizedCount ?? result.successCount ?? 0;
+    const failedCount = result.failedCount ?? 0;
+    if (result.status === 'failed' || failedCount > 0) {
+      message.warning(`采集完成但存在失败：读取 ${readCount} 条，标准化 ${standardizedCount} 条，失败 ${failedCount} 条`);
+    } else {
+      message.success(`采集完成：读取 ${readCount} 条，标准化 ${standardizedCount} 条`);
+    }
     await load();
   }
 

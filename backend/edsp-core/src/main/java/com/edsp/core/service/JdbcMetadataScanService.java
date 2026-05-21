@@ -54,6 +54,15 @@ public class JdbcMetadataScanService {
         boolean includeViews
     ) throws SQLException {
         var databaseName = singleString(connection, "select db_name()");
+        var totalAvailableTables = singleInt(connection, includeViews ? """
+            select count(*)
+            from sys.objects o
+            where o.type in ('U', 'V') and o.is_ms_shipped = 0
+            """ : """
+            select count(*)
+            from sys.tables t
+            where t.is_ms_shipped = 0
+            """);
         var tableSql = includeViews ? """
             select top (?) s.name as schema_name,
                    o.name as table_name,
@@ -87,6 +96,7 @@ public class JdbcMetadataScanService {
                 while (rs.next()) {
                     var schemaName = rs.getString("schema_name");
                     var tableName = rs.getString("table_name");
+                    var columnScan = scanSqlServerColumns(connection, schemaName, tableName, fieldLimit);
                     tables.add(new MetadataTable(
                         databaseName,
                         schemaName,
@@ -94,21 +104,30 @@ public class JdbcMetadataScanService {
                         normalizeTableType(rs.getString("table_type")),
                         longValue(rs.getObject("row_count")),
                         offsetDateTime(rs.getObject("modify_date")),
-                        scanSqlServerColumns(connection, schemaName, tableName, fieldLimit)
+                        columnScan.fields(),
+                        columnScan.totalAvailableFields(),
+                        columnScan.limited()
                     ));
                 }
             }
         }
-        return new MetadataScanResult(databaseName, tables, 0);
+        return new MetadataScanResult(
+            databaseName,
+            tables,
+            0,
+            totalAvailableTables,
+            tables.size() < totalAvailableTables || tables.stream().anyMatch(MetadataTable::fieldsLimited)
+        );
     }
 
-    private List<MetadataField> scanSqlServerColumns(
+    private ColumnScanResult scanSqlServerColumns(
         Connection connection,
         String schemaName,
         String tableName,
         int fieldLimit
     ) throws SQLException {
         var fields = new ArrayList<MetadataField>();
+        var totalAvailableFields = countSqlServerColumns(connection, schemaName, tableName);
         try (var statement = connection.prepareStatement("""
             select top (?) c.column_id,
                    c.name as column_name,
@@ -139,7 +158,7 @@ public class JdbcMetadataScanService {
                 }
             }
         }
-        return fields;
+        return new ColumnScanResult(fields, totalAvailableFields, fields.size() < totalAvailableFields);
     }
 
     private MetadataScanResult scanGeneric(
@@ -152,14 +171,20 @@ public class JdbcMetadataScanService {
         var databaseName = firstNonBlank(connection.getCatalog(), connection.getSchema(), metaData.getDatabaseProductName());
         var tableTypes = includeViews ? new String[] {"TABLE", "VIEW"} : new String[] {"TABLE"};
         var tables = new ArrayList<MetadataTable>();
+        var totalAvailableTables = 0;
 
         try (var rs = metaData.getTables(connection.getCatalog(), null, "%", tableTypes)) {
-            while (rs.next() && tables.size() < tableLimit) {
+            while (rs.next()) {
                 var schemaName = rs.getString("TABLE_SCHEM");
                 var tableName = rs.getString("TABLE_NAME");
                 if (skipSchema(schemaName) || tableName == null || tableName.isBlank()) {
                     continue;
                 }
+                totalAvailableTables++;
+                if (tables.size() >= tableLimit) {
+                    continue;
+                }
+                var columnScan = scanGenericColumns(metaData, connection.getCatalog(), schemaName, tableName, fieldLimit);
                 tables.add(new MetadataTable(
                     databaseName,
                     schemaName,
@@ -167,14 +192,22 @@ public class JdbcMetadataScanService {
                     normalizeTableType(rs.getString("TABLE_TYPE")),
                     null,
                     null,
-                    scanGenericColumns(metaData, connection.getCatalog(), schemaName, tableName, fieldLimit)
+                    columnScan.fields(),
+                    columnScan.totalAvailableFields(),
+                    columnScan.limited()
                 ));
             }
         }
-        return new MetadataScanResult(databaseName, tables, 0);
+        return new MetadataScanResult(
+            databaseName,
+            tables,
+            0,
+            totalAvailableTables,
+            tables.size() < totalAvailableTables || tables.stream().anyMatch(MetadataTable::fieldsLimited)
+        );
     }
 
-    private List<MetadataField> scanGenericColumns(
+    private ColumnScanResult scanGenericColumns(
         DatabaseMetaData metaData,
         String catalog,
         String schemaName,
@@ -182,8 +215,13 @@ public class JdbcMetadataScanService {
         int fieldLimit
     ) throws SQLException {
         var fields = new ArrayList<MetadataField>();
+        var totalAvailableFields = 0;
         try (var rs = metaData.getColumns(catalog, schemaName, tableName, "%")) {
-            while (rs.next() && fields.size() < fieldLimit) {
+            while (rs.next()) {
+                totalAvailableFields++;
+                if (fields.size() >= fieldLimit) {
+                    continue;
+                }
                 fields.add(new MetadataField(
                     rs.getString("COLUMN_NAME"),
                     genericType(rs),
@@ -192,7 +230,7 @@ public class JdbcMetadataScanService {
                 ));
             }
         }
-        return fields;
+        return new ColumnScanResult(fields, totalAvailableFields, fields.size() < totalAvailableFields);
     }
 
     private Connection openConnection(String sourceType, Map<String, Object> config, String databaseOverride) throws SQLException {
@@ -252,6 +290,29 @@ public class JdbcMetadataScanService {
         try (var statement = connection.createStatement();
              var rs = statement.executeQuery(sql)) {
             return rs.next() ? rs.getString(1) : "";
+        }
+    }
+
+    private int singleInt(Connection connection, String sql) throws SQLException {
+        try (var statement = connection.createStatement();
+             var rs = statement.executeQuery(sql)) {
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    private int countSqlServerColumns(Connection connection, String schemaName, String tableName) throws SQLException {
+        try (var statement = connection.prepareStatement("""
+            select count(*)
+            from sys.columns c
+            join sys.objects o on o.object_id = c.object_id
+            join sys.schemas s on s.schema_id = o.schema_id
+            where s.name = ? and o.name = ?
+            """)) {
+            statement.setString(1, schemaName);
+            statement.setString(2, tableName);
+            try (var rs = statement.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
         }
     }
 
@@ -404,14 +465,31 @@ public class JdbcMetadataScanService {
     public record MetadataScanResult(
         String databaseName,
         List<MetadataTable> tables,
-        int failedTables
+        int failedTables,
+        int totalAvailableTables,
+        boolean limited
     ) {
+        public MetadataScanResult(String databaseName, List<MetadataTable> tables, int failedTables) {
+            this(databaseName, tables, failedTables, tables.size(), false);
+        }
+
         public int tableCount() {
             return tables.size();
         }
 
         public int fieldCount() {
             return tables.stream().mapToInt(table -> table.fields().size()).sum();
+        }
+
+        public int totalAvailableFields() {
+            return tables.stream().mapToInt(MetadataTable::totalAvailableFields).sum();
+        }
+
+        public double coverageRate() {
+            if (totalAvailableTables <= 0) {
+                return tableCount() == 0 ? 100.0d : 0.0d;
+            }
+            return tableCount() * 100.0d / totalAvailableTables;
         }
     }
 
@@ -422,8 +500,21 @@ public class JdbcMetadataScanService {
         String tableType,
         Long rowCount,
         OffsetDateTime sourceUpdatedAt,
-        List<MetadataField> fields
+        List<MetadataField> fields,
+        int totalAvailableFields,
+        boolean fieldsLimited
     ) {
+        public MetadataTable(
+            String databaseName,
+            String schemaName,
+            String tableName,
+            String tableType,
+            Long rowCount,
+            OffsetDateTime sourceUpdatedAt,
+            List<MetadataField> fields
+        ) {
+            this(databaseName, schemaName, tableName, tableType, rowCount, sourceUpdatedAt, fields, fields.size(), false);
+        }
     }
 
     public record MetadataField(
@@ -431,6 +522,13 @@ public class JdbcMetadataScanService {
         String fieldType,
         boolean nullable,
         int ordinalPosition
+    ) {
+    }
+
+    private record ColumnScanResult(
+        List<MetadataField> fields,
+        int totalAvailableFields,
+        boolean limited
     ) {
     }
 }

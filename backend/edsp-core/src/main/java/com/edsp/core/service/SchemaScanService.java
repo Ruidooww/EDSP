@@ -60,7 +60,8 @@ public class SchemaScanService {
                    ssr.scan_type, ssr.status, ssr.started_at, ssr.finished_at,
                    ssr.total_databases, ssr.scanned_databases, ssr.failed_databases,
                    ssr.total_tables, ssr.scanned_tables, ssr.failed_tables,
-                   ssr.total_fields, ssr.scanned_fields, ssr.error_message
+                   ssr.total_fields, ssr.scanned_fields, ssr.limited,
+                   ssr.coverage_rate, ssr.error_message
             from schema_scan_runs ssr
             join data_sources ds on ds.id = ssr.data_source_id
             order by ssr.started_at desc
@@ -94,16 +95,19 @@ public class SchemaScanService {
                     request.dataSourceId());
                 return summary;
             });
-            return Map.of(
-                "id", runId,
-                "status", "success",
-                "scannedDatabases", 1,
-                "scannedTables", result.tableCount(),
-                "scannedFields", result.fieldCount(),
-                "changeCount", changes == null ? 0 : changes.total,
-                "pendingChangeCount", changes == null ? 0 : changes.pending,
-                "autoAcceptedChangeCount", changes == null ? 0 : changes.autoAccepted
-            );
+            var response = new LinkedHashMap<String, Object>();
+            response.put("id", runId);
+            response.put("status", "success");
+            response.put("scannedDatabases", 1);
+            response.put("totalAvailableTables", result.totalAvailableTables());
+            response.put("scannedTables", result.tableCount());
+            response.put("scannedFields", result.fieldCount());
+            response.put("limited", result.limited());
+            response.put("coverageRate", result.coverageRate());
+            response.put("changeCount", changes == null ? 0 : changes.total);
+            response.put("pendingChangeCount", changes == null ? 0 : changes.pending);
+            response.put("autoAcceptedChangeCount", changes == null ? 0 : changes.autoAccepted);
+            return response;
         } catch (RuntimeException ex) {
             var errorMessage = ex.getMessage() == null ? "Metadata scan failed" : ex.getMessage();
             transactionTemplate.executeWithoutResult(status -> {
@@ -129,12 +133,13 @@ public class SchemaScanService {
                 total_databases = ?, scanned_databases = ?, failed_databases = ?,
                 total_tables = ?, scanned_tables = ?, failed_tables = ?,
                 total_fields = ?, scanned_fields = ?,
+                limited = ?, coverage_rate = ?,
                 error_message = ?, result_json = cast(? as jsonb)
             where id = ?
             """, request.status(), request.totalDatabases(), request.scannedDatabases(),
             request.failedDatabases(), request.totalTables(), request.scannedTables(),
             request.failedTables(), request.totalFields(), request.scannedFields(),
-            request.errorMessage(), resultJson, id);
+            request.limited(), request.coverageRate(), request.errorMessage(), resultJson, id);
         return Map.of("id", id);
     }
 
@@ -239,11 +244,15 @@ public class SchemaScanService {
     }
 
     private Map<String, Object> sourceRow(long id) {
-        return jdbcTemplate.queryForMap("""
+        var rows = jdbcTemplate.queryForList("""
             select id, source_type, connection_kind, config_json
             from data_sources
             where id = ?
             """, id);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Data source not found: " + id);
+        }
+        return rows.get(0);
     }
 
     private Map<String, Object> changeRow(long id) {
@@ -316,7 +325,10 @@ public class SchemaScanService {
         if (idValue instanceof Number number) {
             return number.longValue();
         }
-        return keyHolder.getKey() == null ? 0L : keyHolder.getKey().longValue();
+        if (keyHolder.getKey() != null) {
+            return keyHolder.getKey().longValue();
+        }
+        throw new IllegalStateException("Insert did not return a generated id");
     }
 
     private void finishRun(long runId, String status, MetadataScanResult result, ChangeSummary changes, String errorMessage) {
@@ -326,6 +338,7 @@ public class SchemaScanService {
                 total_databases = ?, scanned_databases = ?, failed_databases = ?,
                 total_tables = ?, scanned_tables = ?, failed_tables = ?,
                 total_fields = ?, scanned_fields = ?,
+                limited = ?, coverage_rate = ?,
                 error_message = ?, result_json = cast(? as jsonb)
             where id = ?
             """,
@@ -333,11 +346,13 @@ public class SchemaScanService {
             1,
             "success".equals(status) ? 1 : 0,
             "success".equals(status) ? 0 : 1,
-            result.tableCount(),
+            result.totalAvailableTables(),
             "success".equals(status) ? result.tableCount() : 0,
             result.failedTables(),
-            result.fieldCount(),
+            result.totalAvailableFields(),
             "success".equals(status) ? result.fieldCount() : 0,
+            result.limited(),
+            result.coverageRate(),
             errorMessage,
             resultJson(result, status, changes),
             runId);
@@ -352,7 +367,9 @@ public class SchemaScanService {
                 upsertMapping(tableId, field);
             }
         }
-        markMissingObjects(runId, dataSourceId, changes);
+        if (!result.limited()) {
+            markMissingObjects(runId, dataSourceId, changes);
+        }
         return changes;
     }
 
@@ -419,7 +436,10 @@ public class SchemaScanService {
                 "New table discovered during metadata scan.");
             return id;
         }
-        var id = keyHolder.getKey() == null ? 0L : keyHolder.getKey().longValue();
+        if (keyHolder.getKey() == null) {
+            throw new IllegalStateException("Insert did not return a generated id");
+        }
+        var id = keyHolder.getKey().longValue();
         recordChange(changes, dataSourceId, runId, id, null, "table", "added", tableName,
             tableChangeSeverity(category), tableChangeStatus(category), Map.of(), tableSnapshot(table, category),
             "New table discovered during metadata scan.");
@@ -499,9 +519,12 @@ public class SchemaScanService {
             return statement;
         }, keyHolder);
         var idValue = keyHolder.getKeys() == null ? null : keyHolder.getKeys().get("id");
-        var fieldId = idValue instanceof Number number
+        Long fieldId = idValue instanceof Number number
             ? number.longValue()
-            : keyHolder.getKey() == null ? 0L : keyHolder.getKey().longValue();
+            : keyHolder.getKey() == null ? null : keyHolder.getKey().longValue();
+        if (fieldId == null) {
+            throw new IllegalStateException("Insert did not return a generated id");
+        }
         var decision = fieldAddedDecision(semanticType);
         recordFieldChange(changes, dataSourceId, runId, tableId, fieldId, tableName, field, semanticType,
             "added", decision.severity, decision.status, Map.of(), fieldSnapshot(field, semanticType),
@@ -776,7 +799,11 @@ public class SchemaScanService {
         var data = new LinkedHashMap<String, Object>();
         data.put("status", status);
         data.put("databaseName", result.databaseName());
+        data.put("totalAvailableTables", result.totalAvailableTables());
         data.put("tableCount", result.tableCount());
+        data.put("limited", result.limited());
+        data.put("coverageRate", result.coverageRate());
+        data.put("totalAvailableFields", result.totalAvailableFields());
         data.put("fieldCount", result.fieldCount());
         data.put("changeCount", changes.total);
         data.put("pendingChangeCount", changes.pending);

@@ -10,6 +10,8 @@ public record SchemaScanFinishRequest(
     Integer failedTables,
     Integer totalFields,
     Integer scannedFields,
+    Boolean limited,
+    Double coverageRate,
     String errorMessage,
     String resultJson
 ) {
@@ -25,6 +27,10 @@ public record SchemaScanFinishRequest(
         if (failedTables == null) failedTables = 0;
         if (totalFields == null) totalFields = 0;
         if (scannedFields == null) scannedFields = 0;
+        if (limited == null) limited = scannedTables < totalTables;
+        if (coverageRate == null) {
+            coverageRate = totalTables <= 0 ? 100.0d : scannedTables * 100.0d / totalTables;
+        }
         if (resultJson == null || resultJson.isBlank()) {
             resultJson = "{}";
         }

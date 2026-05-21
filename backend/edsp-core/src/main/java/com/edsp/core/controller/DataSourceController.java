@@ -9,6 +9,7 @@ import java.sql.Statement;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/core/data-sources")
@@ -66,8 +68,7 @@ public class DataSourceController {
             statement.setBoolean(7, request.enabled());
             return statement;
         }, keyHolder);
-        var idValue = keyHolder.getKeys() == null ? null : keyHolder.getKeys().get("id");
-        var id = idValue instanceof Number number ? number.longValue() : 0;
+        var id = generatedId(keyHolder);
         return ApiResponse.ok(Map.of("id", id), "created");
     }
 
@@ -101,11 +102,7 @@ public class DataSourceController {
 
     @PostMapping("/{id}/test")
     public ApiResponse<Map<String, Object>> testConnection(@PathVariable("id") long id) {
-        var row = jdbcTemplate.queryForMap("""
-            select id, source_type, connection_kind, config_json
-            from data_sources
-            where id = ?
-            """, id);
+        var row = sourceRow(id);
         var sourceType = row.get("source_type").toString();
         var connectionKind = row.get("connection_kind").toString();
         var result = isSqlServer(sourceType)
@@ -159,11 +156,31 @@ public class DataSourceController {
     }
 
     private Map<String, Object> sourceRow(long id) {
-        return jdbcTemplate.queryForMap("""
-            select id, source_type, config_json
+        var rows = jdbcTemplate.queryForList("""
+            select id, source_type, connection_kind, config_json
             from data_sources
             where id = ?
             """, id);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Data source not found: " + id);
+        }
+        return rows.get(0);
+    }
+
+    private Long generatedId(GeneratedKeyHolder keyHolder) {
+        var keys = keyHolder.getKeys();
+        Number key = null;
+        if (keys != null && keys.get("id") instanceof Number id) {
+            key = id;
+        } else if (keys != null && keys.get("ID") instanceof Number id) {
+            key = id;
+        } else {
+            key = keyHolder.getKey();
+        }
+        if (key == null) {
+            throw new IllegalStateException("Insert did not return a generated id");
+        }
+        return key.longValue();
     }
 
     private boolean isSqlServer(String sourceType) {

@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class CollectionTaskServiceTest {
     private JdbcTemplate jdbcTemplate;
     private CollectionTaskService service;
+    private CoreRequestSupport support;
 
     @BeforeEach
     void setUp() {
@@ -39,7 +40,13 @@ class CollectionTaskServiceTest {
 
         jdbcTemplate = new JdbcTemplate(dataSource);
         var objectMapper = new ObjectMapper();
-        service = new CollectionTaskService(jdbcTemplate, new CoreRequestSupport(objectMapper), objectMapper);
+        support = new CoreRequestSupport(objectMapper);
+        service = new CollectionTaskService(
+            jdbcTemplate,
+            support,
+            objectMapper,
+            new StandardEventDedupService(jdbcTemplate, support)
+        );
     }
 
     @Test
@@ -89,6 +96,31 @@ class CollectionTaskServiceTest {
         ));
     }
 
+    @Test
+    void startRunUsesDedupKeyBeforeSourceExternalId() {
+        var dataSourceId = insertDataSource();
+        var schemaTableId = insertSchema(dataSourceId);
+        insertMappedField(schemaTableId, "event_id", "varchar", "evt-1001", "externalId", 1);
+        insertMappedField(schemaTableId, "risk_type", "varchar", "file_export", "eventType", 2);
+        insertMappedField(schemaTableId, "event_time", "datetime", "2026-05-20 10:30:00", "occurredAt", 3);
+        insertMappedField(schemaTableId, "username", "varchar", "Administrator", "actor", 4);
+        insertMappedField(schemaTableId, "host_name", "varchar", "WIN-SERVER-01", "assetRef", 5);
+        insertMappedField(schemaTableId, "risk_level", "varchar", "high", "severity", 6);
+        var taskId = insertCollectionTask(dataSourceId);
+        var dedupKey = support.dedupKey("securityplatform", "evt-1001", "ignored", null, null, null, null);
+        var existingStandardEventId = insertStandardEventWithDedupKey(dataSourceId, dedupKey);
+
+        var run = service.startRun(taskId, "manual");
+
+        assertEquals("success", run.get("status"));
+        assertEquals(1L, count("raw_events"));
+        assertEquals(1L, count("standard_events"));
+        assertEquals(existingStandardEventId, jdbcTemplate.queryForObject(
+            "select standard_event_id from raw_events",
+            Long.class
+        ));
+    }
+
     private Long insertDataSource() {
         jdbcTemplate.update("""
             insert into data_sources(name, source_type, connection_kind, config_json, status, enabled)
@@ -132,6 +164,17 @@ class CollectionTaskServiceTest {
             values (?, 'DLP Alert Collection', 'pull', 'manual', 'idle', true, cast('{}' as jsonb))
             """, dataSourceId);
         return lastId("collection_tasks");
+    }
+
+    private Long insertStandardEventWithDedupKey(Long dataSourceId, String dedupKey) {
+        jdbcTemplate.update("""
+            insert into standard_events(
+                data_source_id, source_system, external_id, event_type,
+                severity, risk_score, normalized_json, extra_json, dedup_key
+            )
+            values (?, 'legacy', 'legacy-evt', 'seed', 'low', 10, cast('{}' as jsonb), cast('{}' as jsonb), ?)
+            """, dataSourceId, dedupKey);
+        return lastId("standard_events");
     }
 
     private Long count(String tableName) {

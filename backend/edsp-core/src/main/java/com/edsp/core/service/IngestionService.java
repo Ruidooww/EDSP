@@ -16,10 +16,16 @@ import org.springframework.transaction.annotation.Transactional;
 public class IngestionService {
     private final JdbcTemplate jdbcTemplate;
     private final CoreRequestSupport support;
+    private final StandardEventDedupService standardEventDedupService;
 
-    public IngestionService(JdbcTemplate jdbcTemplate, CoreRequestSupport support) {
+    public IngestionService(
+        JdbcTemplate jdbcTemplate,
+        CoreRequestSupport support,
+        StandardEventDedupService standardEventDedupService
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.support = support;
+        this.standardEventDedupService = standardEventDedupService;
     }
 
     public List<Map<String, Object>> rawEvents(int limit) {
@@ -66,7 +72,11 @@ public class IngestionService {
     @Transactional
     public Map<String, Object> createStandardEvent(StandardEventRequest request) {
         var normalized = normalize(request);
-        var existingId = existingStandardEventId(normalized.dedupKey(), normalized.sourceSystem(), normalized.externalId());
+        var existingId = standardEventDedupService.findExistingStandardEventId(
+            normalized.dedupKey(),
+            normalized.sourceSystem(),
+            normalized.externalId()
+        );
         if (existingId != null) {
             updateStandardEvent(existingId, request, normalized);
             linkRawEvent(request.rawEventId(), existingId);
@@ -160,27 +170,6 @@ public class IngestionService {
             request.actor(), request.assetRef(), request.subjectType(), request.subjectRef(), request.action(),
             request.result(), request.severity(), request.riskScore(), normalized.normalizedJson(),
             normalized.extraJson(), normalized.dedupKey(), id);
-    }
-
-    private Long existingStandardEventId(String dedupKey, String sourceSystem, String externalId) {
-        var rows = dedupKey == null || dedupKey.isBlank()
-            ? List.<Map<String, Object>>of()
-            : jdbcTemplate.queryForList("""
-                select id
-                from standard_events
-                where dedup_key = ?
-                """, dedupKey);
-        if (rows.isEmpty() && externalId != null) {
-            rows = jdbcTemplate.queryForList("""
-                select id
-                from standard_events
-                where source_system = ? and external_id = ?
-                """, sourceSystem, externalId);
-        }
-        if (rows.isEmpty()) {
-            return null;
-        }
-        return support.number(rows.get(0).get("id"));
     }
 
     private Long insertAndReturnId(String sql, Object... args) {

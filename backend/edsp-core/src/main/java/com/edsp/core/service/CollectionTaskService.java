@@ -24,11 +24,18 @@ public class CollectionTaskService {
     private final JdbcTemplate jdbcTemplate;
     private final CoreRequestSupport support;
     private final ObjectMapper objectMapper;
+    private final StandardEventDedupService standardEventDedupService;
 
-    public CollectionTaskService(JdbcTemplate jdbcTemplate, CoreRequestSupport support, ObjectMapper objectMapper) {
+    public CollectionTaskService(
+        JdbcTemplate jdbcTemplate,
+        CoreRequestSupport support,
+        ObjectMapper objectMapper,
+        StandardEventDedupService standardEventDedupService
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.support = support;
         this.objectMapper = objectMapper;
+        this.standardEventDedupService = standardEventDedupService;
     }
 
     public List<Map<String, Object>> list(int limit) {
@@ -340,22 +347,22 @@ public class CollectionTaskService {
     private Long upsertStandardEvent(long rawId, SourceRecord record) {
         var dedupKey = support.dedupKey(record.sourceSystem(), record.externalId(), record.eventType(),
             record.occurredAt(), record.actor(), record.assetRef(), record.subjectRef());
-        var existingRows = jdbcTemplate.queryForList("""
-            select id
-            from standard_events
-            where source_system = ? and external_id = ?
-            """, record.sourceSystem(), record.externalId());
-        if (!existingRows.isEmpty()) {
-            var existingId = support.number(existingRows.get(0).get("id"));
+        var existingId = standardEventDedupService.findExistingStandardEventId(
+            dedupKey,
+            record.sourceSystem(),
+            record.externalId()
+        );
+        if (existingId != null) {
             jdbcTemplate.update("""
                 update standard_events
-                set raw_event_id = ?, data_source_id = ?, event_type = ?, occurred_at = ?,
-                    actor = ?, asset_ref = ?, subject_type = ?, subject_ref = ?,
+                set raw_event_id = ?, data_source_id = ?, source_system = ?, external_id = ?,
+                    event_type = ?, occurred_at = ?, actor = ?, asset_ref = ?, subject_type = ?, subject_ref = ?,
                     action = ?, result = ?, severity = ?, risk_score = ?,
                     normalized_json = cast(? as jsonb), extra_json = cast(? as jsonb),
                     dedup_key = ?, updated_at = now()
                 where id = ?
-                """, rawId, record.dataSourceId(), record.eventType(), record.occurredAt(),
+                """, rawId, record.dataSourceId(), record.sourceSystem(), record.externalId(),
+                record.eventType(), record.occurredAt(),
                 record.actor(), record.assetRef(), record.subjectType(), record.subjectRef(),
                 record.action(), record.result(), record.severity(), record.riskScore(),
                 record.normalizedJson(), record.payloadJson(), dedupKey, existingId);

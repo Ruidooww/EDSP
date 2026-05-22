@@ -33,6 +33,11 @@ public class SemanticProfilerService {
         Pattern.compile(".*(action|operation|operate|op_type|command).*", Pattern.CASE_INSENSITIVE);
     private static final Pattern RESULT =
         Pattern.compile(".*(result|status|outcome).*", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SENSITIVE_VALUE =
+        Pattern.compile(".*(phone|mobile|email|id_card|cert|bank|address|customer|client|secret|password|credential).*",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern DETAIL =
+        Pattern.compile(".*(payload|raw|detail|extra|extension|json).*", Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbcTemplate;
     private final CoreRequestSupport support;
@@ -58,7 +63,9 @@ public class SemanticProfilerService {
         var existingSemantic = support.stringOrNull(field.get("semantic_type"));
         var existingConfidence = number(field.get("confidence"), 0);
         var detected = detect(fieldName, fieldType);
-        if (existingSemantic != null && existingConfidence > detected.confidence()) {
+        if (existingSemantic != null
+            && existingConfidence > detected.confidence()
+            && shouldKeepExistingSemantic(existingSemantic, detected.semanticType())) {
             return new FieldProfile(
                 fieldName,
                 existingSemantic,
@@ -82,6 +89,7 @@ public class SemanticProfilerService {
             case "occurred_at" -> "occurredAt";
             case "asset_ref" -> "assetRef";
             case "subject_ref" -> "subjectRef";
+            case "plain", "sensitive_value", "detail" -> null;
             default -> semanticType;
         };
     }
@@ -107,6 +115,12 @@ public class SemanticProfilerService {
         if (ASSET.matcher(fieldName).matches()) {
             return profile(fieldName, "asset_ref", 84, "field name matches asset or endpoint patterns");
         }
+        if (SENSITIVE_VALUE.matcher(fieldName).matches()) {
+            return profile(fieldName, "sensitive_value", 76, "field name matches sensitive value patterns");
+        }
+        if (DETAIL.matcher(fieldName).matches()) {
+            return profile(fieldName, "detail", 70, "field name matches detail or raw payload patterns");
+        }
         if (TITLE.matcher(fieldName).matches()) {
             return profile(fieldName, "title", 84, "field name matches alert title or event name patterns");
         }
@@ -122,7 +136,7 @@ public class SemanticProfilerService {
         if (RESULT.matcher(fieldName).matches()) {
             return profile(fieldName, "result", 72, "field name matches result or status patterns");
         }
-        return profile(fieldName, "detail", 40, "field does not match core alert signals");
+        return profile(fieldName, "plain", 40, "field does not match core alert, sensitive, or detail signals");
     }
 
     private FieldProfile profile(String fieldName, String semanticType, int confidence, String reason) {
@@ -144,7 +158,9 @@ public class SemanticProfilerService {
         }
         var currentSemantic = support.stringOrNull(field.get("semantic_type"));
         var currentConfidence = number(field.get("confidence"), 0);
-        if (currentSemantic == null || currentConfidence < profile.confidence()) {
+        if (currentSemantic == null
+            || currentConfidence < profile.confidence()
+            || shouldCorrectCoreToNonCore(currentSemantic, profile.semanticType())) {
             jdbcTemplate.update("""
                 update schema_fields
                 set semantic_type = ?, confidence = ?, description = ?
@@ -156,6 +172,18 @@ public class SemanticProfilerService {
                 schemaTableId,
                 fieldName);
         }
+    }
+
+    private static boolean shouldKeepExistingSemantic(String existingSemantic, String detectedSemantic) {
+        return !shouldCorrectCoreToNonCore(existingSemantic, detectedSemantic);
+    }
+
+    private static boolean shouldCorrectCoreToNonCore(String currentSemantic, String detectedSemantic) {
+        return isNonCoreSemantic(detectedSemantic) && standardField(currentSemantic) != null;
+    }
+
+    private static boolean isNonCoreSemantic(String semanticType) {
+        return "sensitive_value".equals(semanticType) || "detail".equals(semanticType);
     }
 
     private boolean hasManualMapping(long schemaTableId, String fieldName) {

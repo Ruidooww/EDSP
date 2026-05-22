@@ -3,6 +3,7 @@ package com.edsp.core.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,6 +13,7 @@ import com.edsp.core.dto.IngestionPlanStatusRequest;
 import com.edsp.core.support.CoreRequestSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -274,12 +276,13 @@ class IngestionPlanServiceTest {
         var generated = service.generate(new IngestionPlanGenerateRequest(dataSourceId, scanRunId));
 
         assertEquals(1, generated.size());
-        assertEquals("rejected", generated.get(0).get("status"));
-        assertEquals(rejectedPlanId, ((Number) generated.get(0).get("id")).longValue());
-        assertEquals(1L, count("ingestion_plans"));
+        var newPlanId = ((Number) generated.get(0).get("id")).longValue();
+        assertNotEquals(rejectedPlanId, newPlanId);
+        assertTrue(List.of("suggested", "review_required").contains(generated.get(0).get("status")));
+        assertEquals(2L, count("ingestion_plans"));
         assertEquals("rejected", planStatus(rejectedPlanId));
-        assertEquals(0L, jdbcTemplate.queryForObject(
-            "select count(*) from ingestion_plans where status = 'suggested'",
+        assertEquals(1L, jdbcTemplate.queryForObject(
+            "select count(*) from ingestion_plans where status in ('suggested', 'review_required')",
             Long.class
         ));
 
@@ -289,10 +292,71 @@ class IngestionPlanServiceTest {
 
         assertEquals(1, generated.size());
         assertEquals(rejectedPlanId, ((Number) generated.get(0).get("id")).longValue());
-        assertEquals(1L, count("ingestion_plans"));
+        assertEquals(2L, count("ingestion_plans"));
         assertEquals("suggested", planStatus(rejectedPlanId));
-        var updatedPlan = onlyPlanJson();
+        assertEquals("rejected", planStatus(newPlanId));
+        assertEquals(1L, mutablePlanCount());
+        var updatedPlan = planJson(rejectedPlanId);
         assertEquals("assetRef", updatedPlan.path("fieldMappings").path("HOST_NAME").asText());
+    }
+
+    @Test
+    void generateClassifiesPlainSensitiveAndDetailFieldsWithoutMappingThem() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var alertTableId = insertTable(dataSourceId, scanRunId, "SEC_ALERT_EVENT", "alert_table");
+        insertField(alertTableId, scanRunId, "ID", "varchar", "ALERT-1", 1, null, 72);
+        insertField(alertTableId, scanRunId, "EVENT_TIME", "timestamp", "2026-05-20 10:30:00", 2, null, 80);
+        insertField(alertTableId, scanRunId, "EVENT_NAME", "varchar", "Sensitive file export", 3, null, 65);
+        insertField(alertTableId, scanRunId, "UNMODELED_FIELD", "varchar", "misc", 4, null, 60);
+        insertField(alertTableId, scanRunId, "PHONE", "varchar", "13800000000", 5, null, 60);
+        insertField(alertTableId, scanRunId, "MOBILE_NO", "varchar", "13900000000", 6, null, 60);
+        insertField(alertTableId, scanRunId, "EMAIL_ADDRESS", "varchar", "ops@example.com", 7, null, 60);
+        insertField(alertTableId, scanRunId, "CERT_NO", "varchar", "CERT-001", 8, null, 60);
+        insertField(alertTableId, scanRunId, "RAW_PAYLOAD", "json", "{\"id\":\"ALERT-1\"}", 9, null, 60);
+        insertField(alertTableId, scanRunId, "EXTRA_JSON", "json", "{\"source\":\"dlp\"}", 10, null, 60);
+        insertField(alertTableId, scanRunId, "CLIENT_IP", "varchar", "10.0.0.2", 11, null, 60);
+        insertField(alertTableId, scanRunId, "RAW_EVENT_ID", "varchar", "RAW-ALERT-1", 12, null, 60);
+        insertField(alertTableId, scanRunId, "RAW_EVENT_TIME", "timestamp", "2026-05-20 10:31:00", 13, null, 60);
+        insertField(alertTableId, scanRunId, "CUSTOMER_NAME", "varchar", "Acme Corp", 14, "title", 84);
+        insertField(alertTableId, scanRunId, "RAW_MESSAGE", "text", "raw alert payload", 15, "title", 84);
+
+        service.generate(new IngestionPlanGenerateRequest(dataSourceId, scanRunId));
+
+        var plan = onlyPlanJson();
+        assertEquals("plain", semanticType(plan, "UNMODELED_FIELD"));
+        assertEquals("sensitive_value", semanticType(plan, "PHONE"));
+        assertEquals("sensitive_value", semanticType(plan, "MOBILE_NO"));
+        assertEquals("sensitive_value", semanticType(plan, "EMAIL_ADDRESS"));
+        assertEquals("sensitive_value", semanticType(plan, "CERT_NO"));
+        assertEquals("detail", semanticType(plan, "RAW_PAYLOAD"));
+        assertEquals("detail", semanticType(plan, "EXTRA_JSON"));
+        assertEquals("asset_ref", semanticType(plan, "CLIENT_IP"));
+        assertEquals("external_id", semanticType(plan, "RAW_EVENT_ID"));
+        assertEquals("occurred_at", semanticType(plan, "RAW_EVENT_TIME"));
+        assertEquals("sensitive_value", semanticType(plan, "CUSTOMER_NAME"));
+        assertEquals("detail", semanticType(plan, "RAW_MESSAGE"));
+        assertEquals("sensitive_value", fieldSemanticType(alertTableId, "CUSTOMER_NAME"));
+        assertEquals("detail", fieldSemanticType(alertTableId, "RAW_MESSAGE"));
+        assertEquals("assetRef", plan.path("fieldMappings").path("CLIENT_IP").asText());
+        assertEquals("externalId", plan.path("fieldMappings").path("RAW_EVENT_ID").asText());
+        assertEquals("occurredAt", plan.path("fieldMappings").path("RAW_EVENT_TIME").asText());
+
+        for (var sourceField : List.of(
+            "UNMODELED_FIELD",
+            "PHONE",
+            "MOBILE_NO",
+            "EMAIL_ADDRESS",
+            "CERT_NO",
+            "RAW_PAYLOAD",
+            "EXTRA_JSON",
+            "CUSTOMER_NAME",
+            "RAW_MESSAGE"
+        )) {
+            assertTrue(plan.path("fieldEvidence").path(sourceField).path("standardField").isNull());
+            assertFalse(plan.path("fieldMappings").has(sourceField));
+            assertFalse(hasFieldMapping(plan, sourceField));
+        }
     }
 
     @Test
@@ -336,7 +400,7 @@ class IngestionPlanServiceTest {
         );
 
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
-        assertEquals("Ingestion plan must be approved or shadow_ready before shadow validation: suggested", ex.getReason());
+        assertEquals("Ingestion plan must be approved or shadow_ready before Shadow Precheck: suggested", ex.getReason());
     }
 
     @Test
@@ -371,6 +435,11 @@ class IngestionPlanServiceTest {
         assertTrue(hasCheck(checks, "plan_status", "passed"));
         assertTrue(hasCheck(checks, "source_fields", "passed"));
         assertTrue(hasCheck(checks, "sync_guard", "passed"));
+        assertEquals("Plan is approved for Shadow Precheck.", checkMessage(checks, "plan_status"));
+        assertFalse(checks.stream().anyMatch(check ->
+            String.valueOf(check.get("message")).toLowerCase().contains("shadow validation")
+                || String.valueOf(check.get("message")).toLowerCase().contains("shadow validated")
+        ));
     }
 
     @Test
@@ -392,10 +461,42 @@ class IngestionPlanServiceTest {
         assertTrue(objectList(report.get("checks")).stream().anyMatch(check ->
             "required_fields".equals(check.get("code"))
                 && "failed".equals(check.get("result"))
+                && "Plan is missing required fields for Shadow Precheck.".equals(check.get("message"))
                 && List.of("missing_occurred_at").equals(check.get("blockers"))
         ));
         assertEquals(0L, count("raw_events"));
         assertEquals(0L, count("standard_events"));
+    }
+
+    @Test
+    void shadowValidateUsesPrecheckWordingWhenSyncGuardIsUnsafe() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var alertTableId = insertTable(dataSourceId, scanRunId, "SEC_ALERT_EVENT", "alert_table");
+        insertField(alertTableId, scanRunId, "ID", "varchar", "ALERT-1", 1, null, 72);
+        insertField(alertTableId, scanRunId, "CREATE_TIME", "timestamp", "2026-05-20 10:30:00", 2, null, 80);
+        insertField(alertTableId, scanRunId, "EVENT_NAME", "varchar", "Sensitive file export", 3, null, 65);
+        service.generate(new IngestionPlanGenerateRequest(dataSourceId, scanRunId));
+        var planId = lastId("ingestion_plans");
+        service.updateStatus(planId, new IngestionPlanStatusRequest("approved"));
+
+        var unsafePlan = (ObjectNode) planJson(planId);
+        ((ObjectNode) unsafePlan.path("syncStrategy")).put("enabled", true);
+        jdbcTemplate.update(
+            "update ingestion_plans set plan_json = cast(? as jsonb) where id = ?",
+            objectMapper.writeValueAsString(unsafePlan),
+            planId
+        );
+
+        var report = service.shadowValidate(planId, new IngestionPlanShadowValidationRequest(20));
+
+        assertEquals("blocked", report.get("result"));
+        var checks = objectList(report.get("checks"));
+        assertTrue(hasCheck(checks, "sync_guard", "failed"));
+        assertEquals("Shadow Precheck requires shadowOnly=true and enabled=false.", checkMessage(checks, "sync_guard"));
+        assertFalse(checks.stream().anyMatch(check ->
+            String.valueOf(check.get("message")).toLowerCase().contains("shadow validation")
+        ));
     }
 
     @Test
@@ -517,6 +618,15 @@ class IngestionPlanServiceTest {
         return readJson(value);
     }
 
+    private JsonNode planJson(Long planId) throws Exception {
+        Object value = jdbcTemplate.queryForObject(
+            "select plan_json from ingestion_plans where id = ?",
+            Object.class,
+            planId
+        );
+        return readJson(value);
+    }
+
     private JsonNode readJson(Object value) throws Exception {
         JsonNode node;
         if (value instanceof byte[] bytes) {
@@ -543,6 +653,27 @@ class IngestionPlanServiceTest {
         throw new AssertionError("Field mapping not found: " + sourceField);
     }
 
+    private String semanticType(JsonNode plan, String sourceField) {
+        return plan.path("fieldEvidence").path(sourceField).path("semanticType").asText();
+    }
+
+    private String fieldSemanticType(Long schemaTableId, String sourceField) {
+        return jdbcTemplate.queryForObject("""
+            select semantic_type
+            from schema_fields
+            where schema_table_id = ? and field_name = ?
+            """, String.class, schemaTableId, sourceField);
+    }
+
+    private boolean hasFieldMapping(JsonNode plan, String sourceField) {
+        for (var item : plan.path("fieldMappingDetails")) {
+            if (sourceField.equals(item.path("sourceField").asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> planJsonObject(Map<String, Object> row) {
         assertTrue(row.get("plan_json") instanceof Map<?, ?>, "plan_json should be returned as a structured object");
@@ -567,8 +698,23 @@ class IngestionPlanServiceTest {
         return checks.stream().anyMatch(check -> code.equals(check.get("code")) && result.equals(check.get("result")));
     }
 
+    private String checkMessage(List<Map<String, Object>> checks, String code) {
+        return checks.stream()
+            .filter(check -> code.equals(check.get("code")))
+            .map(check -> String.valueOf(check.get("message")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("Check not found: " + code));
+    }
+
     private Long count(String tableName) {
         return jdbcTemplate.queryForObject("select count(*) from " + tableName, Long.class);
+    }
+
+    private Long mutablePlanCount() {
+        return jdbcTemplate.queryForObject(
+            "select count(*) from ingestion_plans where status in ('suggested', 'review_required')",
+            Long.class
+        );
     }
 
     private Long lastId(String tableName) {

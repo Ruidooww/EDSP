@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.edsp.core.dto.IngestionPlanGenerateRequest;
+import com.edsp.core.dto.IngestionPlanStatusRequest;
 import com.edsp.core.support.CoreRequestSupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import javax.sql.DataSource;
@@ -75,6 +76,25 @@ class IngestionPlanServiceTransactionTest {
             """, Long.class, alertTableId));
     }
 
+    @Test
+    void updateStatusRollsBackRetiredMutablePlanWhenRestoreFailsThroughSpringProxy() {
+        var dataSourceId = insertDataSource();
+        var rejectedPlanId = insertPlan(dataSourceId, "rejected", 101L, "alert_table");
+        var mutablePlanId = insertPlan(dataSourceId, "suggested", 101L, "alert_table");
+        jdbcTemplate.execute("""
+            alter table ingestion_plans
+            add constraint fail_rejected_restore check (id <> %d or status <> 'suggested')
+            """.formatted(rejectedPlanId));
+
+        assertThrows(
+            DataIntegrityViolationException.class,
+            () -> service.updateStatus(rejectedPlanId, new IngestionPlanStatusRequest("suggested"))
+        );
+
+        assertEquals("rejected", planStatus(rejectedPlanId));
+        assertEquals("suggested", planStatus(mutablePlanId));
+    }
+
     private Long insertDataSource() {
         jdbcTemplate.update("""
             insert into data_sources(name, source_type, connection_kind, config_json, status, enabled)
@@ -122,6 +142,31 @@ class IngestionPlanServiceTransactionTest {
 
     private Long count(String tableName) {
         return jdbcTemplate.queryForObject("select count(*) from " + tableName, Long.class);
+    }
+
+    private Long insertPlan(Long dataSourceId, String status, long schemaTableId, String templateKey) {
+        jdbcTemplate.update("""
+            insert into ingestion_plans(data_source_id, name, status, plan_json)
+            values (?, 'Generated plan', ?, cast(? as jsonb))
+            """,
+            dataSourceId,
+            status,
+            """
+                {
+                  "schemaTableId": %d,
+                  "mode": "database_polling",
+                  "templateMatch": { "templateKey": "%s" }
+                }
+                """.formatted(schemaTableId, templateKey));
+        return lastId("ingestion_plans");
+    }
+
+    private String planStatus(Long planId) {
+        return jdbcTemplate.queryForObject(
+            "select status from ingestion_plans where id = ?",
+            String.class,
+            planId
+        );
     }
 
     private Long lastId(String tableName) {

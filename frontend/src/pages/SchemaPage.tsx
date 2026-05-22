@@ -594,9 +594,14 @@ export default function SchemaPage() {
     setPlanLoading(true);
     try {
       const params = new URLSearchParams();
-      params.set('dataSourceId', sourceId ? String(sourceId) : '');
-      params.set('status', status && PLAN_STATUS_FILTER_VALUES.has(status) ? status : '');
-      setPlans(await apiGet<IngestionPlanRow[]>(`/api/core/ingestion-plans?${params.toString()}`));
+      if (sourceId !== undefined && sourceId !== null) {
+        params.set('dataSourceId', String(sourceId));
+      }
+      if (status && PLAN_STATUS_FILTER_VALUES.has(status)) {
+        params.set('status', status);
+      }
+      const query = params.toString();
+      setPlans(await apiGet<IngestionPlanRow[]>(`/api/core/ingestion-plans${query ? `?${query}` : ''}`));
     } catch {
       setPlans([]);
     } finally {
@@ -714,9 +719,9 @@ export default function SchemaPage() {
       });
       setShadowValidationPlan(row);
       setShadowValidationReport(report);
-      message.success('试运行校验已完成');
+      message.success('试运行前校验 / Shadow Precheck 已完成');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '试运行校验失败');
+      message.error(error instanceof Error ? error.message : '试运行前校验 / Shadow Precheck 失败');
     } finally {
       setPlanActionId(null);
     }
@@ -997,13 +1002,12 @@ export default function SchemaPage() {
   function renderPlanActions(row: IngestionPlanRow, plan: NormalizedIngestionPlan) {
     const isBusy = planActionId === row.id;
     const status = plan.status;
-    const canReview = !['review', 'review_required', 'approved', 'shadow_ready', 'rejected'].includes(status);
-    const canApprove = !['approved', 'shadow_ready', 'rejected'].includes(status);
-    const canReject = !['approved', 'shadow_ready', 'rejected'].includes(status);
+    const canReview = status === 'suggested';
+    const canApprove = status === 'suggested' || status === 'review_required';
+    const canReject = status === 'suggested' || status === 'review_required';
     const canPrepareShadow = status === 'approved';
     const canShadowValidate = status === 'approved' || status === 'shadow_ready';
     const canDiscard = status === 'approved' || status === 'shadow_ready';
-    const canRestore = status === 'rejected';
 
     return (
       <Space size={[4, 6]} wrap style={{ justifyContent: 'flex-end' }}>
@@ -1027,7 +1031,7 @@ export default function SchemaPage() {
         )}
         {canShadowValidate && (
           <Button size="small" icon={<SafetyCertificateOutlined />} loading={isBusy} onClick={() => shadowValidatePlan(row)}>
-            试运行校验
+            试运行前校验 / Shadow Precheck
           </Button>
         )}
         {canReject && (
@@ -1038,11 +1042,6 @@ export default function SchemaPage() {
         {canDiscard && (
           <Button size="small" danger loading={isBusy} onClick={() => updatePlanStatus(row, 'rejected', '推荐方案已废弃')}>
             废弃方案
-          </Button>
-        )}
-        {canRestore && (
-          <Button size="small" loading={isBusy} onClick={() => updatePlanStatus(row, 'suggested', '推荐方案已重新推荐')}>
-            重新推荐
           </Button>
         )}
       </Space>
@@ -1398,7 +1397,7 @@ export default function SchemaPage() {
       </Drawer>
 
       <Drawer
-        title={shadowValidationPlanView ? `试运行校验：${shadowValidationPlanView.candidateTable !== '-' ? shadowValidationPlanView.candidateTable : shadowValidationPlanView.name}` : '试运行校验'}
+        title={shadowValidationPlanView ? `试运行前校验 / Shadow Precheck：${shadowValidationPlanView.candidateTable !== '-' ? shadowValidationPlanView.candidateTable : shadowValidationPlanView.name}` : '试运行前校验 / Shadow Precheck'}
         width={900}
         open={Boolean(shadowValidationReport)}
         onClose={() => {

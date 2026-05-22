@@ -140,6 +140,7 @@ public class IngestionPlanService {
         return generated;
     }
 
+    @Transactional
     public Map<String, Object> updateStatus(long id, IngestionPlanStatusRequest request) {
         var targetStatus = normalizeStatusOrNull(request == null ? null : request.status());
         validateStatus(targetStatus);
@@ -159,6 +160,9 @@ public class IngestionPlanService {
                 "Invalid ingestion plan status transition: " + currentStatus + " -> " + targetStatus
             );
         }
+        if ("rejected".equals(currentStatus) && "suggested".equals(targetStatus)) {
+            retireMatchingMutablePlans(id, support.number(rows.get(0).get("data_source_id")), parsePlan(rows.get(0).get("plan_json")));
+        }
         jdbcTemplate.update("""
             update ingestion_plans
             set status = ?, updated_at = now()
@@ -171,6 +175,7 @@ public class IngestionPlanService {
             """, id));
     }
 
+    // Shadow Precheck only: no writes to standard_events/alert_decisions/alerts and no notifications.
     public Map<String, Object> shadowValidate(long id, IngestionPlanShadowValidationRequest request) {
         var rows = jdbcTemplate.queryForList("""
             select ip.id, ip.data_source_id, ds.name as data_source_name, ip.scan_run_id,
@@ -188,7 +193,7 @@ public class IngestionPlanService {
         if (!SHADOW_VALIDATION_STATUSES.contains(status)) {
             throw new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "Ingestion plan must be approved or shadow_ready before shadow validation: " + status
+                "Ingestion plan must be approved or shadow_ready before Shadow Precheck: " + status
             );
         }
 
@@ -201,12 +206,12 @@ public class IngestionPlanService {
         var sourceFields = schemaTableId == null ? Map.<String, Object>of() : loadActiveFieldSamples(schemaTableId);
         var fieldMappings = fieldMappingSources(plan);
 
-        addCheck(checks, "plan_status", "passed", "Plan is approved for shadow validation.");
+        addCheck(checks, "plan_status", "passed", "Plan is approved for Shadow Precheck.");
         if (INGESTION_MODE.equals(support.stringOrDefault(plan.get("mode"), ""))) {
             addCheck(checks, "plan_mode", "passed", "Plan uses database polling mode.");
         } else {
             blockers.add("unsupported_plan_mode");
-            addCheck(checks, "plan_mode", "failed", "Only database_polling plans can be shadow validated.", "unsupported_plan_mode");
+            addCheck(checks, "plan_mode", "failed", "Only database_polling plans can run Shadow Precheck.", "unsupported_plan_mode");
         }
 
         validateSourceTable(dataSourceId, schemaTableId, checks, blockers);
@@ -260,7 +265,7 @@ public class IngestionPlanService {
             var existingMappings = table.existingMappings().getOrDefault(field.fieldName(), List.of());
             if (existingMappings.isEmpty()) {
                 addInferredEvidence(field, profile, fieldEvidence);
-                if (!"detail".equals(profile.semanticType()) && profile.standardField() != null) {
+                if (profile.standardField() != null) {
                     fieldMappings.add(fieldMapping(field.fieldName(), profile.standardField(), profile.confidence(), "semantic_profile"));
                     mappedStandards.add(profile.standardField());
                     mappingConfidenceValues.add(profile.confidence());
@@ -425,7 +430,7 @@ public class IngestionPlanService {
         }
         if (!checkBlockers.isEmpty()) {
             blockers.addAll(checkBlockers);
-            addCheck(checks, "required_fields", "failed", "Plan is missing required fields for shadow validation.",
+            addCheck(checks, "required_fields", "failed", "Plan is missing required fields for Shadow Precheck.",
                 checkBlockers, null);
             return;
         }
@@ -464,7 +469,7 @@ public class IngestionPlanService {
                 "dedup_key_source_insufficient");
             return;
         }
-        addCheck(checks, "dedup_strategy", "passed", "Dedup strategy can be evaluated during shadow validation.");
+        addCheck(checks, "dedup_strategy", "passed", "Dedup strategy can be evaluated during Shadow Precheck.");
     }
 
     @SuppressWarnings("unchecked")
@@ -482,7 +487,7 @@ public class IngestionPlanService {
         var enabled = boolValue(strategy.get("enabled"));
         if (!shadowOnly || enabled) {
             blockers.add("sync_guard_unsafe");
-            addCheck(checks, "sync_guard", "failed", "Shadow validation requires shadowOnly=true and enabled=false.",
+            addCheck(checks, "sync_guard", "failed", "Shadow Precheck requires shadowOnly=true and enabled=false.",
                 "sync_guard_unsafe");
             return;
         }
@@ -931,11 +936,6 @@ public class IngestionPlanService {
     }
 
     private Long upsertPlan(Long dataSourceId, Long scanRunId, String name, String status, Map<String, Object> plan) {
-        var rejected = matchingPlan(dataSourceId, plan, Set.of("rejected"));
-        if (rejected != null) {
-            return ((Number) rejected.get("id")).longValue();
-        }
-
         var existing = matchingPlan(dataSourceId, plan, Set.of("suggested", "review_required"));
         if (existing != null) {
             jdbcTemplate.update("""
@@ -996,6 +996,28 @@ public class IngestionPlanService {
             }
         }
         return null;
+    }
+
+    private void retireMatchingMutablePlans(long restoredPlanId, Long dataSourceId, Map<String, Object> plan) {
+        if (dataSourceId == null || plan.isEmpty()) {
+            return;
+        }
+        var rows = jdbcTemplate.queryForList("""
+            select id, plan_json
+            from ingestion_plans
+            where data_source_id = ?
+              and id <> ?
+              and status in ('suggested', 'review_required')
+            """, dataSourceId, restoredPlanId);
+        for (var row : rows) {
+            if (samePlan(parsePlan(row.get("plan_json")), plan)) {
+                jdbcTemplate.update("""
+                    update ingestion_plans
+                    set status = 'rejected', updated_at = now()
+                    where id = ?
+                    """, row.get("id"));
+            }
+        }
     }
 
     private boolean samePlan(Map<String, Object> existing, Map<String, Object> current) {

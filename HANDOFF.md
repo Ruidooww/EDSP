@@ -535,9 +535,17 @@ exit 0
 
 ## 13. 当前残留风险
 
-1. 前端 `SchemaPage.tsx` 已较大，后续如果继续扩展元数据能力，应考虑拆出推荐方案区域组件。
-2. 目前仅是轻量 Shadow Precheck，尚未读取真实业务表样本行，也没有 shadow 结果落表。
-3. 目前没有正式 `enabled` 状态，后续规则闭环阶段再引入。
+当前代码审查结论是 P0 / P1 已收口，以下 P2 留作后续增强项：
+
+1. `TemplateMatcherService` 的解释信号还不够细。后续应把 `matchedSignals` / `missingSignals` 从粗粒度模板依据增强为 `occurred_at`、`severity`、`actor`、`asset_ref`、`title`、`external_id`、`policy_name`、`result`、`subject_ref` 等可解释信号，让前端“查看原因”更有说服力。
+2. 没有 `scan_run` 时 coverage 仍偏乐观。后续应显式标记 `coverage_unknown`，将 `recommendedAction` 收紧为 `manual_review`，并把 `coverageConfidence` 控制在保守区间，避免无扫描依据的方案直接进入试运行准备。
+3. `IngestionPlanService` 已承担方案生成、状态流转、Shadow Precheck、JSON 解析、coverage、dedup、去重和 field mapping 构造。后续继续扩展 Shadow Validator 或规则入口前，应按职责拆出查询、生成、状态、预检查、JSON 构造和 dedup 组件。
+4. `matchingPlan` 当前仍解析 `plan_json` 中的 `schemaTableId`、`mode`、`templateKey` 做去重匹配。MVP 可以接受，后续数据量上来后应把这些维度结构化到表字段或补可用索引。
+
+另有阶段边界仍需保留：
+
+1. 目前仅是轻量 Shadow Precheck，尚未读取真实业务表样本行，也没有 shadow 结果落表。
+2. 目前没有正式 `enabled` 状态，后续规则闭环阶段再引入。
 
 ## 14. 下一步建议
 
@@ -553,10 +561,10 @@ cd backend
 mvn -pl edsp-core -am test
 cd ..
 cd frontend
-& 'C:\Users\Ruidoww\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\Ruidoww\Desktop\预警分析平台推送对接\frontend\node_modules\typescript\bin\tsc' --noEmit
-& 'C:\Users\Ruidoww\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\Ruidoww\Desktop\预警分析平台推送对接\frontend\node_modules\vite\bin\vite.js' build
+npm.cmd run build
 cd ..
 git diff --check
+git status --short
 ```
 
 3. 如需提交，提交当前阶段：
@@ -577,10 +585,13 @@ git add backend/edsp-core/src/main/java/com/edsp/core/controller/IngestionPlanCo
 git commit -m "feat: add database intelligence ingestion plan MVP"
 ```
 
-4. 下一个开发主题建议：
+4. 合并后再进入 P2 增强项，优先级建议：
 
 ```text
-refactor: split schema ingestion plan panel
+feat: enrich ingestion plan template match signals
+fix: treat missing scan coverage as unknown
+refactor: split ingestion plan service responsibilities
+perf: structure ingestion plan matching dimensions
 ```
 
 如果继续扩展 Shadow Validator，需要先确认：

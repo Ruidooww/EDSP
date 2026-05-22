@@ -286,18 +286,14 @@ class IngestionPlanServiceTest {
             Long.class
         ));
 
-        insertField(alertTableId, scanRunId, "HOST_NAME", "varchar", "WIN-01", 5, null, 65);
-        service.updateStatus(rejectedPlanId, new IngestionPlanStatusRequest("suggested"));
-        generated = service.generate(new IngestionPlanGenerateRequest(dataSourceId, scanRunId));
-
-        assertEquals(1, generated.size());
-        assertEquals(rejectedPlanId, ((Number) generated.get(0).get("id")).longValue());
-        assertEquals(2L, count("ingestion_plans"));
-        assertEquals("suggested", planStatus(rejectedPlanId));
-        assertEquals("rejected", planStatus(newPlanId));
+        var ex = assertThrows(
+            ResponseStatusException.class,
+            () -> service.updateStatus(rejectedPlanId, new IngestionPlanStatusRequest("suggested"))
+        );
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertEquals("Invalid ingestion plan status transition: rejected -> suggested", ex.getReason());
+        assertEquals("rejected", planStatus(rejectedPlanId));
         assertEquals(1L, mutablePlanCount());
-        var updatedPlan = planJson(rejectedPlanId);
-        assertEquals("assetRef", updatedPlan.path("fieldMappings").path("HOST_NAME").asText());
     }
 
     @Test
@@ -380,8 +376,13 @@ class IngestionPlanServiceTest {
         service.updateStatus(planId, new IngestionPlanStatusRequest("rejected"));
         assertEquals("rejected", planStatus(planId));
 
-        service.updateStatus(planId, new IngestionPlanStatusRequest("suggested"));
-        assertEquals("suggested", planStatus(planId));
+        var rejectedEx = assertThrows(
+            ResponseStatusException.class,
+            () -> service.updateStatus(planId, new IngestionPlanStatusRequest("suggested"))
+        );
+        assertEquals(HttpStatus.BAD_REQUEST, rejectedEx.getStatusCode());
+        assertEquals("Invalid ingestion plan status transition: rejected -> suggested", rejectedEx.getReason());
+        assertEquals("rejected", planStatus(planId));
     }
 
     @Test

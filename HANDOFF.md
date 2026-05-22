@@ -146,7 +146,7 @@ backend/edsp-core/src/main/java/com/edsp/core/service/IngestionPlanService.java
 - 生成完整 `plan_json`。
 - 控制方案去重、覆盖、状态流转。
 - 保持 `approved` / `shadow_ready` 方案不被重新生成直接覆盖。
-- 保持 `rejected` 方案不被自动复活，必须显式从 `rejected -> suggested`。
+- 保持 `rejected` 方案只作为历史记录，不被自动复活或恢复。
 
 生成逻辑是事务性的：
 
@@ -304,8 +304,6 @@ approved        -> shadow_ready
 approved        -> rejected
 
 shadow_ready    -> rejected
-
-rejected        -> suggested
 ```
 
 禁止：
@@ -335,8 +333,7 @@ data_source_id + schema_table_id + mode + templateKey
 - 已有 `suggested` / `review_required`：允许更新同一方案。
 - 已有 `approved` / `shadow_ready`：不覆盖，生成新的 `review_required` 方案，并在 `risks` 中提示已有已批准方案。
 - 已有 `rejected`：自动生成时不覆盖、不复活、不复用，重新生成新的 `suggested` / `review_required` 方案。
-- 只有显式执行 `rejected -> suggested` 后，后续 generate 才允许更新该方案。
-- 显式恢复旧 `rejected` 时，会将同 key 的其他 `suggested` / `review_required` 方案退回 `rejected`，避免同一推荐维度出现多个活动方案。
+- `rejected` 是历史终态，不支持恢复为活动方案。
 - 老版本已生成方案里 `mode` 如果等于 `templateKey`，去重时按 `database_polling` 兼容处理，避免升级后重复生成。
 
 ## 9. 前端变更
@@ -399,7 +396,7 @@ backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanServiceTransa
 - `suggested` / `review_required` 可被重复生成更新。
 - `approved` / `shadow_ready` 不被重复生成覆盖。
 - `rejected` 不被自动覆盖、复活或复用；再次 generate 会新增新的 `suggested` / `review_required` 方案。
-- 显式 `rejected -> suggested` 后，再次 generate 可更新原方案。
+- `rejected` 不允许流转回 `suggested`。
 - 禁止 `shadow_ready -> approved`。
 - Spring 事务代理级验证：`generate()` 后半段失败时，前面写入的 `schema_fields.semantic_type` 会回滚。
 - `shadow-validate` 会拒绝未人工批准的 `suggested` 方案。

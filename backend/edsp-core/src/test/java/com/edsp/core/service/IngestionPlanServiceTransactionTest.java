@@ -20,6 +20,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.web.server.ResponseStatusException;
 
 class IngestionPlanServiceTransactionTest {
     private AnnotationConfigApplicationContext context;
@@ -77,20 +78,17 @@ class IngestionPlanServiceTransactionTest {
     }
 
     @Test
-    void updateStatusRollsBackRetiredMutablePlanWhenRestoreFailsThroughSpringProxy() {
+    void updateStatusRejectsRestoringHistoricalPlanThroughSpringProxy() {
         var dataSourceId = insertDataSource();
         var rejectedPlanId = insertPlan(dataSourceId, "rejected", 101L, "alert_table");
         var mutablePlanId = insertPlan(dataSourceId, "suggested", 101L, "alert_table");
-        jdbcTemplate.execute("""
-            alter table ingestion_plans
-            add constraint fail_rejected_restore check (id <> %d or status <> 'suggested')
-            """.formatted(rejectedPlanId));
 
-        assertThrows(
-            DataIntegrityViolationException.class,
+        var ex = assertThrows(
+            ResponseStatusException.class,
             () -> service.updateStatus(rejectedPlanId, new IngestionPlanStatusRequest("suggested"))
         );
 
+        assertEquals("Invalid ingestion plan status transition: rejected -> suggested", ex.getReason());
         assertEquals("rejected", planStatus(rejectedPlanId));
         assertEquals("suggested", planStatus(mutablePlanId));
     }

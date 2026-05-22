@@ -44,8 +44,7 @@ public class IngestionPlanService {
         "suggested", Set.of("review_required", "approved", "rejected"),
         "review_required", Set.of("approved", "rejected"),
         "approved", Set.of("shadow_ready", "rejected"),
-        "shadow_ready", Set.of("rejected"),
-        "rejected", Set.of("suggested")
+        "shadow_ready", Set.of("rejected")
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -159,9 +158,6 @@ public class IngestionPlanService {
                 HttpStatus.BAD_REQUEST,
                 "Invalid ingestion plan status transition: " + currentStatus + " -> " + targetStatus
             );
-        }
-        if ("rejected".equals(currentStatus) && "suggested".equals(targetStatus)) {
-            retireMatchingMutablePlans(id, support.number(rows.get(0).get("data_source_id")), parsePlan(rows.get(0).get("plan_json")));
         }
         jdbcTemplate.update("""
             update ingestion_plans
@@ -996,28 +992,6 @@ public class IngestionPlanService {
             }
         }
         return null;
-    }
-
-    private void retireMatchingMutablePlans(long restoredPlanId, Long dataSourceId, Map<String, Object> plan) {
-        if (dataSourceId == null || plan.isEmpty()) {
-            return;
-        }
-        var rows = jdbcTemplate.queryForList("""
-            select id, plan_json
-            from ingestion_plans
-            where data_source_id = ?
-              and id <> ?
-              and status in ('suggested', 'review_required')
-            """, dataSourceId, restoredPlanId);
-        for (var row : rows) {
-            if (samePlan(parsePlan(row.get("plan_json")), plan)) {
-                jdbcTemplate.update("""
-                    update ingestion_plans
-                    set status = 'rejected', updated_at = now()
-                    where id = ?
-                    """, row.get("id"));
-            }
-        }
     }
 
     private boolean samePlan(Map<String, Object> existing, Map<String, Object> current) {

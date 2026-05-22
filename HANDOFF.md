@@ -1,17 +1,15 @@
-# 数据安全预警分析平台 handoff
+# 数据安全预警分析平台 Handoff
 
-> 更新时间：2026-05-21  
-> 当前分支：`master`  
-> 当前 HEAD：`2d6f70d merge origin/master`  
+> 更新时间：2026-05-22
+> 当前分支：`codex/database-intelligence-ingestion-plan`
 > 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
+> 当前阶段：`Database Intelligence Ingestion Plan MVP`
 
-## 1. 项目定位
+## 1. 当前项目定位
 
 本项目是“数据安全预警分析平台”，不是 IP-Guard 专用平台，也不是单纯数据库读取工具。
 
-核心产品目标是：连接本地化系统、数据库、API、Webhook、文件、Syslog、Agent 等外部来源，持续采集安全事件，标准化为平台统一事件，再生成告警、推送通知、处置审计和报表。
-
-当前主链路必须保持：
+产品主线必须保持为：
 
 ```text
 外部系统 / 数据库 / API / Webhook / 文件 / Syslog / Agent
@@ -24,404 +22,582 @@
   -> 通知 / 处置 / 报表 / 反馈
 ```
 
-权威约束文档是 `TECHNICAL_MANUAL.md`。后续除非项目负责人明确调整，否则不要偏离该手册定义的产品方向、数据链路和架构边界。
-
-## 2. 当前技术栈
-
-| 层级 | 当前选型 |
-|---|---|
-| 后端 | Java 21 / Spring Boot 3.3.5 / Spring Cloud 2023.0.3 / Spring Cloud Alibaba 2023.0.1.2 |
-| 网关 | Spring Cloud Gateway |
-| 数据库 | PostgreSQL 16，Flyway 管理迁移 |
-| 本地开发库 | H2 PostgreSQL mode |
-| 前端 | React 18 / TypeScript / Ant Design 5 / Vite |
-| 部署 | Docker Compose |
-
-后端模块：
+当前阶段的核心目标不是“直接生成告警”，而是：
 
 ```text
-backend/
-  edsp-common   公共响应模型
-  edsp-gateway 统一 API 网关
-  edsp-auth    登录和账号信息
-  edsp-core    数据源、元数据、采集、raw/standard 事件、总览
-  edsp-alert   告警、规则、通知
-  edsp-report  报表任务
+从已扫描元数据中，自动推荐哪些表值得接入、字段怎么映射、方案是否可信、是否可以进入试运行准备。
 ```
+
+## 2. 本阶段硬性边界
+
+本阶段只实现 `Database Intelligence Ingestion Plan MVP`，不扩展到以下内容：
+
+- 不做 AI / XGBoost / 复杂 Agent。
+- 不做完整 Shadow Validator。
+- 不做正式规则引擎闭环。
+- 不做正式通知推送链路。
+- 不把 `shadow_ready` 当作正式启用。
+
+必须遵守 3 条底线：
+
+1. 不覆盖已有人工映射。
+2. 只对 `alert_table` / `log_table` 生成主接入方案。
+3. `shadow_ready` 不是正式启用状态。
 
 ## 3. 当前工作区状态
 
-本轮已完成 hardening，但尚未 commit。
-
-`git status --short` 当前包含：
+当前未提交文件：
 
 ```text
- M backend/edsp-core/src/main/java/com/edsp/core/controller/DataSourceController.java
- M backend/edsp-core/src/main/java/com/edsp/core/dto/SchemaScanFinishRequest.java
- M backend/edsp-core/src/main/java/com/edsp/core/service/CollectionTaskService.java
- M backend/edsp-core/src/main/java/com/edsp/core/service/IngestionService.java
- M backend/edsp-core/src/main/java/com/edsp/core/service/JdbcMetadataScanService.java
- M backend/edsp-core/src/main/java/com/edsp/core/service/SchemaScanService.java
- M backend/edsp-core/src/test/java/com/edsp/core/service/CollectionTaskServiceTest.java
-?? agent.md
-?? backend/edsp-core/src/main/java/com/edsp/core/service/StandardEventDedupService.java
-?? backend/edsp-core/src/main/resources/db/migration/V7__schema_scan_coverage.sql
-?? backend/edsp-core/src/test/java/com/edsp/core/controller/
-?? backend/edsp-core/src/test/java/com/edsp/core/service/SchemaScanServiceTest.java
-?? docs/superpowers/
+ M HANDOFF.md
+ M frontend/src/pages/SchemaPage.tsx
+ M frontend/src/types.ts
+?? backend/edsp-core/src/main/java/com/edsp/core/controller/IngestionPlanController.java
+?? backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanGenerateRequest.java
+?? backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanShadowValidationRequest.java
+?? backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanStatusRequest.java
+?? backend/edsp-core/src/main/java/com/edsp/core/service/IngestionPlanService.java
+?? backend/edsp-core/src/main/java/com/edsp/core/service/SemanticProfilerService.java
+?? backend/edsp-core/src/main/java/com/edsp/core/service/TemplateMatcherService.java
+?? backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanServiceTest.java
+?? backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanServiceTransactionTest.java
 ```
 
-注意：`agent.md` 是未跟踪文件，本轮没有修改它，也不应在未确认用途前纳入提交。
-
-建议本轮提交信息：
-
-```text
-fix: harden metadata scan coverage and event dedup
-```
-
-## 4. 本轮已完成内容
-
-### 4.1 metadata scan coverage hardening
-
-已修复问题：
-
-- limited scan 不再执行 `markMissingObjects()`。
-- 避免真实数据库有大量表时，因为 `tableLimit` / `fieldLimit` 只扫到部分对象，就把历史 active 表/字段误判为 `removed`。
-- `schema_scan_runs` 增加结构化覆盖率字段：
-  - `limited`
-  - `coverage_rate`
-- `total_tables` 现在表示真实可用表数。
-- `scanned_tables` 表示本次实际扫描表数。
-- `JdbcMetadataScanService.MetadataScanResult` 现在携带：
-  - `totalAvailableTables`
-  - `limited`
-  - `coverageRate`
-  - `totalAvailableFields`
-
-新增迁移：
-
-```text
-backend/edsp-core/src/main/resources/db/migration/V7__schema_scan_coverage.sql
-```
-
-### 4.2 event dedup hardening
-
-已修复问题：
-
-- `CollectionTaskService` 以前只按 `source_system + external_id` 查重。
-- `IngestionService` 已按 `dedup_key` 查重，两边逻辑不一致。
-- 现在新增 `StandardEventDedupService`，统一查重顺序：
-
-```text
-先查 dedup_key
-再查 source_system + external_id
-```
-
-涉及文件：
-
-```text
-backend/edsp-core/src/main/java/com/edsp/core/service/StandardEventDedupService.java
-backend/edsp-core/src/main/java/com/edsp/core/service/IngestionService.java
-backend/edsp-core/src/main/java/com/edsp/core/service/CollectionTaskService.java
-```
-
-### 4.3 DataSourceController hardening
-
-已修复问题：
-
-- 不存在的数据源 ID 不再因 `queryForMap` 抛异常导致 500。
-- `testConnection()`、`tables()`、`columns()`、`sample()` 统一使用 `sourceRow()`。
-- 数据源不存在时返回：
-
-```text
-404 Data source not found: {id}
-```
-
-- `create()` 拿不到 generated id 时直接抛异常，不再返回 `id=0`。
-
-涉及文件：
-
-```text
-backend/edsp-core/src/main/java/com/edsp/core/controller/DataSourceController.java
-```
-
-## 5. 本轮新增测试
-
-新增：
-
-```text
-backend/edsp-core/src/test/java/com/edsp/core/service/SchemaScanServiceTest.java
-backend/edsp-core/src/test/java/com/edsp/core/controller/DataSourceControllerTest.java
-```
-
-扩展：
-
-```text
-backend/edsp-core/src/test/java/com/edsp/core/service/CollectionTaskServiceTest.java
-```
-
-覆盖点：
-
-- limited scan 不标记历史 active 对象为 removed。
-- full scan 仍然可以标记真实缺失对象为 removed。
-- `schema_scan_runs.total_tables / scanned_tables / limited / coverage_rate` 写入正确。
-- `CollectionTaskService` 优先按 `dedup_key` 查重。
-- 数据源 missing ID 返回 404。
-- 数据源 create 返回正数 generated id。
-
-## 6. 已验证结果
-
-定向测试：
-
-```powershell
-cd backend
-mvn -pl edsp-core "-Dtest=SchemaScanServiceTest,CollectionTaskServiceTest,DataSourceControllerTest" test
-```
-
-结果：通过。
-
-```text
-Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
-BUILD SUCCESS
-```
-
-受影响模块完整测试：
-
-```powershell
-cd backend
-mvn -pl edsp-core -am test
-```
-
-结果：通过。
-
-```text
-Reactor Summary:
-edsp-platform SUCCESS
-edsp-common   SUCCESS
-edsp-core     SUCCESS
-
-Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
-BUILD SUCCESS
-```
-
-本轮没有重新运行前端构建，因为改动集中在后端 hardening 和后端测试。
-
-## 7. 当前可运行方式
-
-本地后端：
-
-```powershell
-.\scripts\start-local-backend.ps1
-```
-
-本地前端：
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-默认访问：
-
-```text
-前端：http://localhost:5173/
-网关：http://localhost:8080/
-core health：http://localhost:8082/actuator/health
-```
-
-Docker Compose：
-
-```powershell
-Copy-Item .env.example .env
-docker compose up -d --build
-```
-
-## 8. 当前菜单和页面方向
-
-前端信息架构应保持：
-
-```text
-总览
-数据源
-  - 数据源管理
-  - 元数据快照
-  - 外部接入
-  - 采集任务
-告警中心
-规则中心
-通知中心
-报表
-设置
-```
-
-注意：
-
-- `元数据快照` 是数据源下的二级能力。
-- 字段映射应整合到 `元数据快照`，不要作为孤立主流程。
-- `外部接入` 和 `采集任务` 也属于数据源体系下的二级能力。
-- 规则中心不能要求客户手写底层字段名或表达式作为默认体验，后续应做模板化和参数化。
-
-## 9. 下一步主线
-
-当前 hardening 已完成，下一步应进入：
+建议后续提交信息：
 
 ```text
 feat: add database intelligence ingestion plan MVP
 ```
 
-建议按以下顺序推进：
+## 4. 本阶段新增后端能力
 
-1. Database Inventory
-   - 扫描数据库、schema、表、字段、字段类型、nullable、row_count、modified_time。
-   - 后续补 primary key / index。
+### 4.1 新增 API
 
-2. Coverage Verification
-   - 回答“数据库一共有多少表、本次扫到多少、是否被 limit 截断、是否有失败、哪些没扫、为什么没扫”。
-
-3. Semantic Profiler
-   - 识别字段语义：
+新增控制器：
 
 ```text
-external_id
-occurred_at
-severity
-actor
-asset_ref
-title
-action
-subject_ref
-sensitive_value
-plain
+backend/edsp-core/src/main/java/com/edsp/core/controller/IngestionPlanController.java
 ```
 
-4. Template Matcher
-   - 做通用模板，不写死某个厂家：
+接口：
 
 ```text
-告警表模板
-日志表模板
-用户表模板
-终端表模板
-策略表模板
-详情表模板
+GET  /api/core/ingestion-plans?dataSourceId=&status=
+POST /api/core/ingestion-plans/generate
+PUT  /api/core/ingestion-plans/{id}/status
+POST /api/core/ingestion-plans/{id}/shadow-validate
 ```
 
-5. Ingestion Plan Generator
-   - 生成完整接入方案：
-     - `mode`
-     - `confidence`
-     - `mainTable`
-     - `cursorField`
-     - `idField`
-     - `fieldMappings`
-     - `syncStrategy`
-     - `risks`
-
-6. Shadow Validator
-   - 先生成 shadow standard events / decisions。
-   - 不正式推送。
-   - 只出试运行报告。
-
-## 10. 暂不优先事项
-
-当前不要直接跳到：
+请求 DTO：
 
 ```text
-standard_events -> alert_rules -> alerts
+backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanGenerateRequest.java
+backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanShadowValidationRequest.java
+backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanStatusRequest.java
 ```
 
-原因：规则闭环依赖稳定、可信、可核验的数据库识别和接入方案。现在应先保证平台能准确回答：
+### 4.2 SemanticProfilerService
+
+新增：
 
 ```text
-这个库一共有多少表？
-我扫到了多少表？
-有没有漏扫？
-哪些表像告警表？
-哪些字段像时间、用户、等级、终端？
-这个接入方案可信度多少？
-能不能先试运行？
+backend/edsp-core/src/main/java/com/edsp/core/service/SemanticProfilerService.java
 ```
 
-这些问题解决后，再做规则引擎更稳。
+职责：
 
-## 11. 已知风险和后续硬化点
+- 根据字段名、字段类型、已有描述识别字段语义。
+- 识别 `externalId`、`occurredAt`、`severity`、`actor`、`assetRef`、`title`、`alertType`、`detail` 等标准字段。
+- 自动补充 `schema_fields.semantic_type`、`confidence`、`description`。
+- 不覆盖已有人工映射：如果 `field_mappings` 已存在，则保留人工映射，只补充证据到方案 JSON。
+- 不用低置信度结果覆盖更高置信度的既有语义。
 
-1. 认证和鉴权仍需补 Spring Security + JWT 或等价方案。
-2. 密码、Webhook token、API token 等敏感信息不能长期明文保存。
-3. 通知中心目前以配置和展示为主，真实企微、飞书、短信、邮件投递链路还要补。
-4. 报表中心仍需补真实统计、导出内容和任务调度。
-5. 字段映射模板还不完整，后续要补样本值识别、表上下文识别、confidence 和 reason。
-6. 演示数据和正式数据必须隔离，不能把 demo seed 当作生产数据来源。
-7. `includeViews`、按 database 范围扫描、多数据库 source scope 后续还需要继续明确覆盖率语义。
+注意：`HOST_NAME` / `ASSET` / `DEVICE` / `IP` 等资产类字段优先识别为 `assetRef`，避免被宽泛的 `NAME` 规则误判为 `title`。
+注意：`USER_ID` / `ASSET_ID` / `HOST_ID` 等主体或资产 ID 不作为外部事件 ID，避免误用为 `externalId` dedup key。
 
-## 12. 常用命令
+### 4.3 TemplateMatcherService
 
-查看工作区状态：
+新增：
+
+```text
+backend/edsp-core/src/main/java/com/edsp/core/service/TemplateMatcherService.java
+```
+
+职责：
+
+- 判断表更像 `alert_table`、`log_table` 还是辅助维表。
+- `alert_table` 和 `log_table` 才是主接入方案候选。
+- `user_table`、`asset_table`、`policy_table`、`detail_table` 只作为辅助识别结果，不生成主方案。
+- `log` / `audit` / `trace` / `operation` / `access` 优先于 `alert` / `risk` / `event`，避免 `EVENT_AUDIT_LOG` 被误判成告警表。
+- 启发式匹配使用表名、分类和字段名 token，不使用 substring 命中，避免 `LOGIN_NAME` 里的 `log` 误触发 `log_table`。
+
+### 4.4 IngestionPlanService
+
+新增：
+
+```text
+backend/edsp-core/src/main/java/com/edsp/core/service/IngestionPlanService.java
+```
+
+职责：
+
+- 从 `schema_tables` / `schema_fields` / `field_mappings` 生成 `ingestion_plans`。
+- 生成完整 `plan_json`。
+- 控制方案去重、覆盖、状态流转。
+- 保持 `approved` / `shadow_ready` 方案不被重新生成直接覆盖。
+- 保持 `rejected` 方案不被自动复活，必须显式从 `rejected -> suggested`。
+
+生成逻辑是事务性的：
+
+```text
+@Transactional
+public List<Map<String, Object>> generate(...)
+```
+
+### 4.5 轻量 Shadow Validation
+
+新增能力：
+
+```text
+POST /api/core/ingestion-plans/{id}/shadow-validate
+```
+
+当前是 dry-run 校验，不读取真实业务表样本行、不写入 `raw_events` / `standard_events`，也不会自动把方案启用。
+
+校验规则：
+
+- 只允许 `approved` / `shadow_ready` 方案执行试运行校验。
+- `sampleLimit` 默认 50，最大 100。
+- 校验 `mode = database_polling`、源表仍活跃、映射源字段仍存在、必要字段完整、dedup 策略可评估、`syncStrategy.shadowOnly = true` 且 `enabled = false`。
+- 返回 `result = passed | warning | blocked`、`statusRecommendation`、`blockers`、`warnings`、`standardEventPreview` 和逐项 `checks`。
+- 缺少 `occurred_at` 或 dedup key 来源不足时返回 `blocked`，推荐回到 `manual_review`。
+
+## 5. plan_json 结构约束
+
+`plan_json` 当前包含：
+
+```json
+{
+  "version": "ingestion-plan-v1",
+  "generatedBy": "database-intelligence-mvp",
+  "generatedAt": "2026-05-22T00:00:00Z",
+  "mode": "database_polling",
+  "confidence": 86,
+  "coverageConfidence": 80,
+  "mappingConfidence": 88,
+  "mainTable": "OME_UD_3_LOG",
+  "schemaTableId": 1,
+  "cursorField": "CREATE_TIME",
+  "idField": "ID",
+  "dedupStrategy": {
+    "type": "external_id",
+    "fields": ["ID"],
+    "fallback": "composite"
+  },
+  "fieldMappings": {
+    "ID": "externalId",
+    "CREATE_TIME": "occurredAt"
+  },
+  "fieldMappingDetails": [],
+  "fieldEvidence": {},
+  "templateMatch": {},
+  "syncStrategy": {
+    "shadowOnly": true,
+    "enabled": false,
+    "activation": "requires_status_shadow_ready"
+  },
+  "risks": [],
+  "requiredFieldsMissing": [],
+  "recommendedAction": "shadow_validate"
+}
+```
+
+关键约束：
+
+- `dedupStrategy.fields` 使用来源字段名，不使用标准字段名。
+- `templateMatch.confidence` 表示“表像不像告警/日志表”。
+- `confidence` 表示“整个接入方案是否值得进入试运行”。
+- `fieldEvidence` 记录字段识别原因。
+- `fieldMappingDetails` 保留 `transformRule`。
+- `recommendedAction` 只能是以下枚举：
+
+```text
+shadow_validate
+manual_review
+needs_mapping
+insufficient_coverage
+reject
+```
+
+置信度第一版公式：
+
+```text
+confidence = templateMatch.confidence * 0.4
+           + mappingConfidence * 0.4
+           + coverageConfidence * 0.2
+```
+
+严重缺失字段会扣分：
+
+```text
+missing occurred_at: -30
+dedup_key_source_insufficient: -30
+limited scan: recommendedAction = insufficient_coverage
+```
+
+## 6. dedup 策略
+
+优先使用外部 ID：
+
+```json
+{
+  "type": "external_id",
+  "fields": ["ID"],
+  "fallback": "composite"
+}
+```
+
+没有外部 ID 时，尝试组合去重：
+
+```json
+{
+  "type": "composite",
+  "fields": ["EVENT_TYPE", "CREATE_TIME", "USER_ACCOUNT", "HOST_NAME"],
+  "stable": true
+}
+```
+
+`external_id` 不是绝对必填。
+
+真正阻断方案的是：
+
+```text
+dedup_key_source_insufficient
+```
+
+也就是既没有外部 ID，也无法稳定构造组合 dedup key。
+
+## 7. 状态机
+
+状态白名单：
+
+```text
+suggested
+review_required
+approved
+shadow_ready
+rejected
+```
+
+允许流转：
+
+```text
+suggested       -> review_required
+suggested       -> approved
+suggested       -> rejected
+
+review_required -> approved
+review_required -> rejected
+
+approved        -> shadow_ready
+approved        -> rejected
+
+shadow_ready    -> rejected
+
+rejected        -> suggested
+```
+
+禁止：
+
+```text
+shadow_ready -> approved
+```
+
+说明：
+
+- `approved` 表示方案被人工批准。
+- `shadow_ready` 表示可以进入试运行准备。
+- `shadow_ready` 不是正式启用。
+- 第一版没有 `enabled`。
+- 前端对 `approved` / `shadow_ready` 的撤销文案应使用“废弃方案”，后端状态仍落到 `rejected`。
+
+## 8. 方案生成去重策略
+
+同一类方案匹配维度：
+
+```text
+data_source_id + schema_table_id + mode + templateKey
+```
+
+当前实现规则：
+
+- 已有 `suggested` / `review_required`：允许更新同一方案。
+- 已有 `approved` / `shadow_ready`：不覆盖，生成新的 `review_required` 方案，并在 `risks` 中提示已有已批准方案。
+- 已有 `rejected`：自动生成时不覆盖、不复活、不新增重复方案，返回原 rejected 方案。
+- 只有显式执行 `rejected -> suggested` 后，后续 generate 才允许更新该方案。
+- 老版本已生成方案里 `mode` 如果等于 `templateKey`，去重时按 `database_polling` 兼容处理，避免升级后重复生成。
+
+## 9. 前端变更
+
+修改：
+
+```text
+frontend/src/pages/SchemaPage.tsx
+frontend/src/types.ts
+```
+
+新增能力：
+
+- 在“元数据快照”页展示推荐接入方案。
+- 支持生成推荐方案。
+- 支持查看字段识别原因、模板匹配、风险、缺失字段。
+- 支持方案状态操作：标记复核、批准方案、进入试运行准备、废弃方案、重新推荐。
+- 支持对 `approved` / `shadow_ready` 方案触发“试运行校验”，并在抽屉中展示校验结果、阻断项、提醒项、标准事件预览和逐项检查。
+- `shadow_ready` 展示为“试运行准备”，不展示成“已启用”。
+- `rejected` 状态只允许“重新推荐”，避免非法状态跳转。
+- 前端只提交后端允许的状态值，不再发送 `discarded` / `draft` 等非法状态。
+- 解析 `plan_json.fieldEvidence`，支持 object / array 两种结构。
+- 针对长标签、长字段、长原因做换行处理，降低横向溢出风险。
+
+类型新增：
+
+```text
+IngestionPlanRow
+IngestionPlanJson
+IngestionPlanFieldEvidence
+IngestionPlanMappingDetail
+IngestionPlanDedupStrategy
+IngestionPlanShadowValidationCheck
+IngestionPlanShadowValidationReport
+```
+
+## 10. 已覆盖测试
+
+新增测试：
+
+```text
+backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanServiceTest.java
+backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanServiceTransactionTest.java
+```
+
+当前覆盖点：
+
+- `alert_table` 可生成主接入方案。
+- `log_table` 可生成主接入方案。
+- `user_table` / `asset_table` / `policy_table` 不生成主接入方案。
+- `EVENT_AUDIT_LOG` 优先识别为 `log_table`。
+- `SYS_USER_PROFILE` / `LOGIN_NAME` 不会因 `login` 子串误生成 `log_table` 主方案。
+- 不覆盖已有人工字段映射。
+- 保留已有 `field_mappings.transform_rule`。
+- `plan_json.mode` 固定为 `database_polling`，模板类型保留在 `templateMatch.templateKey`。
+- limited scan 时推荐动作变为 `insufficient_coverage`。
+- 没有外部 ID 但能构造组合 dedup key 时，不直接判定不可用。
+- `USER_ID` 不会被识别为 `externalId` dedup key，会作为主体字段参与组合 dedup。
+- API 返回的 `plan_json` 是结构化对象，不再在 H2/JDBC 场景下透传为 base64 字符串。
+- `suggested` / `review_required` 可被重复生成更新。
+- `approved` / `shadow_ready` 不被重复生成覆盖。
+- `rejected` 不被自动覆盖或复活。
+- 显式 `rejected -> suggested` 后，再次 generate 可更新原方案。
+- 禁止 `shadow_ready -> approved`。
+- Spring 事务代理级验证：`generate()` 后半段失败时，前面写入的 `schema_fields.semantic_type` 会回滚。
+- `shadow-validate` 会拒绝未人工批准的 `suggested` 方案。
+- `shadow-validate` 对已批准方案只返回 dry-run 报告，不写入 `raw_events` / `standard_events`，也不改变方案状态。
+- `shadow-validate` 对缺少必要字段的已批准方案返回 `blocked` 和明确阻断项。
+
+## 11. 已运行验证
+
+后端定向测试：
 
 ```powershell
-git status --short
+cd backend
+mvn -pl edsp-core -am -Dtest=IngestionPlanServiceTest "-Dsurefire.failIfNoSpecifiedTests=false" test
 ```
 
-后端测试：
+结果：
+
+```text
+Tests run: 14, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+后端事务回滚定向测试：
+
+```powershell
+cd backend
+mvn -pl edsp-core -am -Dtest=IngestionPlanServiceTransactionTest "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+结果：
+
+```text
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+红灯验证：临时移除 `IngestionPlanService.generate()` 上的 `@Transactional` 后，该测试失败，`schema_fields.semantic_type` 残留 5 条脏更新；恢复注解后通过。
+
+后端受影响模块完整测试：
 
 ```powershell
 cd backend
 mvn -pl edsp-core -am test
 ```
 
-后端打包：
+结果：
+
+```text
+Tests run: 21, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+前端类型检查：
 
 ```powershell
-cd backend
-mvn -pl edsp-core -am package -DskipTests
+cd frontend
+& 'C:\Users\Ruidoww\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\Ruidoww\Desktop\预警分析平台推送对接\frontend\node_modules\typescript\bin\tsc' --noEmit
+```
+
+结果：
+
+```text
+success
 ```
 
 前端构建：
 
 ```powershell
 cd frontend
-npm run build
+& 'C:\Users\Ruidoww\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\Ruidoww\Desktop\预警分析平台推送对接\frontend\node_modules\vite\bin\vite.js' build
 ```
 
-停止本地后端：
+结果：
+
+```text
+success
+```
+
+注意：Vite build 仍有 chunk size warning，属于构建体积提示，不是构建失败。
+
+浏览器验证：
+
+```text
+mock API 8080 + Vite 5173 已打开页面并完成截图验证
+截图：C:\Users\Ruidoww\AppData\Local\Temp\edsp-schema-ingestion-plan-verification.png
+
+真实后端 8080 + Vite 5173 已完成浏览器验证：
+- POST /api/core/ingestion-plans/generate 生成 2 条推荐方案。
+- GET /api/core/ingestion-plans?dataSourceId=1 返回结构化 plan_json。
+- 页面“推荐接入方案”区域可展示字段映射、缺失字段、风险提示和推荐动作。
+- 页面“模板类型”显示 `log_table`，不再误显示 `database_polling`。
+
+轻量 Shadow Validation 真实后端 + 浏览器验证：
+- POST `/api/core/ingestion-plans/{id}/shadow-validate` 可对 `approved` 方案返回 dry-run 报告。
+- API 验证确认 `raw_events` / `standard_events` 未被写入。
+- Chrome CDP 验证页面存在“试运行校验”按钮，点击后抽屉可展示校验结果、阻断项、标准事件预览和 `required_fields` 检查项。
+```
+
+格式检查：
 
 ```powershell
-.\scripts\stop-local-backend.ps1
+git diff --check
 ```
 
-查看本地后端状态：
+结果：
 
-```powershell
-.\scripts\status-local-backend.ps1
+```text
+exit 0
 ```
 
-Docker 部署：
+注意：PowerShell 输出提示 `HANDOFF.md`、`frontend/src/pages/SchemaPage.tsx` 和 `frontend/src/types.ts` 后续可能发生 `LF -> CRLF` 转换，这是 Git 换行提示，不是 diff 检查失败。
 
-```powershell
-docker compose up -d --build
-docker compose ps
-docker compose logs --tail=200 edsp-core
-```
+## 12. 已做代码审查
 
-## 13. 给下一位开发者的注意事项
+本阶段按要求使用子 agent 做了并行实现和代码审查。
 
-- 不要把 IP-Guard 当成唯一目标，IP-Guard 只是首个数据库类外部源样例。
-- 不要绕过 raw 层直接生成告警。
-- 不要让客户逐字段维护映射作为默认交付流程。
-- 不要把 demo 数据、mock 数据、临时代码混入正式链路。
-- 修改数据库结构必须走 Flyway migration。
-- 修改接口后同步检查前端类型和页面调用。
-- 提交前至少跑：
+已发现并修复的问题：
+
+- `rejected` 方案会被 generate 自动覆盖或复活。
+- `transform_rule` 未进入 `plan_json`。
+- generate 缺少事务保护。
+- 前端曾发送非法状态 `discarded`。
+- `rejected` 状态曾显示非法操作按钮。
+- `fieldEvidence` 解析不完整。
+- `draft` 状态过滤不合法。
+- `HOST_NAME` 曾被误判为 `title`，现改为优先识别 `assetRef`。
+- `plan_json.mode` 曾误写为模板类型，现固定为 `database_polling`。
+- `USER_ID` 等主体 ID 曾可能被误用为 `externalId`，现排除。
+- `LOGIN_NAME` 曾可能因 substring 命中 `log`，现改为 token 匹配。
+- `generate()` 事务保护已补 Spring 代理级回滚测试。
+- H2/JDBC 下 `plan_json` 曾通过 REST 变成 base64 字符串，现统一解析为结构化对象后返回。
+- 前端模板类型曾在 `mode` 修正后误显示为 `database_polling`，现优先展示 `templateMatch.templateKey`。
+- `shadow_ready` 前缺少轻量校验入口，现新增 dry-run Shadow Validation API 和前端结果抽屉。
+
+最后一轮复审指出的 `mode` 语义、主体 ID dedup、`login` 子串误判和事务回滚测试缺口已补回归测试并修复。真实后端联调发现的 `plan_json` 序列化和前端模板类型展示问题也已补修。后续“继续”阶段新增了轻量 Shadow Validation，但仍保持 dry-run，不进入正式规则引擎或通知链路。
+
+## 13. 当前残留风险
+
+1. 前端 `SchemaPage.tsx` 已较大，后续如果继续扩展元数据能力，应考虑拆出推荐方案区域组件。
+2. 目前仅是轻量 dry-run Shadow Validation，尚未读取真实业务表样本行，也没有 shadow 结果落表。
+3. 目前没有正式 `enabled` 状态，后续规则闭环阶段再引入。
+
+## 14. 下一步建议
+
+下一步不要直接进入规则引擎或通知推送。
+
+建议顺序：
+
+1. 检查本次 diff，确认没有无关文件。
+2. 运行完整验证：
 
 ```powershell
 cd backend
 mvn -pl edsp-core -am test
+cd ..
+cd frontend
+& 'C:\Users\Ruidoww\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\Ruidoww\Desktop\预警分析平台推送对接\frontend\node_modules\typescript\bin\tsc' --noEmit
+& 'C:\Users\Ruidoww\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\Ruidoww\Desktop\预警分析平台推送对接\frontend\node_modules\vite\bin\vite.js' build
+cd ..
+git diff --check
 ```
 
-如果本次提交包含前端改动，再跑：
+3. 如需提交，提交当前阶段：
 
 ```powershell
-cd frontend
-npm run build
+git add backend/edsp-core/src/main/java/com/edsp/core/controller/IngestionPlanController.java `
+        backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanGenerateRequest.java `
+        backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanShadowValidationRequest.java `
+        backend/edsp-core/src/main/java/com/edsp/core/dto/IngestionPlanStatusRequest.java `
+        backend/edsp-core/src/main/java/com/edsp/core/service/IngestionPlanService.java `
+        backend/edsp-core/src/main/java/com/edsp/core/service/SemanticProfilerService.java `
+        backend/edsp-core/src/main/java/com/edsp/core/service/TemplateMatcherService.java `
+        backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanServiceTest.java `
+        frontend/src/pages/SchemaPage.tsx `
+        frontend/src/types.ts `
+        HANDOFF.md
+
+git commit -m "feat: add database intelligence ingestion plan MVP"
 ```
+
+4. 下一个开发主题建议：
+
+```text
+refactor: split schema ingestion plan panel
+```
+
+如果继续扩展 Shadow Validator，需要先确认：
+
+- 是否允许从真实业务数据源读取样本行。
+- shadow 结果落表位置。
+- shadow standard events 是否需要独立表或复用 raw/standard 结构。
+
+## 15. 不要偏离的事项
+
+- 不要把 IP-Guard 当成唯一目标。
+- 不要绕过 raw 层直接生成 alerts。
+- 不要要求客户逐字段填写底层表达式作为默认交付流程。
+- 不要把 `shadow_ready` 当成正式启用。
+- 不要让辅助表直接生成主接入方案。
+- 不要覆盖人工确认过的字段映射。
+- 不要在本阶段引入 AI / XGBoost / 复杂 Agent。
+- 修改数据库结构必须走 Flyway migration。
+- 修改接口后必须同步前端类型和页面调用。

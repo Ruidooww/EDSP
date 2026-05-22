@@ -304,3 +304,146 @@ export interface SchemaChangeEventRow {
   created_at: string | number;
   updated_at?: string | number;
 }
+
+export interface IngestionPlanFieldMapping {
+  sourceField?: string;
+  source_field?: string;
+  standardField?: string;
+  standard_field?: string;
+  confidence?: number | string;
+  transformRule?: string;
+  transform_rule?: string;
+  reason?: string;
+}
+
+export interface IngestionPlanFieldEvidence {
+  sourceField?: string;
+  source_field?: string;
+  fieldName?: string;
+  field_name?: string;
+  standardField?: string;
+  standard_field?: string;
+  reason?: string;
+  description?: string;
+  message?: string;
+  explanation?: string;
+}
+
+export interface IngestionPlanDedupStrategy {
+  type?: string;
+  fields?: Array<string | number>;
+  sourceFields?: Array<string | number>;
+  source_fields?: Array<string | number>;
+  fallback?: string;
+  stable?: boolean;
+  rule?: string;
+  window?: string;
+  description?: string;
+}
+
+export interface IngestionPlanJson {
+  candidateTable?: string;
+  candidate_table?: string;
+  tableName?: string;
+  table_name?: string;
+  templateType?: string;
+  template_type?: string;
+  overallConfidence?: number | string;
+  overall_confidence?: number | string;
+  confidence?: number | string;
+  templateConfidence?: number | string;
+  template_confidence?: number | string;
+  coverageConfidence?: number | string;
+  coverage_confidence?: number | string;
+  mappingCompleteness?: number | string;
+  mapping_completeness?: number | string;
+  fieldMappings?: IngestionPlanFieldMapping[] | Record<string, string>;
+  field_mappings?: IngestionPlanFieldMapping[] | Record<string, string>;
+  fieldMappingDetails?: IngestionPlanFieldMapping[];
+  field_mapping_details?: IngestionPlanFieldMapping[];
+  mappings?: IngestionPlanFieldMapping[];
+  dedupStrategy?: IngestionPlanDedupStrategy;
+  dedup_strategy?: IngestionPlanDedupStrategy;
+  requiredFieldsMissing?: unknown[];
+  required_fields_missing?: unknown[];
+  missingFields?: unknown[];
+  missing_fields?: unknown[];
+  risks?: unknown[];
+  riskTips?: unknown[];
+  risk_tips?: unknown[];
+  recommendedActions?: unknown[];
+  recommendedAction?: unknown;
+  recommended_action?: unknown;
+  recommended_actions?: unknown[];
+  actions?: unknown[];
+  reason?: string;
+  reasons?: unknown[];
+  explanation?: string;
+  fieldEvidence?: Record<string, IngestionPlanFieldEvidence> | IngestionPlanFieldEvidence[];
+  field_evidence?: Record<string, IngestionPlanFieldEvidence> | IngestionPlanFieldEvidence[];
+  generationVersion?: string;
+  generation_version?: string;
+  generatedAt?: string | number;
+  generated_at?: string | number;
+  [key: string]: unknown;
+}
+
+export interface IngestionPlanRow {
+  id: number;
+  data_source_id?: number;
+  dataSourceId?: number;
+  data_source_name?: string;
+  dataSourceName?: string;
+  scan_run_id?: number;
+  scanRunId?: number;
+  name?: string;
+  status: string;
+  plan_json?: IngestionPlanJson | string;
+  planJson?: IngestionPlanJson | string;
+  created_at?: string | number;
+  createdAt?: string | number;
+  updated_at?: string | number;
+  updatedAt?: string | number;
+  generated_at?: string | number;
+  generatedAt?: string | number;
+  generation_version?: string;
+  generationVersion?: string;
+  candidate_table?: string;
+  candidateTable?: string;
+  template_type?: string;
+  templateType?: string;
+  overall_confidence?: number | string;
+  overallConfidence?: number | string;
+  template_confidence?: number | string;
+  templateConfidence?: number | string;
+  coverage_confidence?: number | string;
+  coverageConfidence?: number | string;
+  mapping_completeness?: number | string;
+  mappingCompleteness?: number | string;
+}
+
+export interface IngestionPlanShadowValidationCheck {
+  code: string;
+  result: 'passed' | 'warning' | 'failed' | string;
+  message?: string;
+  blockers?: string[];
+  details?: unknown;
+}
+
+export interface IngestionPlanShadowValidationReport {
+  planId: number;
+  dataSourceId?: number;
+  dataSourceName?: string;
+  planStatus: string;
+  result: 'passed' | 'warning' | 'blocked' | string;
+  statusRecommendation?: string;
+  checkedAt?: string | number;
+  sampleLimit?: number;
+  mainTable?: string;
+  templateKey?: string;
+  mappedFieldCount?: number;
+  blockers?: string[];
+  warnings?: string[];
+  standardEventPreview?: Record<string, unknown>;
+  checks: IngestionPlanShadowValidationCheck[];
+}

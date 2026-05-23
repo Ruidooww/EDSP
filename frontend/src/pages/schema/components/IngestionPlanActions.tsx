@@ -1,30 +1,40 @@
-import { FileSearchOutlined, PlayCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { FileSearchOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { Button, Space } from 'antd';
-import type { IngestionPlanRow } from '../../../types';
+import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
+import { canActivatePlan, getActivationStatus } from '../utils/ingestionPlanActivation';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 
 interface IngestionPlanActionsProps {
   row: IngestionPlanRow;
   plan: NormalizedIngestionPlan;
+  activation?: IngestionPlanActivationRow | null;
+  latestShadowRun?: IngestionPlanShadowRunRow | null;
   busy: boolean;
   onViewReason: (row: IngestionPlanRow) => void;
   onUpdateStatus: (row: IngestionPlanRow, status: string, successText: string) => void;
   onShadowValidate: (row: IngestionPlanRow) => void;
   onShadowRun: (row: IngestionPlanRow) => void;
   onViewShadowReport: (row: IngestionPlanRow) => void;
+  onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
+  onDeactivate: (activation: IngestionPlanActivationRow) => void;
 }
 
 export default function IngestionPlanActions({
   row,
   plan,
+  activation,
+  latestShadowRun,
   busy,
   onViewReason,
   onUpdateStatus,
   onShadowValidate,
   onShadowRun,
   onViewShadowReport,
+  onActivate,
+  onDeactivate,
 }: IngestionPlanActionsProps) {
   const status = plan.status;
+  const isActive = getActivationStatus(activation) === 'active';
   const canReview = status === 'suggested';
   const canApprove = status === 'suggested' || status === 'review_required';
   const canReject = status === 'suggested' || status === 'review_required';
@@ -32,6 +42,7 @@ export default function IngestionPlanActions({
   const canShadowValidate = status === 'approved' || status === 'shadow_ready';
   const canShadowRun = status === 'approved' || status === 'shadow_ready';
   const canDiscard = status === 'approved' || status === 'shadow_ready';
+  const canActivate = canActivatePlan(status, latestShadowRun, activation);
 
   return (
     <Space size={[4, 6]} wrap style={{ justifyContent: 'flex-end' }}>
@@ -66,6 +77,16 @@ export default function IngestionPlanActions({
       {canShadowRun && (
         <Button size="small" icon={<FileSearchOutlined />} loading={busy} onClick={() => onViewShadowReport(row)}>
           查看试运行报告
+        </Button>
+      )}
+      {canActivate && latestShadowRun && (
+        <Button size="small" type="primary" icon={<PoweroffOutlined />} loading={busy} onClick={() => onActivate(row, latestShadowRun)}>
+          启用方案
+        </Button>
+      )}
+      {isActive && activation && (
+        <Button size="small" danger icon={<PoweroffOutlined />} loading={busy} onClick={() => onDeactivate(activation)}>
+          停用
         </Button>
       )}
       {canReject && (

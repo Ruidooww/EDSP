@@ -1,5 +1,5 @@
 import { Button, Card, Select, Space } from 'antd';
-import type { IngestionPlanRow } from '../../../types';
+import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
 import { PLAN_STATUS_FILTER_OPTIONS } from '../utils/ingestionPlanLabels';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanPanel from './IngestionPlanPanel';
@@ -19,6 +19,8 @@ interface IngestionPlanSectionProps {
   sourceId?: number;
   status?: string;
   rows: IngestionPlanViewRow[];
+  activationsByPlanId: Record<number, IngestionPlanActivationRow | null>;
+  latestShadowRunsByPlanId: Record<number, IngestionPlanShadowRunRow | null>;
   loading: boolean;
   generating: boolean;
   actionId: number | null;
@@ -32,6 +34,8 @@ interface IngestionPlanSectionProps {
   onShadowValidate: (row: IngestionPlanRow) => void;
   onShadowRun: (row: IngestionPlanRow) => void;
   onViewShadowReport: (row: IngestionPlanRow) => void;
+  onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
+  onDeactivate: (activation: IngestionPlanActivationRow) => void;
 }
 
 export default function IngestionPlanSection({
@@ -39,6 +43,8 @@ export default function IngestionPlanSection({
   sourceId,
   status,
   rows,
+  activationsByPlanId,
+  latestShadowRunsByPlanId,
   loading,
   generating,
   actionId,
@@ -52,6 +58,8 @@ export default function IngestionPlanSection({
   onShadowValidate,
   onShadowRun,
   onViewShadowReport,
+  onActivate,
+  onDeactivate,
 }: IngestionPlanSectionProps) {
   return (
     <Card className="ops-card" title="推荐接入方案">
@@ -91,6 +99,8 @@ export default function IngestionPlanSection({
               key={row.id}
               row={row}
               plan={plan}
+              activation={activationsByPlanId[row.id] ?? null}
+              latestShadowRun={latestShadowRunsByPlanId[row.id] ?? null}
               busy={actionId === row.id}
               formatTime={formatTime}
               onViewReason={onViewReason}
@@ -98,6 +108,8 @@ export default function IngestionPlanSection({
               onShadowValidate={onShadowValidate}
               onShadowRun={onShadowRun}
               onViewShadowReport={onViewShadowReport}
+              onActivate={onActivate}
+              onDeactivate={onDeactivate}
             />
           ))}
         </div>

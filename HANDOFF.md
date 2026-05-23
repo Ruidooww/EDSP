@@ -1,21 +1,21 @@
 # 数据安全预警分析平台 Handoff
 
 > 更新时间：2026-05-23
-> 当前分支：`codex/ingestion-plan-quality-hardening`
+> 当前分支：`codex/ingestion-plan-activation-gate`
 > 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
-> 当前阶段：`Ingestion Plan Quality Hardening`
+> 当前阶段：`Ingestion Plan Activation Gate MVP / 启用门禁 MVP`
 
 ## 1. 当前状态
 
 `master` 已合并到以下提交：
 
 ```text
-a9f923a merge: ingestion plan shadow validator
+3b89be0 merge: ingestion plan quality hardening
 ```
 
-当前本地 `codex/ingestion-plan-quality-hardening`、`master`、`origin/master` 均指向 `a9f923a`。本轮文档交接以该提交为基线。
+当前本地工作分支为 `codex/ingestion-plan-activation-gate`。本轮文档交接以 Quality Hardening 合并后的代码为基线，下一阶段进入 Ingestion Plan Activation Gate MVP / 启用门禁 MVP。
 
-Shadow Validator MVP 已完成并合并。当前能力已经从早期的轻量 Shadow Precheck 扩展到可执行 Shadow Run 的 MVP：可以读取样本、生成校验报告、保存 shadow run 结果，并在前端展示报告。但这仍然是试运行验证能力，不是正式接入启用。
+Shadow Validator MVP 与 Quality Hardening 已合并。当前能力已经从早期的轻量 Shadow Precheck 扩展到可执行 Shadow Run 的 MVP：可以读取样本、生成校验报告、保存 shadow run 结果，并在前端展示报告。但这仍然是试运行验证能力，不是正式接入启用。
 
 ## 2. 产品主线
 
@@ -34,7 +34,7 @@ Shadow Validator MVP 已完成并合并。当前能力已经从早期的轻量 S
   -> 通知 / 处置 / 报表 / 反馈
 ```
 
-当前阶段关注的是 Ingestion Plan 的质量、可解释性和试运行验证，不把推荐方案直接升级为正式采集、正式标准事件写入或告警链路。
+当前阶段从 Ingestion Plan 的质量、可解释性和试运行验证，推进到启用门禁的审计记录设计。Activation 是“允许后续采集链路引用该方案”的门禁记录，不等于正式采集已经开始，也不直接写入正式事件或告警链路。
 
 ## 3. 本阶段已完成
 
@@ -169,24 +169,55 @@ shadow_ready -> approved
 - Shadow Run 结果落到 `ingestion_plan_shadow_runs`，而不是正式事件表。
 - 前端 Shadow Run 报告类型和展示组件。
 
-## 7. 下一阶段候选
+## 7. 下一阶段：Ingestion Plan Activation Gate MVP / 启用门禁 MVP
 
-下一阶段不要直接进入 alerts、通知或复杂规则引擎。建议候选按以下顺序评估：
+下一阶段不要直接进入 alerts、通知或复杂规则引擎。当前目标是把“人工批准 + 最新 Shadow Run 通过证据”变成可审计的启用门禁记录，为后续 sync-once 做准备。
 
-### 7.1 Ingestion Plan Activation MVP
+### 7.1 核心目标
 
-目标是把“人工批准 + Shadow Run 证据”变成可审计的启用门禁，但仍不直接做告警。
+Activation 是审计门禁记录，不等于正式采集启用。MVP 建议新增或使用 `ingestion_plan_activations` 记录启用门禁信息，包括 plan、shadowRunId、启用人、启用时间、启用依据、状态和停用信息。
 
-候选内容：
+本阶段不要新增 `ingestion_plans.status = active`。`ingestion_plans.status` 仍保持现有白名单，启用门禁状态由 activation 记录表达。
 
-- 明确 activation 状态或 activation 记录，不复用 `shadow_ready` 表示正式启用。
-- 要求至少一次最近 Shadow Run 达到通过门槛。
-- 保存启用人、启用时间、启用依据和回滚入口。
-- 定义启用后的最小 sync 参数：cursor、dedup、batch size、错误处理策略。
+### 7.2 启用门槛
 
-### 7.2 sync-once 写 `raw_events`
+创建 active activation 前必须同时满足：
 
-目标是先验证一次性同步链路，把源表样本/增量行写入 raw 层。
+- plan 状态必须是 `approved` / `shadow_ready`。
+- `shadowRunId` 必须属于当前 plan。
+- `shadowRunId` 必须是当前 plan 最新一次 Shadow Run。
+- 最新 Shadow Run status 必须是 `passed`。
+- 最新 Shadow Run 为 `warning` / `blocked` / `failed` 时不能启用。
+
+### 7.3 并发与唯一性
+
+同一个 `ingestion_plan` 同一时间不能存在多个 active activation。
+
+MVP 阶段先在服务层做防重：创建 active activation 前查询当前 plan 是否已有 active activation。后续进入生产库约束时，建议增加 active-only unique constraint，避免并发绕过服务层校验。
+
+### 7.4 deactivate 边界
+
+deactivate 只更新 `ingestion_plan_activations`，例如把当前 active activation 标记为 inactive / deactivated，并记录停用人、停用时间和原因。
+
+deactivate 不修改 `ingestion_plans.status`，也不把 plan 回退到 `approved`、`shadow_ready` 或其他状态。
+
+### 7.5 强边界
+
+Activation Gate MVP 只建立门禁审计记录，不执行正式采集链路：
+
+- 不写 `raw_events`。
+- 不写 `standard_events`。
+- 不写 `alert_decisions`。
+- 不写 `alerts`。
+- 不触发通知。
+- 不进入规则引擎。
+- 不进入 AI 判断链路。
+
+### 7.6 后续阶段候选
+
+#### sync-once 写 `raw_events`
+
+后续阶段才考虑 sync-once 写 `raw_events`。目标是先验证一次性同步链路，把源表样本/增量行写入 raw 层。
 
 候选内容：
 
@@ -196,7 +227,7 @@ shadow_ready -> approved
 - 保证幂等，不重复写入同一 dedup key。
 - 不在这个步骤直接产生 alerts。
 
-### 7.3 sync-once 写 `standard_events`
+#### sync-once 写 `standard_events`
 
 目标是在 raw 层之后进行标准化落表。
 

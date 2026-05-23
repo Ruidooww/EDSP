@@ -510,19 +510,65 @@ export interface IngestionPlanShadowRunReport {
 export interface IngestionPlanShadowRunRow {
   id: number;
   ingestionPlanId: number;
+  ingestion_plan_id?: number;
   dataSourceId?: number;
+  data_source_id?: number;
   status: 'passed' | 'warning' | 'blocked' | 'failed' | string;
   sampleLimit: number;
+  sample_limit?: number;
   readCount: number;
+  read_count?: number;
   successCount: number;
+  success_count?: number;
   failedCount: number;
+  failed_count?: number;
   duplicateCount: number;
+  duplicate_count?: number;
   missingRequiredCount: number;
+  missing_required_count?: number;
   startedAt?: string | number;
+  started_at?: string | number;
   finishedAt?: string | number;
+  finished_at?: string | number;
   durationMs?: number;
+  duration_ms?: number;
   errorMessage?: string;
+  error_message?: string;
   report?: IngestionPlanShadowRunReport;
   createdAt?: string | number;
+  created_at?: string | number;
   updatedAt?: string | number;
+  updated_at?: string | number;
+}
+
+export interface IngestionPlanActivationRow {
+  id: number;
+  ingestionPlanId?: number;
+  ingestion_plan_id?: number;
+  dataSourceId?: number;
+  data_source_id?: number;
+  shadowRunId?: number;
+  shadow_run_id?: number;
+  status: 'active' | 'deactivated' | string;
+  activatedBy?: string;
+  activated_by?: string;
+  activationReason?: string;
+  activation_reason?: string;
+  operatorName?: string;
+  operator_name?: string;
+  reason?: string;
+  activatedAt?: string | number;
+  activated_at?: string | number;
+  deactivatedBy?: string;
+  deactivated_by?: string;
+  deactivationReason?: string;
+  deactivation_reason?: string;
+  deactivatedAt?: string | number;
+  deactivated_at?: string | number;
+  config?: Record<string, unknown>;
+  config_json?: Record<string, unknown> | string;
+  createdAt?: string | number;
+  created_at?: string | number;
+  updatedAt?: string | number;
+  updated_at?: string | number;
 }

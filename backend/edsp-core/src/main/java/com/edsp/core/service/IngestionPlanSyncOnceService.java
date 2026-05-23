@@ -81,14 +81,7 @@ public class IngestionPlanSyncOnceService {
         try {
             var planJson = parseJson(plan.get("plan_json"));
             var source = loadSource(dataSourceId, planJson);
-            var rows = sampleService.sample(
-                source.sourceType(),
-                source.configJson(),
-                source.schemaName(),
-                source.tableName(),
-                source.selectedFields(),
-                sampleLimit
-            );
+            var rows = sampleRows(source, sampleLimit);
             var result = processRows(ingestionRunId, dataSourceId, source, rows);
             var report = report(planId, activationId, ingestionRunId, sampleLimit, result);
             var status = result.status();
@@ -160,12 +153,12 @@ public class IngestionPlanSyncOnceService {
             }
             var existingId = standardEventDedupService.findExistingStandardEventId(
                 standard.dedupKey(),
+                dataSourceId,
                 standard.sourceSystem(),
                 standard.externalId()
             );
             if (existingId != null) {
                 duplicateCount++;
-                updateStandardEvent(existingId, rawId, dataSourceId, standard);
                 updateRawStatus(rawId, "standardized", existingId);
             } else {
                 var standardId = insertStandardEvent(rawId, dataSourceId, standard);
@@ -182,6 +175,41 @@ public class IngestionPlanSyncOnceService {
             standardCount, new ArrayList<>(warnings), errorsByType);
     }
 
+    private List<Map<String, Object>> sampleRows(Source source, int sampleLimit) {
+        try {
+            return sampleService.sample(
+                source.sourceType(),
+                source.configJson(),
+                source.schemaName(),
+                source.tableName(),
+                source.selectedFields(),
+                sampleLimit
+            );
+        } catch (RuntimeException ex) {
+            var blocker = sampleBlocker(ex);
+            if (blocker != null) {
+                throw blocker;
+            }
+            throw ex;
+        }
+    }
+
+    private PlanBlockerException sampleBlocker(RuntimeException ex) {
+        var message = support.stringOrDefault(ex.getMessage(), "").toLowerCase(Locale.ROOT);
+        if ((message.contains("table") && message.contains("not found"))
+            || (message.contains("relation") && message.contains("does not exist"))
+            || message.contains("invalid object name")) {
+            return new PlanBlockerException("source_table_missing", "Source table is not available");
+        }
+        if ((message.contains("column") && message.contains("not found"))
+            || (message.contains("column") && message.contains("does not exist"))
+            || message.contains("invalid column name")
+            || message.contains("unknown column")) {
+            return new PlanBlockerException("source_fields_missing", "Source fields are not available");
+        }
+        return null;
+    }
+
     private StandardRecord standardRecord(
         Long dataSourceId,
         Source source,
@@ -194,20 +222,20 @@ public class IngestionPlanSyncOnceService {
         var errors = new ArrayList<String>();
         var occurredAt = parseRequiredTime(values.get("occurredAt"), errors);
         var severity = normalizeSeverity(values.get("severity"), errors);
-        var sourceSystem = source.sourceType().isBlank() ? "external" : source.sourceType();
+        var sourceSystem = sourceSystem(dataSourceId, source);
         var externalId = support.stringOrNull(values.get("externalId"));
         var eventType = support.stringOrDefault(first(values.get("eventType"), values.get("title")), "ingestion_plan_event");
         var actor = support.stringOrNull(values.get("actor"));
         var assetRef = support.stringOrNull(values.get("assetRef"));
         var subjectRef = support.stringOrNull(values.get("subjectRef"));
-        var dedupKey = dedupKey(row, dedupFields, sourceSystem, externalId, eventType, occurredAt, actor, assetRef, subjectRef);
+        var dedupKey = dedupKey(dataSourceId, source, row, dedupFields, sourceSystem, externalId, eventType,
+            occurredAt, actor, assetRef, subjectRef);
         if (dedupKey == null) {
             errors.add("dedup_key_missing");
         }
         var normalized = new LinkedHashMap<String, Object>();
         normalized.put("sourceTable", source.tableName());
         normalized.put("mapped", values);
-        normalized.put("source", row);
         var extra = new LinkedHashMap<String, Object>();
         extra.put("syncMode", "sync_once");
         extra.put("sourceTable", source.tableName());
@@ -260,6 +288,8 @@ public class IngestionPlanSyncOnceService {
     }
 
     private String dedupKey(
+        Long dataSourceId,
+        Source source,
         Map<String, Object> row,
         List<String> dedupFields,
         String sourceSystem,
@@ -280,9 +310,24 @@ public class IngestionPlanSyncOnceService {
         }
         var values = new ArrayList<String>();
         for (var field : dedupFields) {
-            values.add(String.valueOf(row.get(field)));
+            values.add(field + "=" + row.get(field));
         }
-        return sha256(String.join("|", values));
+        var schemaTableId = longValue(source.plan().get("schemaTableId"));
+        return sha256(String.join("|",
+            "sync_once",
+            "data_source:" + dataSourceId,
+            "schema_table:" + schemaTableId,
+            "table:" + source.tableName(),
+            String.join("|", values)
+        ));
+    }
+
+    private String sourceSystem(Long dataSourceId, Source source) {
+        if (dataSourceId == null) {
+            return "external";
+        }
+        var schemaTableId = longValue(source.plan().get("schemaTableId"));
+        return "ds:%d:st:%s".formatted(dataSourceId, schemaTableId);
     }
 
     private Long insertRawEvent(
@@ -319,21 +364,6 @@ public class IngestionPlanSyncOnceService {
             record.occurredAt(), record.actor(), record.assetRef(), record.subjectType(), record.subjectRef(),
             record.action(), record.result(), record.severity(), record.riskScore(), record.normalizedJson(),
             record.extraJson(), record.dedupKey());
-    }
-
-    private void updateStandardEvent(Long id, long rawId, Long dataSourceId, StandardRecord record) {
-        jdbcTemplate.update("""
-            update standard_events
-            set raw_event_id = ?, data_source_id = ?, source_system = ?, external_id = ?, event_type = ?,
-                occurred_at = ?, actor = ?, asset_ref = ?, subject_type = ?, subject_ref = ?,
-                action = ?, result = ?, severity = ?, risk_score = ?,
-                normalized_json = cast(? as jsonb), extra_json = cast(? as jsonb),
-                dedup_key = ?, updated_at = now()
-            where id = ?
-            """, rawId, dataSourceId, record.sourceSystem(), record.externalId(), record.eventType(),
-            record.occurredAt(), record.actor(), record.assetRef(), record.subjectType(), record.subjectRef(),
-            record.action(), record.result(), record.severity(), record.riskScore(), record.normalizedJson(),
-            record.extraJson(), record.dedupKey(), id);
     }
 
     private void updateRawStatus(long rawId, String status, Long standardEventId) {

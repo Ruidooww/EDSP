@@ -218,9 +218,11 @@ git pull --ff-only origin master
 git merge --no-ff <stage-branch-name> -m "merge: <stage name>"
 ```
 
-## Merge Rules
+## Merge Procedure After Explicit User Approval
 
-After verification passes, merge the stage branch into `master` using `--no-ff`:
+This section is only allowed after explicit user merge approval.
+
+After verification, review, and explicit user merge approval, merge the stage branch into `master` using `--no-ff`:
 
 ```powershell
 git checkout master
@@ -436,72 +438,41 @@ Activation Gate must not:
 
 ## Next Recommended Stage
 
-The next recommended stage is:
+Follow `HANDOFF.md` for the current next-stage recommendation.
+
+Current recommendation:
 
 ```text
-Ingestion Plan Sync Once MVP
+Alerts MVP
 ```
 
 Goal:
 
 ```text
-active activation
-then manual sync once
-then read source data
-then write raw_events
-then write standard_events
-then record sync / ingestion run
-then do not generate alerts
+matched alert_decisions
+then create alerts
+then keep notifications disabled
 ```
 
-## Sync Once MVP Scope
-
-Sync Once MVP may implement:
+Alerts MVP may implement:
 
 ```text
-- active activation validation
-- manual sync-once API
-- JDBC source row reading
-- raw_events writing
-- standard_events writing
-- sync run / ingestion run recording
-- dedup_key idempotency
-- partial row failure handling
-- frontend sync result display
+- creating minimal alerts from matched alert_decisions
+- alert idempotency so one decision does not create duplicate alerts
+- alert list display and basic status display
+- clear UI wording that notifications are still disabled
 ```
 
-Sync Once MVP must not implement:
+Alerts MVP must not implement:
 
 ```text
-- scheduled sync
-- rule engine
-- alert_decisions
-- alerts
 - notifications
-- AI
-- XGBoost
-- Agent orchestration
+- AI / XGBoost / Agent orchestration
 - Kafka
 - Redis
 - ClickHouse
-```
-
-## Sync Once MVP Acceptance Criteria
-
-Sync Once MVP is complete only if:
-
-```text
-1. Only active activation can execute sync-once.
-2. Deactivated or missing activation cannot execute sync-once.
-3. Backend can read real JDBC source rows.
-4. raw_events are written.
-5. standard_events are written.
-6. sync run / ingestion run is recorded.
-7. Re-running the same source rows does not duplicate standard_events.
-8. Partial row failures produce warning, not total failure.
-9. No alert_decisions are created.
-10. No alerts are created.
-11. Frontend can display sync result.
+- bypassing raw_events / standard_events / alert_decisions to create alerts directly
+- combining collection, rules, alerts, notifications, and AI in one stage
 ```
 
 ## Final Rule

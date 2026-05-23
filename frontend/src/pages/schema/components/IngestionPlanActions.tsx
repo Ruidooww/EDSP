@@ -1,4 +1,4 @@
-import { SafetyCertificateOutlined } from '@ant-design/icons';
+import { FileSearchOutlined, PlayCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { Button, Space } from 'antd';
 import type { IngestionPlanRow } from '../../../types';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
@@ -10,6 +10,8 @@ interface IngestionPlanActionsProps {
   onViewReason: (row: IngestionPlanRow) => void;
   onUpdateStatus: (row: IngestionPlanRow, status: string, successText: string) => void;
   onShadowValidate: (row: IngestionPlanRow) => void;
+  onShadowRun: (row: IngestionPlanRow) => void;
+  onViewShadowReport: (row: IngestionPlanRow) => void;
 }
 
 export default function IngestionPlanActions({
@@ -19,6 +21,8 @@ export default function IngestionPlanActions({
   onViewReason,
   onUpdateStatus,
   onShadowValidate,
+  onShadowRun,
+  onViewShadowReport,
 }: IngestionPlanActionsProps) {
   const status = plan.status;
   const canReview = status === 'suggested';
@@ -26,6 +30,7 @@ export default function IngestionPlanActions({
   const canReject = status === 'suggested' || status === 'review_required';
   const canPrepareShadow = status === 'approved';
   const canShadowValidate = status === 'approved' || status === 'shadow_ready';
+  const canShadowRun = status === 'approved' || status === 'shadow_ready';
   const canDiscard = status === 'approved' || status === 'shadow_ready';
 
   return (
@@ -51,6 +56,16 @@ export default function IngestionPlanActions({
       {canShadowValidate && (
         <Button size="small" icon={<SafetyCertificateOutlined />} loading={busy} onClick={() => onShadowValidate(row)}>
           试运行前校验 / Shadow Precheck
+        </Button>
+      )}
+      {canShadowRun && (
+        <Button size="small" icon={<PlayCircleOutlined />} loading={busy} onClick={() => onShadowRun(row)}>
+          执行试运行
+        </Button>
+      )}
+      {canShadowRun && (
+        <Button size="small" icon={<FileSearchOutlined />} loading={busy} onClick={() => onViewShadowReport(row)}>
+          查看试运行报告
         </Button>
       )}
       {canReject && (

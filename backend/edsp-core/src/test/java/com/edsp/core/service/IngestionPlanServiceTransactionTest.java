@@ -224,9 +224,19 @@ class IngestionPlanServiceTransactionTest {
             ObjectMapper objectMapper,
             CoreRequestSupport support,
             SemanticProfilerService profiler,
-            TemplateMatcherService matcher
+            TemplateMatcherService matcher,
+            IngestionPlanPrecheckService precheckService
         ) {
-            return new IngestionPlanService(jdbcTemplate, objectMapper, support, profiler, matcher);
+            return new IngestionPlanService(jdbcTemplate, objectMapper, support, profiler, matcher, precheckService);
+        }
+
+        @Bean
+        IngestionPlanPrecheckService precheckService(
+            JdbcTemplate jdbcTemplate,
+            ObjectMapper objectMapper,
+            CoreRequestSupport support
+        ) {
+            return new IngestionPlanPrecheckService(jdbcTemplate, objectMapper, support);
         }
     }
 }

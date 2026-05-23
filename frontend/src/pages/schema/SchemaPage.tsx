@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../../api';
 import type {
   DataSourceRow,
+  IngestionPlanActivationRow,
   IngestionPlanRow,
   IngestionPlanShadowRunRow,
   IngestionPlanShadowValidationReport,
@@ -31,6 +32,12 @@ import {
   PLAN_STATUS_FILTER_VALUES,
   STANDARD_FIELD_LABELS,
 } from './utils/ingestionPlanLabels';
+import {
+  canActivatePlan,
+  findActiveActivation,
+  getActivationPlanId,
+  getShadowRunId,
+} from './utils/ingestionPlanActivation';
 import { normalizePlan } from './utils/normalizeIngestionPlan';
 
 interface SchemaMappingRow {
@@ -235,6 +242,8 @@ export default function SchemaPage() {
   const [shadowRunPlan, setShadowRunPlan] = useState<IngestionPlanRow | null>(null);
   const [shadowRunReport, setShadowRunReport] = useState<IngestionPlanShadowRunRow | null>(null);
   const [shadowRunsByPlanId, setShadowRunsByPlanId] = useState<Record<number, IngestionPlanShadowRunRow>>({});
+  const [latestShadowRunsByPlanId, setLatestShadowRunsByPlanId] = useState<Record<number, IngestionPlanShadowRunRow | null>>({});
+  const [activationsByPlanId, setActivationsByPlanId] = useState<Record<number, IngestionPlanActivationRow | null>>({});
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
@@ -283,6 +292,23 @@ export default function SchemaPage() {
     void load();
   }, []);
 
+  async function loadPlanRuntimeState(planRows: IngestionPlanRow[]) {
+    const entries = await Promise.all(planRows.map(async (row) => {
+      const [activations, shadowRuns] = await Promise.all([
+        apiGet<IngestionPlanActivationRow[]>(`/api/core/ingestion-plans/${row.id}/activations?limit=10`).catch(() => []),
+        apiGet<IngestionPlanShadowRunRow[]>(`/api/core/ingestion-plans/${row.id}/shadow-runs?limit=1`).catch(() => []),
+      ]);
+      return {
+        planId: row.id,
+        activation: findActiveActivation(activations),
+        latestShadowRun: shadowRuns[0] ?? null,
+      };
+    }));
+
+    setActivationsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.activation])));
+    setLatestShadowRunsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.latestShadowRun])));
+  }
+
   async function loadPlans(sourceId = planSourceId, status = planStatusFilter) {
     setPlanLoading(true);
     try {
@@ -294,9 +320,13 @@ export default function SchemaPage() {
         params.set('status', status);
       }
       const query = params.toString();
-      setPlans(await apiGet<IngestionPlanRow[]>(`/api/core/ingestion-plans${query ? `?${query}` : ''}`));
+      const planRows = await apiGet<IngestionPlanRow[]>(`/api/core/ingestion-plans${query ? `?${query}` : ''}`);
+      setPlans(planRows);
+      await loadPlanRuntimeState(planRows);
     } catch {
       setPlans([]);
+      setActivationsByPlanId({});
+      setLatestShadowRunsByPlanId({});
     } finally {
       setPlanLoading(false);
     }
@@ -436,6 +466,7 @@ export default function SchemaPage() {
         sampleLimit: 50,
       });
       setShadowRunsByPlanId((current) => ({ ...current, [row.id]: run }));
+      setLatestShadowRunsByPlanId((current) => ({ ...current, [row.id]: run }));
       setShadowRunPlan(row);
       setShadowRunReport(run);
       if (run.status === 'failed' || run.status === 'blocked') {
@@ -467,6 +498,7 @@ export default function SchemaPage() {
       }
       const detail = await apiGet<IngestionPlanShadowRunRow>(`/api/core/ingestion-plan-shadow-runs/${latestRun.id}`);
       setShadowRunsByPlanId((current) => ({ ...current, [row.id]: detail }));
+      setLatestShadowRunsByPlanId((current) => ({ ...current, [row.id]: detail }));
       setShadowRunPlan(row);
       setShadowRunReport(detail);
     } catch (error) {
@@ -474,6 +506,70 @@ export default function SchemaPage() {
     } finally {
       setPlanActionId(null);
     }
+  }
+
+  function activatePlan(row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) {
+    const currentActivation = activationsByPlanId[row.id];
+    const planStatus = normalizePlan(row).status;
+    const shadowRunId = getShadowRunId(latestShadowRun);
+    if (!shadowRunId || !canActivatePlan(planStatus, latestShadowRun, currentActivation)) {
+      message.warning('只有最新 Shadow Run status 为 passed，且方案状态为 approved 或 shadow_ready 时才允许启用');
+      return;
+    }
+
+    Modal.confirm({
+      title: '启用方案',
+      content: (
+        <div>
+          <p>将基于 Shadow Run #{shadowRunId} 启用当前推荐接入方案。</p>
+          <p>启用后仅生成启用审计记录，不会立即采集数据或产生告警。</p>
+        </div>
+      ),
+      okText: '启用方案',
+      cancelText: '取消',
+      onOk: async () => {
+        setPlanActionId(row.id);
+        try {
+          await apiPost<IngestionPlanActivationRow>(`/api/core/ingestion-plans/${row.id}/activations`, {
+            shadowRunId,
+            operatorName: 'admin',
+            reason: 'Activation gate confirmed in frontend',
+          });
+          message.success('方案已启用，仅生成启用审计记录');
+          await loadPlans();
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '方案启用失败');
+        } finally {
+          setPlanActionId(null);
+        }
+      },
+    });
+  }
+
+  function deactivatePlan(activation: IngestionPlanActivationRow) {
+    const planId = getActivationPlanId(activation);
+    Modal.confirm({
+      title: '停用方案',
+      content: '停用只会调用 deactivate 接口，不会修改 Precheck / Shadow Run / 状态机。',
+      okText: '停用',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setPlanActionId(planId ?? null);
+        try {
+          await apiPost<IngestionPlanActivationRow>(`/api/core/ingestion-plan-activations/${activation.id}/deactivate`, {
+            operatorName: 'admin',
+            reason: 'Deactivated in frontend',
+          });
+          message.success('方案已停用');
+          await loadPlans();
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '方案停用失败');
+        } finally {
+          setPlanActionId(null);
+        }
+      },
+    });
   }
 
   function confirmPendingChanges() {
@@ -795,6 +891,8 @@ export default function SchemaPage() {
         sourceId={planSourceId}
         status={planStatusFilter}
         rows={planViewRows}
+        activationsByPlanId={activationsByPlanId}
+        latestShadowRunsByPlanId={latestShadowRunsByPlanId}
         loading={planLoading}
         generating={planGenerating}
         actionId={planActionId}
@@ -808,6 +906,8 @@ export default function SchemaPage() {
         onShadowValidate={shadowValidatePlan}
         onShadowRun={executeShadowRun}
         onViewShadowReport={viewShadowRunReport}
+        onActivate={activatePlan}
+        onDeactivate={deactivatePlan}
       />
 
       <Card className="ops-card" title="扫描运行记录">

@@ -1,5 +1,5 @@
-import { Descriptions, Space, Typography } from 'antd';
-import type { IngestionPlanRow } from '../../../types';
+import { Alert, Descriptions, Space, Tag, Typography } from 'antd';
+import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
 import {
   formatConfidence,
   planStatusTag,
@@ -7,6 +7,14 @@ import {
   renderWrappedTag,
   STANDARD_FIELD_LABELS,
 } from '../utils/ingestionPlanLabels';
+import {
+  canActivatePlan,
+  getActivationOperator,
+  getActivationShadowRunId,
+  getActivationStatus,
+  getActivationTime,
+  getShadowRunStatus,
+} from '../utils/ingestionPlanActivation';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanActions from './IngestionPlanActions';
 import IngestionPlanDetailSection from './IngestionPlanDetailSection';
@@ -14,6 +22,8 @@ import IngestionPlanDetailSection from './IngestionPlanDetailSection';
 interface IngestionPlanPanelProps {
   row: IngestionPlanRow;
   plan: NormalizedIngestionPlan;
+  activation?: IngestionPlanActivationRow | null;
+  latestShadowRun?: IngestionPlanShadowRunRow | null;
   busy: boolean;
   formatTime: (value?: string | number) => string;
   onViewReason: (row: IngestionPlanRow) => void;
@@ -21,11 +31,15 @@ interface IngestionPlanPanelProps {
   onShadowValidate: (row: IngestionPlanRow) => void;
   onShadowRun: (row: IngestionPlanRow) => void;
   onViewShadowReport: (row: IngestionPlanRow) => void;
+  onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
+  onDeactivate: (activation: IngestionPlanActivationRow) => void;
 }
 
 export default function IngestionPlanPanel({
   row,
   plan,
+  activation,
+  latestShadowRun,
   busy,
   formatTime,
   onViewReason,
@@ -33,7 +47,22 @@ export default function IngestionPlanPanel({
   onShadowValidate,
   onShadowRun,
   onViewShadowReport,
+  onActivate,
+  onDeactivate,
 }: IngestionPlanPanelProps) {
+  const activationStatus = getActivationStatus(activation);
+  const activationShadowRunId = getActivationShadowRunId(activation);
+  const activationOperator = getActivationOperator(activation);
+  const activationTime = getActivationTime(activation);
+  const latestShadowRunStatus = getShadowRunStatus(latestShadowRun);
+  const isActive = activationStatus === 'active';
+  const canActivate = canActivatePlan(plan.status, latestShadowRun, activation);
+  const activationHint = isActive
+    ? '当前方案已启用。停用只会调用停用接口，不会变更 Precheck / Shadow Run / 状态机。'
+    : canActivate
+      ? '最新 Shadow Run 已通过。启用后仅生成启用审计记录，不会立即采集数据或产生告警。'
+      : '未启用。只有最新 Shadow Run status 为 passed，且方案状态为 approved 或 shadow_ready 时才允许启用。';
+
   return (
     <div
       style={{
@@ -61,12 +90,16 @@ export default function IngestionPlanPanel({
           <IngestionPlanActions
             row={row}
             plan={plan}
+            activation={activation}
+            latestShadowRun={latestShadowRun}
             busy={busy}
             onViewReason={onViewReason}
             onUpdateStatus={onUpdateStatus}
             onShadowValidate={onShadowValidate}
             onShadowRun={onShadowRun}
             onViewShadowReport={onViewShadowReport}
+            onActivate={onActivate}
+            onDeactivate={onDeactivate}
           />
         </div>
       </div>
@@ -91,7 +124,19 @@ export default function IngestionPlanPanel({
         <Descriptions.Item label="生成版本">{plan.generationVersion}</Descriptions.Item>
         <Descriptions.Item label="生成时间">{formatTime(plan.generatedAt)}</Descriptions.Item>
         <Descriptions.Item label="当前状态">{planStatusTag(plan.status)}</Descriptions.Item>
+        <Descriptions.Item label="启用状态">{isActive ? <Tag color="success">已启用</Tag> : <Tag>未启用</Tag>}</Descriptions.Item>
+        <Descriptions.Item label="启用人">{activationOperator || '-'}</Descriptions.Item>
+        <Descriptions.Item label="启用时间">{formatTime(activationTime)}</Descriptions.Item>
+        <Descriptions.Item label="关联 shadowRunId">{activationShadowRunId ? `#${activationShadowRunId}` : '-'}</Descriptions.Item>
+        <Descriptions.Item label="最新 Shadow Run">{latestShadowRunStatus || '-'}</Descriptions.Item>
       </Descriptions>
+
+      <Alert
+        showIcon
+        type={isActive ? 'success' : canActivate ? 'info' : 'warning'}
+        message={isActive ? '方案已启用' : '方案未启用'}
+        description={activationHint}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
         <IngestionPlanDetailSection title="字段映射">

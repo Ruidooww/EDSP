@@ -17,25 +17,53 @@ public class StandardEventDedupService {
     }
 
     public Long findExistingStandardEventId(String dedupKey, String sourceSystem, String externalId) {
+        return findExistingStandardEventId(dedupKey, null, sourceSystem, externalId);
+    }
+
+    public Long findExistingStandardEventId(String dedupKey, Long dataSourceId, String sourceSystem, String externalId) {
         var rows = dedupKey == null || dedupKey.isBlank()
             ? List.<Map<String, Object>>of()
-            : jdbcTemplate.queryForList("""
+            : dedupRows(dedupKey, dataSourceId);
+        if (rows.isEmpty() && externalId != null) {
+            rows = externalRows(dataSourceId, sourceSystem, externalId);
+        }
+        if (rows.isEmpty()) {
+            return null;
+        }
+        return support.number(rows.get(0).get("id"));
+    }
+
+    private List<Map<String, Object>> dedupRows(String dedupKey, Long dataSourceId) {
+        if (dataSourceId == null) {
+            return jdbcTemplate.queryForList("""
                 select id
                 from standard_events
                 where dedup_key = ?
                 limit 1
                 """, dedupKey);
-        if (rows.isEmpty() && externalId != null) {
-            rows = jdbcTemplate.queryForList("""
+        }
+        return jdbcTemplate.queryForList("""
+            select id
+            from standard_events
+            where data_source_id = ? and dedup_key = ?
+            limit 1
+            """, dataSourceId, dedupKey);
+    }
+
+    private List<Map<String, Object>> externalRows(Long dataSourceId, String sourceSystem, String externalId) {
+        if (dataSourceId == null) {
+            return jdbcTemplate.queryForList("""
                 select id
                 from standard_events
                 where source_system = ? and external_id = ?
                 limit 1
                 """, sourceSystem, externalId);
         }
-        if (rows.isEmpty()) {
-            return null;
-        }
-        return support.number(rows.get(0).get("id"));
+        return jdbcTemplate.queryForList("""
+            select id
+            from standard_events
+            where data_source_id = ? and source_system = ? and external_id = ?
+            limit 1
+            """, dataSourceId, sourceSystem, externalId);
     }
 }

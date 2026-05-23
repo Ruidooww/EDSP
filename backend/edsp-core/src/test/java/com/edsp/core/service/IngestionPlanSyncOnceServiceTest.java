@@ -1,6 +1,7 @@
 package com.edsp.core.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -205,6 +206,93 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     @Test
+    void syncOnceNamespacesDedupKeysByDataSourceAndTable() {
+        var firstDataSourceId = insertDataSource();
+        var firstScanRunId = insertCompleteScan(firstDataSourceId);
+        var firstTableId = insertTable(firstDataSourceId, firstScanRunId);
+        insertDefaultFields(firstTableId, firstScanRunId);
+        var firstPlanId = insertPlan(firstDataSourceId, firstScanRunId, firstTableId);
+        var firstShadowRunId = insertShadowRun(firstPlanId, firstDataSourceId, "passed");
+        var firstActivationId = insertActivation(firstPlanId, firstDataSourceId, firstShadowRunId, "active");
+
+        var secondDataSourceId = insertDataSource();
+        var secondScanRunId = insertCompleteScan(secondDataSourceId);
+        var secondTableId = insertTable(secondDataSourceId, secondScanRunId);
+        insertDefaultFields(secondTableId, secondScanRunId);
+        var secondPlanId = insertPlan(secondDataSourceId, secondScanRunId, secondTableId);
+        var secondShadowRunId = insertShadowRun(secondPlanId, secondDataSourceId, "passed");
+        var secondActivationId = insertActivation(secondPlanId, secondDataSourceId, secondShadowRunId, "active");
+
+        service.syncOnce(firstActivationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+        var second = service.syncOnce(secondActivationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", second.get("status"));
+        assertEquals(0, intValue(second.get("duplicateCount")));
+        assertEquals(4L, count("raw_events"));
+        assertEquals(4L, count("standard_events"));
+        assertEquals(2L, countWhere("standard_events", "external_id = 'ALERT-1'"));
+    }
+
+    @Test
+    void syncOnceNamespacesDedupKeysByTableInSameDataSource() throws Exception {
+        executeSourceSql("""
+            create table sec_alert_event_copy as
+            select * from sec_alert_event
+            """);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var firstTableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(firstTableId, scanRunId);
+        var firstPlanId = insertPlan(dataSourceId, scanRunId, firstTableId);
+        var firstShadowRunId = insertShadowRun(firstPlanId, dataSourceId, "passed");
+        var firstActivationId = insertActivation(firstPlanId, dataSourceId, firstShadowRunId, "active");
+
+        var secondTableId = insertTable(dataSourceId, scanRunId, "sec_alert_event_copy");
+        insertDefaultFields(secondTableId, scanRunId);
+        var secondPlanId = insertPlan(dataSourceId, scanRunId, secondTableId, planJson("sec_alert_event_copy", secondTableId));
+        var secondShadowRunId = insertShadowRun(secondPlanId, dataSourceId, "passed");
+        var secondActivationId = insertActivation(secondPlanId, dataSourceId, secondShadowRunId, "active");
+
+        service.syncOnce(firstActivationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+        var second = service.syncOnce(secondActivationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", second.get("status"));
+        assertEquals(0, intValue(second.get("duplicateCount")));
+        assertEquals(4L, count("raw_events"));
+        assertEquals(4L, count("standard_events"));
+        assertEquals(2L, countWhere("standard_events", "external_id = 'ALERT-1'"));
+    }
+
+    @Test
+    void syncOnceKeepsFullSourceRowOnlyInRawEventPayload() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        var normalized = objectValue(jdbcTemplate.queryForObject(
+            "select normalized_json from standard_events where external_id = 'ALERT-1'",
+            Object.class
+        ));
+        assertEquals("sec_alert_event", normalized.get("sourceTable"));
+        assertTrue(objectValue(normalized.get("mapped")).containsKey("externalId"));
+        assertFalse(normalized.containsKey("source"));
+
+        var rawPayload = objectValue(jdbcTemplate.queryForObject(
+            "select payload_json from raw_events where external_id = 'ALERT-1'",
+            Object.class
+        ));
+        var rawFields = objectValue(rawPayload.get("fields"));
+        assertEquals("Sensitive file export", rawFields.get("event_name"));
+        assertEquals("WIN-01", rawFields.get("host_name"));
+    }
+
+    @Test
     void syncOnceRejectsActivationWhenDataSourceDoesNotMatchPlanBeforeWritingRuns() {
         var dataSourceId = insertDataSource();
         var otherDataSourceId = insertDataSource();
@@ -225,6 +313,113 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(0L, count("ingestion_runs"));
         assertEquals(0L, count("raw_events"));
         assertEquals(0L, count("standard_events"));
+    }
+
+    @Test
+    void syncOnceRecordsMissingSourceTableAsBlockedRun() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        jdbcTemplate.update("update schema_tables set lifecycle_status = 'inactive' where id = ?", tableId);
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("blocked", result.get("status"));
+        assertEquals(1L, count("ingestion_plan_sync_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("source_table_missing")));
+    }
+
+    @Test
+    void syncOnceRecordsMissingSourceFieldAsBlockedRun() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        jdbcTemplate.update("""
+            update schema_fields
+            set lifecycle_status = 'inactive'
+            where schema_table_id = ? and field_name = 'risk_level'
+            """, tableId);
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("blocked", result.get("status"));
+        assertEquals(1L, count("ingestion_plan_sync_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("source_fields_missing")));
+    }
+
+    @Test
+    void syncOnceRecordsMissingPhysicalSourceTableAsBlockedRun() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "missing_source_table");
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId, planJson("missing_source_table", tableId));
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("blocked", result.get("status"));
+        assertEquals(1L, count("ingestion_plan_sync_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("source_table_missing")));
+    }
+
+    @Test
+    void syncOnceRecordsMissingPhysicalSourceFieldAsBlockedRun() throws Exception {
+        executeSourceSql("""
+            create table sec_alert_event_missing_field as
+            select id, event_name, create_time, user_account, host_name
+            from sec_alert_event
+            """);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event_missing_field");
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId, planJson("sec_alert_event_missing_field", tableId));
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("blocked", result.get("status"));
+        assertEquals(1L, count("ingestion_plan_sync_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("source_fields_missing")));
     }
 
     @Test
@@ -261,6 +456,87 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("invalid_time_format")));
         var listed = service.listByPlan(planId, 5);
         assertTrue(stringList(objectValue(listed.get(0).get("report")).get("warnings")).contains("partial_row_failure"));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void syncOnceDoesNotOverwriteExistingStandardEventWhenDuplicateRowChanges() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+        executeSourceSql("update sec_alert_event set user_account = 'changed-user' where id = 'ALERT-1'");
+
+        var second = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", second.get("status"));
+        assertEquals(2, intValue(second.get("duplicateCount")));
+        assertEquals("zhangsan", jdbcTemplate.queryForObject(
+            "select actor from standard_events where external_id = 'ALERT-1'",
+            String.class
+        ));
+        assertEquals(2L, countWhere("raw_events", "external_id = 'ALERT-1' and status = 'standardized'"));
+        assertEquals(1L, countWhere("standard_events", "external_id = 'ALERT-1'"));
+    }
+
+    @Test
+    void syncOnceRecordsMissingDedupFieldAsWarningWithoutStandardEvent() throws Exception {
+        executeSourceSql("update sec_alert_event set id = null where id = 'ALERT-2'");
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(1, intValue(result.get("failedCount")));
+        assertEquals(2L, count("raw_events"));
+        assertEquals(1L, count("standard_events"));
+        assertEquals(1L, countWhere("raw_events", "status = 'standardize_failed'"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("dedup_key_missing")));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void syncOnceRecordsUnrecognizedSeverityAsWarningWithoutStandardEvent() throws Exception {
+        executeSourceSql("update sec_alert_event set risk_level = 'unknown_level' where id = 'ALERT-2'");
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(1, intValue(result.get("failedCount")));
+        assertEquals(2L, count("raw_events"));
+        assertEquals(1L, count("standard_events"));
+        assertEquals(1L, countWhere("raw_events", "status = 'standardize_failed'"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("severity_unrecognized")));
         assertEquals(0L, count("alert_decisions"));
         assertEquals(0L, count("alerts"));
     }
@@ -314,12 +590,16 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     private Long insertTable(Long dataSourceId, Long scanRunId) {
+        return insertTable(dataSourceId, scanRunId, "sec_alert_event");
+    }
+
+    private Long insertTable(Long dataSourceId, Long scanRunId, String tableName) {
         jdbcTemplate.update("""
             insert into schema_tables(
                 data_source_id, scan_run_id, schema_name, table_name, category, confirmation_status, lifecycle_status
             )
-            values (?, ?, 'public', 'sec_alert_event', 'alert_table', 'confirmed', 'active')
-            """, dataSourceId, scanRunId);
+            values (?, ?, 'public', ?, 'alert_table', 'confirmed', 'active')
+            """, dataSourceId, scanRunId, tableName);
         return lastId("schema_tables");
     }
 
@@ -377,15 +657,23 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     private String planJson(Long tableId) {
-        return planJsonWithDedupFields(tableId, "[\"id\"]");
+        return planJson("sec_alert_event", tableId);
+    }
+
+    private String planJson(String tableName, Long tableId) {
+        return planJsonWithDedupFields(tableName, tableId, "[\"id\"]");
     }
 
     private String planJsonWithDedupFields(Long tableId, String dedupFieldsJson) {
+        return planJsonWithDedupFields("sec_alert_event", tableId, dedupFieldsJson);
+    }
+
+    private String planJsonWithDedupFields(String tableName, Long tableId, String dedupFieldsJson) {
         return """
             {
               "version": "ingestion-plan-v1",
               "mode": "database_polling",
-              "mainTable": "sec_alert_event",
+              "mainTable": "%s",
               "schemaTableId": %d,
               "cursorField": "create_time",
               "fieldMappings": {
@@ -401,11 +689,15 @@ class IngestionPlanSyncOnceServiceTest {
               "risks": [],
               "requiredFieldsMissing": []
             }
-            """.formatted(tableId, dedupFieldsJson);
+            """.formatted(tableName, tableId, dedupFieldsJson);
     }
 
     private Long count(String tableName) {
         return jdbcTemplate.queryForObject("select count(*) from " + tableName, Long.class);
+    }
+
+    private Long countWhere(String tableName, String whereClause) {
+        return jdbcTemplate.queryForObject("select count(*) from " + tableName + " where " + whereClause, Long.class);
     }
 
     private Long lastId(String tableName) {

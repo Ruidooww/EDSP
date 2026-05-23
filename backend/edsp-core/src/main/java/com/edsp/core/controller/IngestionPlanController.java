@@ -9,6 +9,7 @@ import com.edsp.core.dto.IngestionPlanStatusRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanShadowRunService;
 import com.edsp.core.service.IngestionPlanService;
+import com.edsp.core.service.IngestionPlanSyncOnceService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -27,15 +28,18 @@ public class IngestionPlanController {
     private final IngestionPlanService ingestionPlanService;
     private final IngestionPlanShadowRunService shadowRunService;
     private final IngestionPlanActivationService activationService;
+    private final IngestionPlanSyncOnceService syncOnceService;
 
     public IngestionPlanController(
         IngestionPlanService ingestionPlanService,
         IngestionPlanShadowRunService shadowRunService,
-        IngestionPlanActivationService activationService
+        IngestionPlanActivationService activationService,
+        IngestionPlanSyncOnceService syncOnceService
     ) {
         this.ingestionPlanService = ingestionPlanService;
         this.shadowRunService = shadowRunService;
         this.activationService = activationService;
+        this.syncOnceService = syncOnceService;
     }
 
     @GetMapping
@@ -97,5 +101,13 @@ public class IngestionPlanController {
         @RequestParam(name = "limit", defaultValue = "10") int limit
     ) {
         return ApiResponse.ok(activationService.list(id, limit));
+    }
+
+    @GetMapping("/{id}/sync-runs")
+    public ApiResponse<List<Map<String, Object>>> syncRuns(
+        @PathVariable("id") long id,
+        @RequestParam(name = "limit", defaultValue = "5") int limit
+    ) {
+        return ApiResponse.ok(syncOnceService.listByPlan(id, limit));
     }
 }

@@ -261,7 +261,7 @@ public class IngestionPlanService {
         plan.put("fieldMappings", fieldMappingObject(fieldMappings));
         plan.put("fieldMappingDetails", fieldMappings);
         plan.put("fieldEvidence", fieldEvidence);
-        plan.put("templateMatch", templateMatch(templateMatch));
+        plan.put("templateMatch", templateMatch(templateMatch, mappedStandards));
         plan.put("syncStrategy", syncStrategy(cursorField));
         plan.put("risks", risks);
         plan.put("requiredFieldsMissing", requiredFieldsMissing);
@@ -372,7 +372,10 @@ public class IngestionPlanService {
         return strategy;
     }
 
-    private Map<String, Object> templateMatch(TemplateMatcherService.TemplateMatch templateMatch) {
+    private Map<String, Object> templateMatch(
+        TemplateMatcherService.TemplateMatch templateMatch,
+        Set<String> mappedStandards
+    ) {
         var match = new LinkedHashMap<String, Object>();
         match.put("templateKey", templateMatch.templateKey());
         match.put("templateName", templateMatch.templateName());
@@ -380,9 +383,35 @@ public class IngestionPlanService {
         match.put("matchedBy", templateMatch.matchedBy());
         match.put("mainPlanCandidate", templateMatch.mainPlanCandidate());
         match.put("matchedSignals", templateMatch.matchedSignals());
-        match.put("missingSignals", templateMatch.missingSignals());
+        match.put("missingSignals", unresolvedMissingSignals(templateMatch.missingSignals(), mappedStandards));
+        match.put("signalEvidence", templateMatch.signalEvidence());
         match.put("reason", templateMatch.reason());
         return match;
+    }
+
+    private List<String> unresolvedMissingSignals(List<String> missingSignals, Set<String> mappedStandards) {
+        if (mappedStandards.isEmpty()) {
+            return missingSignals;
+        }
+        var coveredSignals = mappedStandards.stream()
+            .map(this::signalForStandardField)
+            .filter(signal -> signal != null && !signal.isBlank())
+            .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll);
+        return missingSignals.stream()
+            .filter(signal -> !coveredSignals.contains(signal))
+            .toList();
+    }
+
+    private String signalForStandardField(String standardField) {
+        return switch (standardField) {
+            case "externalId", "external_id" -> "external_id";
+            case "occurredAt", "occurred_at" -> "occurred_at";
+            case "assetRef", "asset_ref" -> "asset_ref";
+            case "subjectRef", "subject_ref" -> "subject_ref";
+            case "policyName", "policy_name" -> "policy_name";
+            case "severity", "actor", "title", "result" -> standardField;
+            default -> null;
+        };
     }
 
     private Map<String, Object> fieldMappingObject(List<Map<String, Object>> fieldMappings) {

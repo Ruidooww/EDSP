@@ -329,6 +329,33 @@ export interface IngestionPlanFieldEvidence {
   explanation?: string;
 }
 
+export interface IngestionPlanSignalEvidence {
+  signal: string;
+  sourceFields: Array<string | number> | string;
+  source_fields?: Array<string | number> | string;
+  source: string;
+}
+
+export interface IngestionPlanTemplateMatch {
+  templateKey?: string;
+  template_key?: string;
+  templateName?: string;
+  template_name?: string;
+  confidence?: number | string;
+  matchedBy?: string;
+  matched_by?: string;
+  mainPlanCandidate?: boolean;
+  main_plan_candidate?: boolean;
+  matchedSignals?: Array<string | number>;
+  matched_signals?: Array<string | number>;
+  missingSignals?: Array<string | number>;
+  missing_signals?: Array<string | number>;
+  signalEvidence?: IngestionPlanSignalEvidence[] | Record<string, IngestionPlanSignalEvidence>;
+  signal_evidence?: IngestionPlanSignalEvidence[] | Record<string, IngestionPlanSignalEvidence>;
+  reason?: string;
+  [key: string]: unknown;
+}
+
 export interface IngestionPlanDedupStrategy {
   type?: string;
   fields?: Array<string | number>;
@@ -381,6 +408,8 @@ export interface IngestionPlanJson {
   explanation?: string;
   fieldEvidence?: Record<string, IngestionPlanFieldEvidence> | IngestionPlanFieldEvidence[];
   field_evidence?: Record<string, IngestionPlanFieldEvidence> | IngestionPlanFieldEvidence[];
+  templateMatch?: IngestionPlanTemplateMatch;
+  template_match?: IngestionPlanTemplateMatch;
   generationVersion?: string;
   generation_version?: string;
   generatedAt?: string | number;

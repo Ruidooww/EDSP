@@ -58,7 +58,8 @@ class IngestionPlanServiceTest {
         var support = new CoreRequestSupport(objectMapper);
         var profiler = new SemanticProfilerService(jdbcTemplate, support);
         var matcher = new TemplateMatcherService();
-        service = new IngestionPlanService(jdbcTemplate, objectMapper, support, profiler, matcher);
+        var precheckService = new IngestionPlanPrecheckService(jdbcTemplate, objectMapper, support);
+        service = new IngestionPlanService(jdbcTemplate, objectMapper, support, profiler, matcher, precheckService);
     }
 
     @Test
@@ -180,6 +181,26 @@ class IngestionPlanServiceTest {
         var plan = onlyPlanJson();
         assertEquals("insufficient_coverage", plan.path("recommendedAction").asText());
         assertTrue(jsonTextList(plan.path("risks")).contains("limited_scan"));
+    }
+
+    @Test
+    void generateMarksMissingScanRunAsCoverageUnknownManualReview() throws Exception {
+        var dataSourceId = insertDataSource();
+        var alertTableId = insertTable(dataSourceId, null, "SEC_ALERT_EVENT", "alert_table");
+        insertField(alertTableId, null, "ID", "varchar", "ALERT-1", 1, null, 72);
+        insertField(alertTableId, null, "CREATE_TIME", "timestamp", "2026-05-20 10:30:00", 2, null, 80);
+        insertField(alertTableId, null, "USER_ACCOUNT", "varchar", "zhangsan", 3, null, 70);
+        insertField(alertTableId, null, "HOST_NAME", "varchar", "WIN-01", 4, null, 70);
+        insertField(alertTableId, null, "SEVERITY", "varchar", "high", 5, null, 65);
+
+        service.generate(new IngestionPlanGenerateRequest(dataSourceId, null));
+
+        assertEquals("review_required", jdbcTemplate.queryForObject("select status from ingestion_plans", String.class));
+        var plan = onlyPlanJson();
+        assertEquals(50, plan.path("coverageConfidence").asInt());
+        assertEquals("manual_review", plan.path("recommendedAction").asText());
+        assertTrue(jsonTextList(plan.path("risks")).contains("coverage_unknown"));
+        assertFalse(jsonTextList(plan.path("risks")).contains("limited_scan"));
     }
 
     @Test
@@ -497,6 +518,41 @@ class IngestionPlanServiceTest {
         assertEquals("Shadow Precheck requires shadowOnly=true and enabled=false.", checkMessage(checks, "sync_guard"));
         assertFalse(checks.stream().anyMatch(check ->
             String.valueOf(check.get("message")).toLowerCase().contains("shadow validation")
+        ));
+    }
+
+    @Test
+    void shadowValidateKeepsScalarPlanJsonCompatibilityAfterPrecheckSplit() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var alertTableId = insertTable(dataSourceId, scanRunId, "SEC_ALERT_EVENT", "alert_table");
+        insertField(alertTableId, scanRunId, "ID", "varchar", "ALERT-1", 1, null, 72);
+        insertField(alertTableId, scanRunId, "CREATE_TIME", "timestamp", "2026-05-20 10:30:00", 2, null, 80);
+        insertField(alertTableId, scanRunId, "EVENT_NAME", "varchar", "Sensitive file export", 3, null, 65);
+        service.generate(new IngestionPlanGenerateRequest(dataSourceId, scanRunId));
+        var planId = lastId("ingestion_plans");
+        service.updateStatus(planId, new IngestionPlanStatusRequest("approved"));
+
+        var plan = (ObjectNode) planJson(planId);
+        plan.put("risks", "coverage_unknown");
+        plan.put("requiredFieldsMissing", "dedup_key_source_insufficient");
+        plan.put("schemaTableId", " " + alertTableId + " ");
+        jdbcTemplate.update(
+            "update ingestion_plans set plan_json = cast(? as jsonb) where id = ?",
+            objectMapper.writeValueAsString(plan),
+            planId
+        );
+
+        var report = service.shadowValidate(planId, new IngestionPlanShadowValidationRequest(20));
+
+        assertEquals("blocked", report.get("result"));
+        assertTrue(objectList(report.get("checks")).stream().anyMatch(check ->
+            "required_fields".equals(check.get("code"))
+                && List.of("dedup_key_source_insufficient").equals(check.get("blockers"))
+        ));
+        assertTrue(((List<?>) report.get("warnings")).contains("coverage_unknown"));
+        assertFalse(objectList(report.get("checks")).stream().anyMatch(check ->
+            "source_table".equals(check.get("code")) && "failed".equals(check.get("result"))
         ));
     }
 

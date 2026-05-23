@@ -1,4 +1,9 @@
-import type { IngestionPlanActivationRow, IngestionPlanShadowRunRow, IngestionPlanSyncRunRow } from '../../../types';
+import type {
+  IngestionPlanActivationRow,
+  IngestionPlanShadowRunRow,
+  IngestionPlanSyncRunRow,
+  IngestionPlanSyncScheduleRow,
+} from '../../../types';
 
 export function getActivationStatus(activation?: IngestionPlanActivationRow | null) {
   return activation?.status;
@@ -46,6 +51,10 @@ export function getSyncRunStatus(run?: IngestionPlanSyncRunRow | null) {
   return run?.status;
 }
 
+export function getSyncRunTriggerType(run?: IngestionPlanSyncRunRow | null) {
+  return run?.triggerType ?? run?.trigger_type ?? run?.report?.triggerType;
+}
+
 export function getSyncRunMetric(
   run: IngestionPlanSyncRunRow | null | undefined,
   camelKey: keyof IngestionPlanSyncRunRow,
@@ -65,4 +74,39 @@ export function getSyncRunErrorMessage(run?: IngestionPlanSyncRunRow | null) {
 
 export function getSyncRunWarnings(run?: IngestionPlanSyncRunRow | null) {
   return run?.report?.warnings ?? [];
+}
+
+export function getSyncScheduleStatus(schedule?: IngestionPlanSyncScheduleRow | null) {
+  return schedule?.status;
+}
+
+export function getSyncScheduleActivationId(schedule?: IngestionPlanSyncScheduleRow | null) {
+  return schedule?.activationId ?? schedule?.activation_id;
+}
+
+export function getSyncScheduleMetric(
+  schedule: IngestionPlanSyncScheduleRow | null | undefined,
+  camelKey: keyof IngestionPlanSyncScheduleRow,
+  snakeKey: keyof IngestionPlanSyncScheduleRow,
+) {
+  const value = schedule?.[camelKey] ?? schedule?.[snakeKey];
+  return typeof value === 'number' ? value : 0;
+}
+
+export function getSyncScheduleTime(
+  schedule: IngestionPlanSyncScheduleRow | null | undefined,
+  camelKey: keyof IngestionPlanSyncScheduleRow,
+  snakeKey: keyof IngestionPlanSyncScheduleRow,
+) {
+  const value = schedule?.[camelKey] ?? schedule?.[snakeKey];
+  return typeof value === 'string' || typeof value === 'number' ? value : undefined;
+}
+
+export function getSyncScheduleText(
+  schedule: IngestionPlanSyncScheduleRow | null | undefined,
+  camelKey: keyof IngestionPlanSyncScheduleRow,
+  snakeKey: keyof IngestionPlanSyncScheduleRow,
+) {
+  const value = schedule?.[camelKey] ?? schedule?.[snakeKey];
+  return typeof value === 'string' ? value : undefined;
 }

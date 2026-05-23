@@ -9,7 +9,7 @@ import {
   TableOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Drawer, Form, Input, Modal, Select, Space, Statistic, Steps, Table, Tag, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Modal, Select, Space, Statistic, Steps, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../../api';
@@ -19,6 +19,7 @@ import type {
   IngestionPlanRow,
   IngestionPlanShadowRunRow,
   IngestionPlanSyncRunRow,
+  IngestionPlanSyncScheduleRow,
   IngestionPlanShadowValidationReport,
   SchemaChangeEventRow,
   SchemaFieldRow,
@@ -39,6 +40,7 @@ import {
   findActiveActivation,
   getActivationPlanId,
   getShadowRunId,
+  getSyncScheduleActivationId,
 } from './utils/ingestionPlanActivation';
 import { normalizePlan } from './utils/normalizeIngestionPlan';
 
@@ -55,6 +57,11 @@ interface MetadataCollectValues {
   tableName: string;
   category: string;
   samplePayload?: string;
+}
+
+interface SyncScheduleFormValues {
+  intervalSeconds: number;
+  sampleLimit: number;
 }
 
 interface SuggestedField {
@@ -247,6 +254,12 @@ export default function SchemaPage() {
   const [latestShadowRunsByPlanId, setLatestShadowRunsByPlanId] = useState<Record<number, IngestionPlanShadowRunRow | null>>({});
   const [activationsByPlanId, setActivationsByPlanId] = useState<Record<number, IngestionPlanActivationRow | null>>({});
   const [syncRunsByPlanId, setSyncRunsByPlanId] = useState<Record<number, IngestionPlanSyncRunRow[]>>({});
+  const [syncSchedulesByPlanId, setSyncSchedulesByPlanId] = useState<Record<number, IngestionPlanSyncScheduleRow | null>>({});
+  const [syncScheduleTarget, setSyncScheduleTarget] = useState<{
+    row: IngestionPlanRow;
+    activation: IngestionPlanActivationRow;
+    schedule?: IngestionPlanSyncScheduleRow | null;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
@@ -259,6 +272,7 @@ export default function SchemaPage() {
   const [planSourceId, setPlanSourceId] = useState<number | undefined>();
   const [planStatusFilter, setPlanStatusFilter] = useState<string | undefined>();
   const [collectForm] = Form.useForm<MetadataCollectValues>();
+  const [syncScheduleForm] = Form.useForm<SyncScheduleFormValues>();
   const collectMode = Form.useWatch('collectMode', collectForm) || 'auto_scan';
   const previewFields = FIELD_PRESETS[collectMode];
 
@@ -297,22 +311,28 @@ export default function SchemaPage() {
 
   async function loadPlanRuntimeState(planRows: IngestionPlanRow[]) {
     const entries = await Promise.all(planRows.map(async (row) => {
-      const [activations, shadowRuns, syncRuns] = await Promise.all([
+      const [activations, shadowRuns, syncRuns, syncSchedules] = await Promise.all([
         apiGet<IngestionPlanActivationRow[]>(`/api/core/ingestion-plans/${row.id}/activations?limit=10`).catch(() => []),
         apiGet<IngestionPlanShadowRunRow[]>(`/api/core/ingestion-plans/${row.id}/shadow-runs?limit=1`).catch(() => []),
         apiGet<IngestionPlanSyncRunRow[]>(`/api/core/ingestion-plans/${row.id}/sync-runs?limit=5`).catch(() => []),
+        apiGet<IngestionPlanSyncScheduleRow[]>(`/api/core/ingestion-plans/${row.id}/sync-schedules?limit=10`).catch(() => []),
       ]);
+      const activation = findActiveActivation(activations);
       return {
         planId: row.id,
-        activation: findActiveActivation(activations),
+        activation,
         latestShadowRun: shadowRuns[0] ?? null,
         syncRuns,
+        syncSchedule: activation
+          ? syncSchedules.find((schedule) => getSyncScheduleActivationId(schedule) === activation.id) ?? null
+          : null,
       };
     }));
 
     setActivationsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.activation])));
     setLatestShadowRunsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.latestShadowRun])));
     setSyncRunsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.syncRuns])));
+    setSyncSchedulesByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.syncSchedule])));
   }
 
   async function loadPlans(sourceId = planSourceId, status = planStatusFilter) {
@@ -334,6 +354,7 @@ export default function SchemaPage() {
       setActivationsByPlanId({});
       setLatestShadowRunsByPlanId({});
       setSyncRunsByPlanId({});
+      setSyncSchedulesByPlanId({});
     } finally {
       setPlanLoading(false);
     }
@@ -618,6 +639,104 @@ export default function SchemaPage() {
           }
         } catch (error) {
           message.error(error instanceof Error ? error.message : '手动同步失败');
+        } finally {
+          setPlanActionId(null);
+        }
+      },
+    });
+  }
+
+  function syncScheduleNumber(
+    schedule: IngestionPlanSyncScheduleRow | null | undefined,
+    camelKey: keyof IngestionPlanSyncScheduleRow,
+    snakeKey: keyof IngestionPlanSyncScheduleRow,
+    fallback: number,
+  ) {
+    const value = schedule?.[camelKey] ?? schedule?.[snakeKey];
+    return typeof value === 'number' ? value : fallback;
+  }
+
+  function openSyncScheduleConfig(
+    row: IngestionPlanRow,
+    activation: IngestionPlanActivationRow,
+    schedule?: IngestionPlanSyncScheduleRow | null,
+  ) {
+    if (!canSyncOnce(activation)) {
+      message.warning('只有 active activation 可以配置定时同步');
+      return;
+    }
+    syncScheduleForm.setFieldsValue({
+      intervalSeconds: syncScheduleNumber(schedule, 'intervalSeconds', 'interval_seconds', 300),
+      sampleLimit: syncScheduleNumber(schedule, 'sampleLimit', 'sample_limit', 50),
+    });
+    setSyncScheduleTarget({ row, activation, schedule });
+  }
+
+  async function saveSyncScheduleConfig() {
+    if (!syncScheduleTarget) {
+      return;
+    }
+    const values = await syncScheduleForm.validateFields();
+    const { row, activation, schedule } = syncScheduleTarget;
+    setPlanActionId(row.id);
+    try {
+      const payload = {
+        intervalSeconds: values.intervalSeconds,
+        sampleLimit: values.sampleLimit,
+        operatorName: 'admin',
+      };
+      const savedSchedule = schedule
+        ? await apiPut<IngestionPlanSyncScheduleRow>(`/api/core/ingestion-plan-sync-schedules/${schedule.id}`, payload)
+        : await apiPost<IngestionPlanSyncScheduleRow>(`/api/core/ingestion-plan-activations/${activation.id}/sync-schedules`, payload);
+      setSyncSchedulesByPlanId((current) => ({ ...current, [row.id]: savedSchedule }));
+      setSyncScheduleTarget(null);
+      message.success(schedule ? '定时同步配置已更新' : '定时同步已启用');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '定时同步配置失败');
+    } finally {
+      setPlanActionId(null);
+    }
+  }
+
+  function pauseSyncSchedule(row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) {
+    Modal.confirm({
+      title: '暂停定时同步',
+      content: '暂停后不会执行该 schedule；next_run_at 会保留，后续可恢复。',
+      okText: '暂停',
+      cancelText: '取消',
+      onOk: async () => {
+        setPlanActionId(row.id);
+        try {
+          const updated = await apiPost<IngestionPlanSyncScheduleRow>(`/api/core/ingestion-plan-sync-schedules/${schedule.id}/pause`, {
+            operatorName: 'admin',
+          });
+          setSyncSchedulesByPlanId((current) => ({ ...current, [row.id]: updated }));
+          message.success('定时同步已暂停');
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '定时同步暂停失败');
+        } finally {
+          setPlanActionId(null);
+        }
+      },
+    });
+  }
+
+  function resumeSyncSchedule(row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) {
+    Modal.confirm({
+      title: '恢复定时同步',
+      content: '恢复后 next_run_at 会设置为当前时间，轮询器会尽快执行一次。',
+      okText: '恢复',
+      cancelText: '取消',
+      onOk: async () => {
+        setPlanActionId(row.id);
+        try {
+          const updated = await apiPost<IngestionPlanSyncScheduleRow>(`/api/core/ingestion-plan-sync-schedules/${schedule.id}/resume`, {
+            operatorName: 'admin',
+          });
+          setSyncSchedulesByPlanId((current) => ({ ...current, [row.id]: updated }));
+          message.success('定时同步已恢复');
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '定时同步恢复失败');
         } finally {
           setPlanActionId(null);
         }
@@ -947,6 +1066,7 @@ export default function SchemaPage() {
         activationsByPlanId={activationsByPlanId}
         latestShadowRunsByPlanId={latestShadowRunsByPlanId}
         syncRunsByPlanId={syncRunsByPlanId}
+        syncSchedulesByPlanId={syncSchedulesByPlanId}
         loading={planLoading}
         generating={planGenerating}
         actionId={planActionId}
@@ -963,6 +1083,9 @@ export default function SchemaPage() {
         onActivate={activatePlan}
         onDeactivate={deactivatePlan}
         onSyncOnce={syncOncePlan}
+        onConfigureSyncSchedule={openSyncScheduleConfig}
+        onPauseSyncSchedule={pauseSyncSchedule}
+        onResumeSyncSchedule={resumeSyncSchedule}
       />
 
       <Card className="ops-card" title="扫描运行记录">
@@ -1007,6 +1130,46 @@ export default function SchemaPage() {
           locale={{ emptyText: '暂无元数据快照。先从数据源采集结构或导入样例数据。' }}
         />
       </Card>
+
+      <Modal
+        title={syncScheduleTarget?.schedule ? '配置定时同步' : '启用定时同步'}
+        open={Boolean(syncScheduleTarget)}
+        onOk={saveSyncScheduleConfig}
+        onCancel={() => setSyncScheduleTarget(null)}
+        okText={syncScheduleTarget?.schedule ? '保存配置' : '启用定时同步'}
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Alert
+          className="form-hint"
+          type="info"
+          showIcon
+          message="定时同步边界"
+          description="执行后会写入 raw_events / standard_events；不会写入 alert_decisions / alerts，也不会触发通知。"
+        />
+        <Form form={syncScheduleForm} layout="vertical">
+          <Form.Item
+            name="intervalSeconds"
+            label="执行间隔（秒）"
+            rules={[
+              { required: true, message: '请输入执行间隔' },
+              { type: 'number', min: 60, max: 86400, message: '执行间隔范围为 60 到 86400 秒' },
+            ]}
+          >
+            <InputNumber min={60} max={86400} step={60} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name="sampleLimit"
+            label="每次读取上限"
+            rules={[
+              { required: true, message: '请输入读取上限' },
+              { type: 'number', min: 1, max: 100, message: '读取上限范围为 1 到 100' },
+            ]}
+          >
+            <InputNumber min={1} max={100} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         width={980}

@@ -1,5 +1,11 @@
 import { Button, Card, Select, Space } from 'antd';
-import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow, IngestionPlanSyncRunRow } from '../../../types';
+import type {
+  IngestionPlanActivationRow,
+  IngestionPlanRow,
+  IngestionPlanShadowRunRow,
+  IngestionPlanSyncRunRow,
+  IngestionPlanSyncScheduleRow,
+} from '../../../types';
 import { PLAN_STATUS_FILTER_OPTIONS } from '../utils/ingestionPlanLabels';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanPanel from './IngestionPlanPanel';
@@ -22,6 +28,7 @@ interface IngestionPlanSectionProps {
   activationsByPlanId: Record<number, IngestionPlanActivationRow | null>;
   latestShadowRunsByPlanId: Record<number, IngestionPlanShadowRunRow | null>;
   syncRunsByPlanId: Record<number, IngestionPlanSyncRunRow[]>;
+  syncSchedulesByPlanId: Record<number, IngestionPlanSyncScheduleRow | null>;
   loading: boolean;
   generating: boolean;
   actionId: number | null;
@@ -38,6 +45,13 @@ interface IngestionPlanSectionProps {
   onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
   onDeactivate: (activation: IngestionPlanActivationRow) => void;
   onSyncOnce: (row: IngestionPlanRow, activation: IngestionPlanActivationRow) => void;
+  onConfigureSyncSchedule: (
+    row: IngestionPlanRow,
+    activation: IngestionPlanActivationRow,
+    schedule?: IngestionPlanSyncScheduleRow | null,
+  ) => void;
+  onPauseSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
+  onResumeSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
 }
 
 export default function IngestionPlanSection({
@@ -48,6 +62,7 @@ export default function IngestionPlanSection({
   activationsByPlanId,
   latestShadowRunsByPlanId,
   syncRunsByPlanId,
+  syncSchedulesByPlanId,
   loading,
   generating,
   actionId,
@@ -64,6 +79,9 @@ export default function IngestionPlanSection({
   onActivate,
   onDeactivate,
   onSyncOnce,
+  onConfigureSyncSchedule,
+  onPauseSyncSchedule,
+  onResumeSyncSchedule,
 }: IngestionPlanSectionProps) {
   return (
     <Card className="ops-card" title="推荐接入方案">
@@ -106,6 +124,7 @@ export default function IngestionPlanSection({
               activation={activationsByPlanId[row.id] ?? null}
               latestShadowRun={latestShadowRunsByPlanId[row.id] ?? null}
               syncRuns={syncRunsByPlanId[row.id] ?? []}
+              syncSchedule={syncSchedulesByPlanId[row.id] ?? null}
               busy={actionId === row.id}
               formatTime={formatTime}
               onViewReason={onViewReason}
@@ -116,6 +135,9 @@ export default function IngestionPlanSection({
               onActivate={onActivate}
               onDeactivate={onDeactivate}
               onSyncOnce={onSyncOnce}
+              onConfigureSyncSchedule={onConfigureSyncSchedule}
+              onPauseSyncSchedule={onPauseSyncSchedule}
+              onResumeSyncSchedule={onResumeSyncSchedule}
             />
           ))}
         </div>

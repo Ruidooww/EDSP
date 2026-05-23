@@ -2,14 +2,18 @@ package com.edsp.core.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.support.CoreRequestSupport;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.sql.DriverManager;
 import java.util.List;
@@ -18,8 +22,10 @@ import org.flywaydb.core.Flyway;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.server.ResponseStatusException;
 
 class IngestionPlanSyncOnceServiceTest {
@@ -29,6 +35,7 @@ class IngestionPlanSyncOnceServiceTest {
     private JdbcTemplate jdbcTemplate;
     private ObjectMapper objectMapper;
     private IngestionPlanSyncOnceService service;
+    private IngestionPlanSyncScheduleService scheduleService;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -64,6 +71,7 @@ class IngestionPlanSyncOnceServiceTest {
             new JdbcShadowSampleService(objectMapper),
             new StandardEventDedupService(jdbcTemplate, support)
         );
+        scheduleService = new IngestionPlanSyncScheduleService(jdbcTemplate, objectMapper, support, service);
         resetSourceDatabase();
     }
 
@@ -539,6 +547,277 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("severity_unrecognized")));
         assertEquals(0L, count("alert_decisions"));
         assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void syncScheduleCreationRequiresActiveActivationAndOneSchedulePerActivation() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(120, 20, "ops-user")
+        );
+
+        assertEquals("enabled", schedule.get("status"));
+        assertEquals(120, intValue(schedule.get("intervalSeconds")));
+        assertEquals(20, intValue(schedule.get("sampleLimit")));
+        assertEquals(1L, count("ingestion_plan_sync_schedules"));
+
+        var duplicate = assertThrows(
+            ResponseStatusException.class,
+            () -> scheduleService.createSchedule(activationId, new IngestionPlanSyncScheduleRequest(300, 10, "ops-user"))
+        );
+        assertEquals(HttpStatus.CONFLICT, duplicate.getStatusCode());
+
+        scheduleService.pause(number(schedule.get("id")), null);
+        var duplicatePaused = assertThrows(
+            ResponseStatusException.class,
+            () -> scheduleService.createSchedule(activationId, new IngestionPlanSyncScheduleRequest(300, 10, "ops-user"))
+        );
+        assertEquals(HttpStatus.CONFLICT, duplicatePaused.getStatusCode());
+
+        var deactivatedActivationId = insertActivation(planId, dataSourceId, shadowRunId, "deactivated");
+        var deactivated = assertThrows(
+            ResponseStatusException.class,
+            () -> scheduleService.createSchedule(
+                deactivatedActivationId,
+                new IngestionPlanSyncScheduleRequest(300, 10, "ops-user")
+            )
+        );
+        assertEquals(HttpStatus.BAD_REQUEST, deactivated.getStatusCode());
+    }
+
+    @Test
+    void dueScheduleRunsScheduledSyncAndManualSyncKeepsManualTrigger() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var manual = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+        assertEquals("manual", jdbcTemplate.queryForObject(
+            "select trigger_type from ingestion_plan_sync_runs where id = ?",
+            String.class,
+            manual.get("id")
+        ));
+
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(60, 20, "ops-user")
+        );
+        var scheduleId = number(schedule.get("id"));
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+
+        var runs = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertEquals(1, runs.size());
+        assertEquals("passed", runs.get(0).get("status"));
+        assertEquals(4L, count("raw_events"));
+        assertEquals(2L, count("standard_events"));
+        assertEquals(2L, count("ingestion_plan_sync_runs"));
+        assertEquals("scheduled", jdbcTemplate.queryForObject(
+            "select trigger_type from ingestion_plan_sync_runs where schedule_id = ?",
+            String.class,
+            scheduleId
+        ));
+        assertEquals(scheduleId, jdbcTemplate.queryForObject(
+            "select schedule_id from ingestion_plan_sync_runs where trigger_type = 'scheduled'",
+            Long.class
+        ));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where schedule_id = ?",
+            Object.class,
+            scheduleId
+        ));
+        assertEquals("scheduled_sync", report.get("mode"));
+        assertEquals("scheduled", report.get("triggerType"));
+        assertEquals("Scheduled Sync writes raw_events and standard_events only; no alerts or notifications", report.get("boundary"));
+        assertEquals(scheduleId, number(report.get("scheduleId")));
+        var manualRawPayload = objectValue(jdbcTemplate.queryForObject(
+            "select payload_json from raw_events where run_id = ? order by id limit 1",
+            Object.class,
+            manual.get("ingestionRunId")
+        ));
+        assertEquals("sync_once", manualRawPayload.get("mode"));
+        var scheduledRawPayload = objectValue(jdbcTemplate.queryForObject(
+            "select payload_json from raw_events where run_id = ? order by id limit 1",
+            Object.class,
+            runs.get(0).get("ingestionRunId")
+        ));
+        assertEquals("scheduled_sync", scheduledRawPayload.get("mode"));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void pausedScheduleDoesNotRunAndResumeSetsNextRunAtNow() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(60, 20, "ops-user")
+        );
+        var scheduleId = number(schedule.get("id"));
+
+        scheduleService.pause(scheduleId, null);
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+
+        var pausedRuns = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertTrue(pausedRuns.isEmpty());
+        assertEquals(0L, count("ingestion_plan_sync_runs"));
+
+        var resumed = scheduleService.resume(scheduleId, null);
+
+        assertEquals("enabled", resumed.get("status"));
+        assertNotNull(resumed.get("nextRunAt"));
+
+        var runs = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertEquals(1, runs.size());
+        assertEquals("passed", runs.get(0).get("status"));
+    }
+
+    @Test
+    void scheduledRunAlwaysAdvancesNextRunAndUpdatesFailureCount() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(60, 20, "ops-user")
+        );
+        var scheduleId = number(schedule.get("id"));
+        jdbcTemplate.update("update schema_tables set lifecycle_status = 'inactive' where id = ?", tableId);
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+
+        var blockedRuns = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertEquals(1, blockedRuns.size());
+        assertEquals("blocked", blockedRuns.get(0).get("status"));
+        var blockedSchedule = scheduleService.listByPlan(planId, 5).get(0);
+        assertEquals("blocked", blockedSchedule.get("lastStatus"));
+        assertEquals(1, intValue(blockedSchedule.get("consecutiveFailures")));
+        assertNotNull(blockedSchedule.get("lastRunAt"));
+        assertNotNull(blockedSchedule.get("nextRunAt"));
+
+        jdbcTemplate.update("update schema_tables set lifecycle_status = 'active' where id = ?", tableId);
+        executeSourceSql("update sec_alert_event set risk_level = 'unknown_level' where id = 'ALERT-2'");
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+
+        var warningRuns = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertEquals(1, warningRuns.size());
+        assertEquals("warning", warningRuns.get(0).get("status"));
+        var warningSchedule = scheduleService.listByPlan(planId, 5).get(0);
+        assertEquals("warning", warningSchedule.get("lastStatus"));
+        assertEquals(0, intValue(warningSchedule.get("consecutiveFailures")));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void deactivatedActivationScheduleCannotExecuteOrBeManaged() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(60, 20, "ops-user")
+        );
+        var scheduleId = number(schedule.get("id"));
+        jdbcTemplate.update("update ingestion_plan_activations set status = 'deactivated' where id = ?", activationId);
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+        var claimSchedule = claimScheduleMethod();
+
+        assertFalse((Boolean) claimSchedule.invoke(scheduleService, scheduleId, "worker-a"));
+
+        var runs = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertTrue(runs.isEmpty());
+        assertEquals(0L, count("ingestion_plan_sync_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        assertThrows(
+            ResponseStatusException.class,
+            () -> scheduleService.update(scheduleId, new IngestionPlanSyncScheduleRequest(120, 20, "ops-user"))
+        );
+        assertThrows(ResponseStatusException.class, () -> scheduleService.pause(scheduleId, null));
+        assertThrows(ResponseStatusException.class, () -> scheduleService.resume(scheduleId, null));
+        var updated = scheduleService.listByPlan(planId, 5).get(0);
+        assertNull(updated.get("lastStatus"));
+        assertEquals(0, intValue(updated.get("consecutiveFailures")));
+        assertNull(updated.get("lastRunAt"));
+        assertNotNull(updated.get("nextRunAt"));
+    }
+
+    @Test
+    void scheduleClaimRequiresDueAndUnlockedSchedule() throws Exception {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(300, 20, "ops-user")
+        );
+        var scheduleId = number(schedule.get("id"));
+        var claimSchedule = claimScheduleMethod();
+
+        assertFalse((Boolean) claimSchedule.invoke(scheduleService, scheduleId, "worker-a"));
+        assertNull(scheduleService.listByPlan(planId, 5).get(0).get("lockedAt"));
+
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+
+        assertTrue((Boolean) claimSchedule.invoke(scheduleService, scheduleId, "worker-a"));
+        assertFalse((Boolean) claimSchedule.invoke(scheduleService, scheduleId, "worker-b"));
+        assertNotNull(scheduleService.listByPlan(planId, 5).get(0).get("lockedAt"));
+    }
+
+    @Test
+    void schedulerBeanRequiresExplicitEnabledProperty() throws Exception {
+        var condition = IngestionPlanSyncScheduler.class.getAnnotation(ConditionalOnProperty.class);
+        assertNotNull(condition);
+        assertEquals("edsp.ingestion-plan.scheduler.enabled", condition.name()[0]);
+        assertEquals("true", condition.havingValue());
+        assertFalse(condition.matchIfMissing());
+
+        var scheduled = IngestionPlanSyncScheduler.class
+            .getDeclaredMethod("runDueSchedules")
+            .getAnnotation(Scheduled.class);
+        assertNotNull(scheduled);
+        assertEquals("${edsp.ingestion-plan.scheduler.poll-ms:30000}", scheduled.fixedDelayString());
+    }
+
+    private Method claimScheduleMethod() throws Exception {
+        var method = IngestionPlanSyncScheduleService.class.getDeclaredMethod("claimSchedule", Long.class, String.class);
+        method.setAccessible(true);
+        return method;
     }
 
     private void resetSourceDatabase() throws Exception {

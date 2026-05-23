@@ -1,5 +1,11 @@
 import { Alert, Descriptions, Space, Tag, Typography } from 'antd';
-import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow, IngestionPlanSyncRunRow } from '../../../types';
+import type {
+  IngestionPlanActivationRow,
+  IngestionPlanRow,
+  IngestionPlanShadowRunRow,
+  IngestionPlanSyncRunRow,
+  IngestionPlanSyncScheduleRow,
+} from '../../../types';
 import {
   formatConfidence,
   planStatusTag,
@@ -18,7 +24,12 @@ import {
   getSyncRunMetric,
   getSyncRunStatus,
   getSyncRunTime,
+  getSyncRunTriggerType,
   getSyncRunWarnings,
+  getSyncScheduleMetric,
+  getSyncScheduleStatus,
+  getSyncScheduleText,
+  getSyncScheduleTime,
 } from '../utils/ingestionPlanActivation';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanActions from './IngestionPlanActions';
@@ -30,6 +41,7 @@ interface IngestionPlanPanelProps {
   activation?: IngestionPlanActivationRow | null;
   latestShadowRun?: IngestionPlanShadowRunRow | null;
   syncRuns: IngestionPlanSyncRunRow[];
+  syncSchedule?: IngestionPlanSyncScheduleRow | null;
   busy: boolean;
   formatTime: (value?: string | number) => string;
   onViewReason: (row: IngestionPlanRow) => void;
@@ -40,6 +52,13 @@ interface IngestionPlanPanelProps {
   onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
   onDeactivate: (activation: IngestionPlanActivationRow) => void;
   onSyncOnce: (row: IngestionPlanRow, activation: IngestionPlanActivationRow) => void;
+  onConfigureSyncSchedule: (
+    row: IngestionPlanRow,
+    activation: IngestionPlanActivationRow,
+    schedule?: IngestionPlanSyncScheduleRow | null,
+  ) => void;
+  onPauseSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
+  onResumeSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
 }
 
 function syncRunStatusTag(value?: string) {
@@ -58,12 +77,48 @@ function syncRunStatusTag(value?: string) {
   return <Tag>{value || '-'}</Tag>;
 }
 
+function scheduleStatusTag(value?: string) {
+  if (value === 'enabled') {
+    return <Tag color="processing">enabled</Tag>;
+  }
+  if (value === 'paused') {
+    return <Tag>paused</Tag>;
+  }
+  return <Tag>{value || '-'}</Tag>;
+}
+
+function syncRunSummary(run: IngestionPlanSyncRunRow | null, formatTime: (value?: string | number) => string) {
+  if (!run) {
+    return null;
+  }
+  const warnings = getSyncRunWarnings(run);
+  return (
+    <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title={getSyncRunTriggerType(run) === 'scheduled' ? '最近定时同步结果' : '最近同步结果'}>
+      <Descriptions.Item label="状态">{syncRunStatusTag(getSyncRunStatus(run))}</Descriptions.Item>
+      <Descriptions.Item label="触发">{getSyncRunTriggerType(run) || 'manual'}</Descriptions.Item>
+      <Descriptions.Item label="完成时间">{formatTime(getSyncRunTime(run))}</Descriptions.Item>
+      <Descriptions.Item label="读取">{getSyncRunMetric(run, 'readCount', 'read_count')}</Descriptions.Item>
+      <Descriptions.Item label="成功">{getSyncRunMetric(run, 'successCount', 'success_count')}</Descriptions.Item>
+      <Descriptions.Item label="失败">{getSyncRunMetric(run, 'failedCount', 'failed_count')}</Descriptions.Item>
+      <Descriptions.Item label="重复">{getSyncRunMetric(run, 'duplicateCount', 'duplicate_count')}</Descriptions.Item>
+      <Descriptions.Item label="warning">{warnings.length}</Descriptions.Item>
+      <Descriptions.Item label="raw_events">{getSyncRunMetric(run, 'rawCount', 'raw_count')}</Descriptions.Item>
+      <Descriptions.Item label="standard_events">{getSyncRunMetric(run, 'standardCount', 'standard_count')}</Descriptions.Item>
+      <Descriptions.Item label="warnings" span={2}>
+        {warnings.length ? renderTextTags(warnings) : '-'}
+      </Descriptions.Item>
+      <Descriptions.Item label="错误信息" span={2}>{getSyncRunErrorMessage(run) || '-'}</Descriptions.Item>
+    </Descriptions>
+  );
+}
+
 export default function IngestionPlanPanel({
   row,
   plan,
   activation,
   latestShadowRun,
   syncRuns,
+  syncSchedule,
   busy,
   formatTime,
   onViewReason,
@@ -74,6 +129,9 @@ export default function IngestionPlanPanel({
   onActivate,
   onDeactivate,
   onSyncOnce,
+  onConfigureSyncSchedule,
+  onPauseSyncSchedule,
+  onResumeSyncSchedule,
 }: IngestionPlanPanelProps) {
   const activationStatus = getActivationStatus(activation);
   const activationShadowRunId = getActivationShadowRunId(activation);
@@ -81,12 +139,11 @@ export default function IngestionPlanPanel({
   const activationTime = getActivationTime(activation);
   const latestShadowRunStatus = getShadowRunStatus(latestShadowRun);
   const latestSyncRun = syncRuns[0] ?? null;
-  const syncRunWarnings = getSyncRunWarnings(latestSyncRun);
-  const syncRunErrorMessage = getSyncRunErrorMessage(latestSyncRun);
+  const latestScheduledRun = syncRuns.find((run) => getSyncRunTriggerType(run) === 'scheduled') ?? null;
   const isActive = activationStatus === 'active';
   const canActivate = canActivatePlan(plan.status, latestShadowRun, activation);
   const activationHint = isActive
-    ? '当前方案已启用。停用只会调用停用接口，不会变更 Precheck / Shadow Run / 状态机。'
+    ? '当前方案已启用。停用只会更新 activation 记录，不会变更 Precheck / Shadow Run / 方案状态。'
     : canActivate
       ? '最新 Shadow Run 已通过。启用后仅生成启用审计记录，不会立即采集数据或产生告警。'
       : '未启用。只有最新 Shadow Run status 为 passed，且方案状态为 approved 或 shadow_ready 时才允许启用。';
@@ -120,6 +177,7 @@ export default function IngestionPlanPanel({
             plan={plan}
             activation={activation}
             latestShadowRun={latestShadowRun}
+            syncSchedule={syncSchedule}
             busy={busy}
             onViewReason={onViewReason}
             onUpdateStatus={onUpdateStatus}
@@ -129,6 +187,9 @@ export default function IngestionPlanPanel({
             onActivate={onActivate}
             onDeactivate={onDeactivate}
             onSyncOnce={onSyncOnce}
+            onConfigureSyncSchedule={onConfigureSyncSchedule}
+            onPauseSyncSchedule={onPauseSyncSchedule}
+            onResumeSyncSchedule={onResumeSyncSchedule}
           />
         </div>
       </div>
@@ -153,7 +214,7 @@ export default function IngestionPlanPanel({
         <Descriptions.Item label="生成版本">{plan.generationVersion}</Descriptions.Item>
         <Descriptions.Item label="生成时间">{formatTime(plan.generatedAt)}</Descriptions.Item>
         <Descriptions.Item label="当前状态">{planStatusTag(plan.status)}</Descriptions.Item>
-        <Descriptions.Item label="启用状态">{isActive ? <Tag color="success">已启用</Tag> : <Tag>未启用</Tag>}</Descriptions.Item>
+        <Descriptions.Item label="启用状态">{isActive ? <Tag color="success">active</Tag> : <Tag>inactive</Tag>}</Descriptions.Item>
         <Descriptions.Item label="启用人">{activationOperator || '-'}</Descriptions.Item>
         <Descriptions.Item label="启用时间">{formatTime(activationTime)}</Descriptions.Item>
         <Descriptions.Item label="关联 shadowRunId">{activationShadowRunId ? `#${activationShadowRunId}` : '-'}</Descriptions.Item>
@@ -171,27 +232,29 @@ export default function IngestionPlanPanel({
         <Alert
           showIcon
           type="info"
-          message="手动同步一次"
-          description="执行后会写入 raw_events / standard_events；不会生成 alert_decisions / alerts，也不会触发通知。"
+          message="同步边界"
+          description="手动同步和定时同步会写入 raw_events / standard_events；不会写入 alert_decisions / alerts，也不会触发通知。"
         />
       )}
 
-      {latestSyncRun && (
-        <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title="最近同步结果">
-          <Descriptions.Item label="状态">{syncRunStatusTag(getSyncRunStatus(latestSyncRun))}</Descriptions.Item>
-          <Descriptions.Item label="完成时间">{formatTime(getSyncRunTime(latestSyncRun))}</Descriptions.Item>
-          <Descriptions.Item label="读取">{getSyncRunMetric(latestSyncRun, 'readCount', 'read_count')}</Descriptions.Item>
-          <Descriptions.Item label="成功">{getSyncRunMetric(latestSyncRun, 'successCount', 'success_count')}</Descriptions.Item>
-          <Descriptions.Item label="失败">{getSyncRunMetric(latestSyncRun, 'failedCount', 'failed_count')}</Descriptions.Item>
-          <Descriptions.Item label="重复">{getSyncRunMetric(latestSyncRun, 'duplicateCount', 'duplicate_count')}</Descriptions.Item>
-          <Descriptions.Item label="raw_events">{getSyncRunMetric(latestSyncRun, 'rawCount', 'raw_count')}</Descriptions.Item>
-          <Descriptions.Item label="standard_events">{getSyncRunMetric(latestSyncRun, 'standardCount', 'standard_count')}</Descriptions.Item>
-          <Descriptions.Item label="warnings" span={2}>
-            {syncRunWarnings.length ? renderTextTags(syncRunWarnings) : '-'}
+      {isActive && syncSchedule && (
+        <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title="定时同步">
+          <Descriptions.Item label="状态">{scheduleStatusTag(getSyncScheduleStatus(syncSchedule))}</Descriptions.Item>
+          <Descriptions.Item label="间隔">{getSyncScheduleMetric(syncSchedule, 'intervalSeconds', 'interval_seconds')} 秒</Descriptions.Item>
+          <Descriptions.Item label="样本上限">{getSyncScheduleMetric(syncSchedule, 'sampleLimit', 'sample_limit')}</Descriptions.Item>
+          <Descriptions.Item label="连续失败">{getSyncScheduleMetric(syncSchedule, 'consecutiveFailures', 'consecutive_failures')}</Descriptions.Item>
+          <Descriptions.Item label="下次执行">{formatTime(getSyncScheduleTime(syncSchedule, 'nextRunAt', 'next_run_at'))}</Descriptions.Item>
+          <Descriptions.Item label="上次执行">{formatTime(getSyncScheduleTime(syncSchedule, 'lastRunAt', 'last_run_at'))}</Descriptions.Item>
+          <Descriptions.Item label="上次状态">{getSyncScheduleText(syncSchedule, 'lastStatus', 'last_status') || '-'}</Descriptions.Item>
+          <Descriptions.Item label="最近 run">{getSyncScheduleMetric(syncSchedule, 'lastSyncRunId', 'last_sync_run_id') || '-'}</Descriptions.Item>
+          <Descriptions.Item label="上次错误" span={4}>
+            {getSyncScheduleText(syncSchedule, 'lastErrorMessage', 'last_error_message') || '-'}
           </Descriptions.Item>
-          <Descriptions.Item label="错误信息" span={2}>{syncRunErrorMessage || '-'}</Descriptions.Item>
         </Descriptions>
       )}
+
+      {syncRunSummary(latestSyncRun, formatTime)}
+      {latestScheduledRun && latestScheduledRun.id !== latestSyncRun?.id && syncRunSummary(latestScheduledRun, formatTime)}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
         <IngestionPlanDetailSection title="字段映射">

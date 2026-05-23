@@ -16,6 +16,7 @@ import { apiGet, apiPost, apiPut } from '../../api';
 import type {
   DataSourceRow,
   IngestionPlanRow,
+  IngestionPlanShadowRunRow,
   IngestionPlanShadowValidationReport,
   SchemaChangeEventRow,
   SchemaFieldRow,
@@ -25,6 +26,7 @@ import type {
 import IngestionPlanPrecheckDrawer from './components/IngestionPlanPrecheckDrawer';
 import IngestionPlanReasonDrawer from './components/IngestionPlanReasonDrawer';
 import IngestionPlanSection from './components/IngestionPlanSection';
+import IngestionPlanShadowRunReportDrawer from './components/IngestionPlanShadowRunReportDrawer';
 import {
   PLAN_STATUS_FILTER_VALUES,
   STANDARD_FIELD_LABELS,
@@ -230,6 +232,9 @@ export default function SchemaPage() {
   const [reasonPlan, setReasonPlan] = useState<IngestionPlanRow | null>(null);
   const [shadowValidationPlan, setShadowValidationPlan] = useState<IngestionPlanRow | null>(null);
   const [shadowValidationReport, setShadowValidationReport] = useState<IngestionPlanShadowValidationReport | null>(null);
+  const [shadowRunPlan, setShadowRunPlan] = useState<IngestionPlanRow | null>(null);
+  const [shadowRunReport, setShadowRunReport] = useState<IngestionPlanShadowRunRow | null>(null);
+  const [shadowRunsByPlanId, setShadowRunsByPlanId] = useState<Record<number, IngestionPlanShadowRunRow>>({});
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
@@ -415,6 +420,62 @@ export default function SchemaPage() {
     }
   }
 
+  async function executeShadowRun(row: IngestionPlanRow) {
+    setPlanActionId(row.id);
+    try {
+      const precheck = await apiPost<IngestionPlanShadowValidationReport>(`/api/core/ingestion-plans/${row.id}/shadow-validate`, {
+        sampleLimit: 50,
+      });
+      if (precheck.result !== 'passed' && precheck.result !== 'warning') {
+        setShadowValidationPlan(row);
+        setShadowValidationReport(precheck);
+        message.warning('试运行前校验未通过，未创建 Shadow Run');
+        return;
+      }
+      const run = await apiPost<IngestionPlanShadowRunRow>(`/api/core/ingestion-plans/${row.id}/shadow-runs`, {
+        sampleLimit: 50,
+      });
+      setShadowRunsByPlanId((current) => ({ ...current, [row.id]: run }));
+      setShadowRunPlan(row);
+      setShadowRunReport(run);
+      if (run.status === 'failed' || run.status === 'blocked') {
+        message.warning('Shadow Run 已完成，请查看报告中的异常原因');
+      } else {
+        message.success('Shadow Run 试运行已完成');
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Shadow Run 试运行失败');
+    } finally {
+      setPlanActionId(null);
+    }
+  }
+
+  async function viewShadowRunReport(row: IngestionPlanRow) {
+    const cachedRun = shadowRunsByPlanId[row.id];
+    if (cachedRun?.report) {
+      setShadowRunPlan(row);
+      setShadowRunReport(cachedRun);
+      return;
+    }
+    setPlanActionId(row.id);
+    try {
+      const runs = await apiGet<IngestionPlanShadowRunRow[]>(`/api/core/ingestion-plans/${row.id}/shadow-runs?limit=1`);
+      const latestRun = runs[0];
+      if (!latestRun) {
+        message.info('暂无试运行报告，请先执行试运行');
+        return;
+      }
+      const detail = await apiGet<IngestionPlanShadowRunRow>(`/api/core/ingestion-plan-shadow-runs/${latestRun.id}`);
+      setShadowRunsByPlanId((current) => ({ ...current, [row.id]: detail }));
+      setShadowRunPlan(row);
+      setShadowRunReport(detail);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '试运行报告加载失败');
+    } finally {
+      setPlanActionId(null);
+    }
+  }
+
   function confirmPendingChanges() {
     const ids = changes.filter((change) => change.status === 'pending').map((change) => change.id);
     if (!ids.length) {
@@ -531,6 +592,10 @@ export default function SchemaPage() {
   const shadowValidationPlanView = useMemo(
     () => shadowValidationPlan ? normalizePlan(shadowValidationPlan) : null,
     [shadowValidationPlan],
+  );
+  const shadowRunPlanView = useMemo(
+    () => shadowRunPlan ? normalizePlan(shadowRunPlan) : null,
+    [shadowRunPlan],
   );
 
   const mappingByField = useMemo(() => {
@@ -741,6 +806,8 @@ export default function SchemaPage() {
         onViewReason={setReasonPlan}
         onUpdateStatus={updatePlanStatus}
         onShadowValidate={shadowValidatePlan}
+        onShadowRun={executeShadowRun}
+        onViewShadowReport={viewShadowRunReport}
       />
 
       <Card className="ops-card" title="扫描运行记录">
@@ -886,6 +953,15 @@ export default function SchemaPage() {
         onClose={() => {
           setShadowValidationPlan(null);
           setShadowValidationReport(null);
+        }}
+      />
+      <IngestionPlanShadowRunReportDrawer
+        plan={shadowRunPlanView}
+        run={shadowRunReport}
+        formatTime={formatTime}
+        onClose={() => {
+          setShadowRunPlan(null);
+          setShadowRunReport(null);
         }}
       />
     </div>

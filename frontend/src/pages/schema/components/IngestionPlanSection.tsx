@@ -30,6 +30,8 @@ interface IngestionPlanSectionProps {
   onViewReason: (row: IngestionPlanRow) => void;
   onUpdateStatus: (row: IngestionPlanRow, status: string, successText: string) => void;
   onShadowValidate: (row: IngestionPlanRow) => void;
+  onShadowRun: (row: IngestionPlanRow) => void;
+  onViewShadowReport: (row: IngestionPlanRow) => void;
 }
 
 export default function IngestionPlanSection({
@@ -48,6 +50,8 @@ export default function IngestionPlanSection({
   onViewReason,
   onUpdateStatus,
   onShadowValidate,
+  onShadowRun,
+  onViewShadowReport,
 }: IngestionPlanSectionProps) {
   return (
     <Card className="ops-card" title="推荐接入方案">
@@ -92,6 +96,8 @@ export default function IngestionPlanSection({
               onViewReason={onViewReason}
               onUpdateStatus={onUpdateStatus}
               onShadowValidate={onShadowValidate}
+              onShadowRun={onShadowRun}
+              onViewShadowReport={onViewShadowReport}
             />
           ))}
         </div>

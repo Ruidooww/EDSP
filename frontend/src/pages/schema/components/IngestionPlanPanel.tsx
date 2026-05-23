@@ -19,6 +19,8 @@ interface IngestionPlanPanelProps {
   onViewReason: (row: IngestionPlanRow) => void;
   onUpdateStatus: (row: IngestionPlanRow, status: string, successText: string) => void;
   onShadowValidate: (row: IngestionPlanRow) => void;
+  onShadowRun: (row: IngestionPlanRow) => void;
+  onViewShadowReport: (row: IngestionPlanRow) => void;
 }
 
 export default function IngestionPlanPanel({
@@ -29,6 +31,8 @@ export default function IngestionPlanPanel({
   onViewReason,
   onUpdateStatus,
   onShadowValidate,
+  onShadowRun,
+  onViewShadowReport,
 }: IngestionPlanPanelProps) {
   return (
     <div
@@ -61,6 +65,8 @@ export default function IngestionPlanPanel({
             onViewReason={onViewReason}
             onUpdateStatus={onUpdateStatus}
             onShadowValidate={onShadowValidate}
+            onShadowRun={onShadowRun}
+            onViewShadowReport={onViewShadowReport}
           />
         </div>
       </div>

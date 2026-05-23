@@ -447,3 +447,53 @@ export interface IngestionPlanShadowValidationReport {
   standardEventPreview?: Record<string, unknown>;
   checks: IngestionPlanShadowValidationCheck[];
 }
+
+export interface IngestionPlanShadowRunSummary {
+  status?: string;
+  sampleLimit?: number;
+  readCount?: number;
+  successCount?: number;
+  failedCount?: number;
+  duplicateCount?: number;
+  missingRequiredCount?: number;
+}
+
+export interface IngestionPlanShadowRunSample {
+  sourcePreview?: Record<string, unknown>;
+  standardEventPreview?: Record<string, unknown>;
+  errors?: string[];
+  warnings?: string[];
+}
+
+export interface IngestionPlanShadowRunReport {
+  planId?: number;
+  dataSourceId?: number;
+  status?: 'passed' | 'warning' | 'blocked' | 'failed' | string;
+  summary?: IngestionPlanShadowRunSummary;
+  checks?: IngestionPlanShadowValidationCheck[];
+  blockers?: string[];
+  warnings?: string[];
+  samples?: IngestionPlanShadowRunSample[];
+  errorsByType?: Record<string, number>;
+  previewPolicy?: Record<string, unknown>;
+}
+
+export interface IngestionPlanShadowRunRow {
+  id: number;
+  ingestionPlanId: number;
+  dataSourceId?: number;
+  status: 'passed' | 'warning' | 'blocked' | 'failed' | string;
+  sampleLimit: number;
+  readCount: number;
+  successCount: number;
+  failedCount: number;
+  duplicateCount: number;
+  missingRequiredCount: number;
+  startedAt?: string | number;
+  finishedAt?: string | number;
+  durationMs?: number;
+  errorMessage?: string;
+  report?: IngestionPlanShadowRunReport;
+  createdAt?: string | number;
+  updatedAt?: string | number;
+}

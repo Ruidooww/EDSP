@@ -5,8 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.core.dto.IngestionPlanActivationRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
+import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanSyncOnceService;
+import com.edsp.core.service.IngestionPlanSyncScheduleService;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -46,8 +48,9 @@ class IngestionPlanActivationControllerTest {
     void controllerMethodsReturnServicePayloads() {
         var activationService = new StubActivationService();
         var syncOnceService = new StubSyncOnceService();
-        var planController = new IngestionPlanController(null, null, activationService, syncOnceService);
-        var activationController = new IngestionPlanActivationController(activationService, syncOnceService);
+        var scheduleService = new StubScheduleService();
+        var planController = new IngestionPlanController(null, null, activationService, syncOnceService, scheduleService);
+        var activationController = new IngestionPlanActivationController(activationService, syncOnceService, scheduleService);
 
         var created = planController.activate(7L, new IngestionPlanActivationRequest(9L, "ops", "validated"));
         var list = planController.activations(7L, 10);
@@ -93,6 +96,22 @@ class IngestionPlanActivationControllerTest {
         @Override
         public Map<String, Object> syncOnce(long activationId, IngestionPlanSyncOnceRequest request) {
             return Map.of("id", activationId, "status", "passed");
+        }
+    }
+
+    private static class StubScheduleService extends IngestionPlanSyncScheduleService {
+        StubScheduleService() {
+            super(null, null, null, null);
+        }
+
+        @Override
+        public Map<String, Object> createSchedule(long activationId, IngestionPlanSyncScheduleRequest request) {
+            return Map.of("activationId", activationId, "status", "enabled");
+        }
+
+        @Override
+        public List<Map<String, Object>> listByPlan(long planId, int limit) {
+            return List.of(Map.of("ingestionPlanId", planId, "status", "enabled"));
         }
     }
 }

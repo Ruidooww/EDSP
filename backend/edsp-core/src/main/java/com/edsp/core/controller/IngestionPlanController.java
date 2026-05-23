@@ -10,6 +10,7 @@ import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanShadowRunService;
 import com.edsp.core.service.IngestionPlanService;
 import com.edsp.core.service.IngestionPlanSyncOnceService;
+import com.edsp.core.service.IngestionPlanSyncScheduleService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -29,17 +30,20 @@ public class IngestionPlanController {
     private final IngestionPlanShadowRunService shadowRunService;
     private final IngestionPlanActivationService activationService;
     private final IngestionPlanSyncOnceService syncOnceService;
+    private final IngestionPlanSyncScheduleService scheduleService;
 
     public IngestionPlanController(
         IngestionPlanService ingestionPlanService,
         IngestionPlanShadowRunService shadowRunService,
         IngestionPlanActivationService activationService,
-        IngestionPlanSyncOnceService syncOnceService
+        IngestionPlanSyncOnceService syncOnceService,
+        IngestionPlanSyncScheduleService scheduleService
     ) {
         this.ingestionPlanService = ingestionPlanService;
         this.shadowRunService = shadowRunService;
         this.activationService = activationService;
         this.syncOnceService = syncOnceService;
+        this.scheduleService = scheduleService;
     }
 
     @GetMapping
@@ -109,5 +113,13 @@ public class IngestionPlanController {
         @RequestParam(name = "limit", defaultValue = "5") int limit
     ) {
         return ApiResponse.ok(syncOnceService.listByPlan(id, limit));
+    }
+
+    @GetMapping("/{id}/sync-schedules")
+    public ApiResponse<List<Map<String, Object>>> syncSchedules(
+        @PathVariable("id") long id,
+        @RequestParam(name = "limit", defaultValue = "10") int limit
+    ) {
+        return ApiResponse.ok(scheduleService.listByPlan(id, limit));
     }
 }

@@ -67,6 +67,33 @@ public class IngestionPlanSyncOnceService {
 
     @Transactional
     public Map<String, Object> syncOnce(long activationId, IngestionPlanSyncOnceRequest request) {
+        return executeSync(
+            activationId,
+            null,
+            sampleLimit(request == null ? null : request.sampleLimit()),
+            "manual",
+            "sync_once"
+        );
+    }
+
+    @Transactional
+    public Map<String, Object> syncScheduled(long activationId, long scheduleId, int sampleLimit) {
+        return executeSync(
+            activationId,
+            scheduleId,
+            support.safeLimit(sampleLimit, MAX_SAMPLE_LIMIT),
+            "scheduled",
+            "scheduled_sync"
+        );
+    }
+
+    private Map<String, Object> executeSync(
+        long activationId,
+        Long scheduleId,
+        int sampleLimit,
+        String triggerType,
+        String reportMode
+    ) {
         var activation = loadActiveActivation(activationId);
         var planId = support.number(activation.get("ingestion_plan_id"));
         var dataSourceId = support.number(activation.get("data_source_id"));
@@ -75,39 +102,41 @@ public class IngestionPlanSyncOnceService {
         validateActivationDataSource(planId, dataSourceId, support.number(plan.get("data_source_id")));
         validatePlanAndShadowRun(planId, dataSourceId, shadowRunId, support.stringOrDefault(plan.get("status"), ""));
 
-        var sampleLimit = sampleLimit(request);
         var startedAt = OffsetDateTime.now(ZoneOffset.UTC);
-        var ingestionRunId = insertIngestionRun(dataSourceId);
+        var ingestionRunId = insertIngestionRun(dataSourceId, reportMode);
         try {
             var planJson = parseJson(plan.get("plan_json"));
             var source = loadSource(dataSourceId, planJson);
             var rows = sampleRows(source, sampleLimit);
-            var result = processRows(ingestionRunId, dataSourceId, source, rows);
-            var report = report(planId, activationId, ingestionRunId, sampleLimit, result);
+            var result = processRows(ingestionRunId, dataSourceId, source, rows, reportMode);
+            var report = report(planId, activationId, scheduleId, ingestionRunId, sampleLimit, result,
+                triggerType, reportMode);
             var status = result.status();
             finishIngestionRun(ingestionRunId, status, result, report, null);
             var syncRunId = insertSyncRun(planId, activationId, dataSourceId, shadowRunId, ingestionRunId,
-                status, sampleLimit, result, startedAt, null, report);
+                scheduleId, triggerType, status, sampleLimit, result, startedAt, null, report);
             return syncRunRow(syncRunId, true);
         } catch (PlanBlockerException ex) {
             var result = SyncResult.empty("blocked");
-            var report = report(planId, activationId, ingestionRunId, sampleLimit, result);
+            var report = report(planId, activationId, scheduleId, ingestionRunId, sampleLimit, result,
+                triggerType, reportMode);
             report.put("blockers", ex.blockers());
             report.put("errorsByType", Map.of(ex.errorType(), 1));
             report.put("errorMessage", ex.getMessage());
             finishIngestionRun(ingestionRunId, "blocked", result, report, ex.getMessage());
             var syncRunId = insertSyncRun(planId, activationId, dataSourceId, shadowRunId, ingestionRunId,
-                "blocked", sampleLimit, result, startedAt, ex.getMessage(), report);
+                scheduleId, triggerType, "blocked", sampleLimit, result, startedAt, ex.getMessage(), report);
             return syncRunRow(syncRunId, true);
         } catch (RuntimeException ex) {
             var message = support.stringOrDefault(ex.getMessage(), "Sync once failed");
             var result = SyncResult.empty("failed");
-            var report = report(planId, activationId, ingestionRunId, sampleLimit, result);
+            var report = report(planId, activationId, scheduleId, ingestionRunId, sampleLimit, result,
+                triggerType, reportMode);
             report.put("errorsByType", Map.of("execution_failed", 1));
             report.put("errorMessage", message);
             finishIngestionRun(ingestionRunId, "failed", result, report, message);
             var syncRunId = insertSyncRun(planId, activationId, dataSourceId, shadowRunId, ingestionRunId,
-                "failed", sampleLimit, result, startedAt, message, report);
+                scheduleId, triggerType, "failed", sampleLimit, result, startedAt, message, report);
             return syncRunRow(syncRunId, true);
         }
     }
@@ -116,6 +145,7 @@ public class IngestionPlanSyncOnceService {
         ensurePlanExists(planId);
         return jdbcTemplate.queryForList("""
             select id, ingestion_plan_id, activation_id, data_source_id, shadow_run_id, ingestion_run_id,
+                   schedule_id, trigger_type,
                    status, sample_limit, read_count, success_count, failed_count, duplicate_count,
                    raw_count, standard_count, started_at, finished_at, duration_ms, error_message,
                    report_json, created_at, updated_at
@@ -128,7 +158,13 @@ public class IngestionPlanSyncOnceService {
             .toList();
     }
 
-    private SyncResult processRows(long ingestionRunId, Long dataSourceId, Source source, List<Map<String, Object>> rows) {
+    private SyncResult processRows(
+        long ingestionRunId,
+        Long dataSourceId,
+        Source source,
+        List<Map<String, Object>> rows,
+        String syncMode
+    ) {
         var mappings = fieldMappingSources(source.plan());
         var dedupFields = dedupFields(source.plan());
         var errorsByType = new LinkedHashMap<String, Integer>();
@@ -141,8 +177,8 @@ public class IngestionPlanSyncOnceService {
         var standardCount = 0;
 
         for (var row : rows) {
-            var standard = standardRecord(dataSourceId, source, mappings, dedupFields, row);
-            var rawId = insertRawEvent(ingestionRunId, dataSourceId, source, standard, row);
+            var standard = standardRecord(dataSourceId, source, mappings, dedupFields, row, syncMode);
+            var rawId = insertRawEvent(ingestionRunId, dataSourceId, source, standard, row, syncMode);
             rawCount++;
             if (!standard.errors().isEmpty()) {
                 failedCount++;
@@ -215,7 +251,8 @@ public class IngestionPlanSyncOnceService {
         Source source,
         Map<String, String> mappings,
         List<String> dedupFields,
-        Map<String, Object> row
+        Map<String, Object> row,
+        String syncMode
     ) {
         var values = new LinkedHashMap<String, Object>();
         mappings.forEach((sourceField, standardField) -> values.put(standardField, row.get(sourceField)));
@@ -237,7 +274,7 @@ public class IngestionPlanSyncOnceService {
         normalized.put("sourceTable", source.tableName());
         normalized.put("mapped", values);
         var extra = new LinkedHashMap<String, Object>();
-        extra.put("syncMode", "sync_once");
+        extra.put("syncMode", syncMode);
         extra.put("sourceTable", source.tableName());
         extra.put("dataSourceId", dataSourceId);
         return new StandardRecord(
@@ -335,10 +372,11 @@ public class IngestionPlanSyncOnceService {
         Long dataSourceId,
         Source source,
         StandardRecord standard,
-        Map<String, Object> row
+        Map<String, Object> row,
+        String syncMode
     ) {
         var payload = new LinkedHashMap<String, Object>();
-        payload.put("mode", "sync_once");
+        payload.put("mode", syncMode);
         payload.put("table", source.tableName());
         payload.put("fields", row);
         var payloadJson = toJson(payload);
@@ -530,11 +568,11 @@ public class IngestionPlanSyncOnceService {
         return stringList(strategy.get("fields"));
     }
 
-    private Long insertIngestionRun(Long dataSourceId) {
+    private Long insertIngestionRun(Long dataSourceId, String runType) {
         return insertAndReturnId("""
             insert into ingestion_runs(data_source_id, run_type, status, quality_report_json)
-            values (?, 'sync_once', 'running', cast('{}' as jsonb))
-            """, dataSourceId);
+            values (?, ?, 'running', cast('{}' as jsonb))
+            """, dataSourceId, runType);
     }
 
     private void finishIngestionRun(
@@ -560,6 +598,8 @@ public class IngestionPlanSyncOnceService {
         Long dataSourceId,
         Long shadowRunId,
         Long ingestionRunId,
+        Long scheduleId,
+        String triggerType,
         String status,
         int sampleLimit,
         SyncResult result,
@@ -572,11 +612,13 @@ public class IngestionPlanSyncOnceService {
         return insertAndReturnId("""
             insert into ingestion_plan_sync_runs(
                 ingestion_plan_id, activation_id, data_source_id, shadow_run_id, ingestion_run_id,
+                schedule_id, trigger_type,
                 status, sample_limit, read_count, success_count, failed_count, duplicate_count,
                 raw_count, standard_count, started_at, finished_at, duration_ms, error_message, report_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))
-            """, planId, activationId, dataSourceId, shadowRunId, ingestionRunId, status, sampleLimit,
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))
+            """, planId, activationId, dataSourceId, shadowRunId, ingestionRunId, scheduleId, triggerType,
+            status, sampleLimit,
             result.readCount(), result.successCount(), result.failedCount(), result.duplicateCount(),
             result.rawCount(), result.standardCount(), startedAt, finishedAt, durationMs, errorMessage,
             toJson(report));
@@ -585,15 +627,25 @@ public class IngestionPlanSyncOnceService {
     private Map<String, Object> report(
         Long planId,
         Long activationId,
+        Long scheduleId,
         Long ingestionRunId,
         int sampleLimit,
-        SyncResult result
+        SyncResult result,
+        String triggerType,
+        String reportMode
     ) {
         var report = new LinkedHashMap<String, Object>();
-        report.put("mode", "sync_once");
-        report.put("boundary", "Sync Once writes raw_events and standard_events only; no alerts or notifications");
+        report.put("mode", reportMode);
+        report.put(
+            "boundary",
+            "scheduled".equals(triggerType)
+                ? "Scheduled Sync writes raw_events and standard_events only; no alerts or notifications"
+                : "Sync Once writes raw_events and standard_events only; no alerts or notifications"
+        );
         report.put("planId", planId);
         report.put("activationId", activationId);
+        report.put("scheduleId", scheduleId);
+        report.put("triggerType", triggerType);
         report.put("ingestionRunId", ingestionRunId);
         report.put("status", result.status());
         report.put("sampleLimit", sampleLimit);
@@ -611,6 +663,7 @@ public class IngestionPlanSyncOnceService {
     private Map<String, Object> syncRunRow(Long syncRunId, boolean includeReport) {
         var row = jdbcTemplate.queryForMap("""
             select id, ingestion_plan_id, activation_id, data_source_id, shadow_run_id, ingestion_run_id,
+                   schedule_id, trigger_type,
                    status, sample_limit, read_count, success_count, failed_count, duplicate_count,
                    raw_count, standard_count, started_at, finished_at, duration_ms, error_message,
                    report_json, created_at, updated_at
@@ -628,6 +681,8 @@ public class IngestionPlanSyncOnceService {
         result.put("dataSourceId", row.get("data_source_id"));
         result.put("shadowRunId", row.get("shadow_run_id"));
         result.put("ingestionRunId", row.get("ingestion_run_id"));
+        result.put("scheduleId", row.get("schedule_id"));
+        result.put("triggerType", row.get("trigger_type"));
         result.put("status", row.get("status"));
         result.put("sampleLimit", row.get("sample_limit"));
         result.put("readCount", row.get("read_count"));
@@ -655,8 +710,8 @@ public class IngestionPlanSyncOnceService {
         }
     }
 
-    private int sampleLimit(IngestionPlanSyncOnceRequest request) {
-        var requested = request == null || request.sampleLimit() == null ? DEFAULT_SAMPLE_LIMIT : request.sampleLimit();
+    private int sampleLimit(Integer requestedSampleLimit) {
+        var requested = requestedSampleLimit == null ? DEFAULT_SAMPLE_LIMIT : requestedSampleLimit;
         return support.safeLimit(requested, MAX_SAMPLE_LIMIT);
     }
 

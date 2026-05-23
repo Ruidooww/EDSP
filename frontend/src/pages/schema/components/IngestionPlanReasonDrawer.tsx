@@ -6,7 +6,7 @@ import {
   renderWrappedTag,
   STANDARD_FIELD_LABELS,
 } from '../utils/ingestionPlanLabels';
-import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
+import type { NormalizedIngestionPlan, NormalizedSignalEvidence } from '../utils/normalizeIngestionPlan';
 import IngestionPlanDetailSection from './IngestionPlanDetailSection';
 
 interface IngestionPlanReasonDrawerProps {
@@ -14,6 +14,84 @@ interface IngestionPlanReasonDrawerProps {
   open: boolean;
   formatTime: (value?: string | number) => string;
   onClose: () => void;
+}
+
+const SIGNAL_LABELS: Record<string, string> = {
+  occurred_at: '发生时间',
+  severity: '风险等级',
+  actor: '账号 / 操作人',
+  asset_ref: '资产 / 终端',
+  title: '告警标题',
+  external_id: '外部事件 ID',
+  policy_name: '策略 / 规则',
+  result: '处理结果',
+  subject_ref: '目标对象',
+};
+
+const SIGNAL_SOURCE_LABELS: Record<string, string> = {
+  field_name: '字段名',
+  table_name: '表名',
+  category: '分类',
+  field_type: '字段类型',
+  sample_value: '样本值',
+};
+
+function renderSignalName(signal: string) {
+  return SIGNAL_LABELS[signal] || STANDARD_FIELD_LABELS[signal] || signal || '-';
+}
+
+function renderSignalSource(source: string) {
+  return SIGNAL_SOURCE_LABELS[source] || source || '-';
+}
+
+function renderSignalEvidence(evidence: NormalizedSignalEvidence[]) {
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      {evidence.map((item) => (
+        <div key={item.key} style={{ display: 'grid', gap: 6, paddingBottom: 10, borderBottom: '1px solid #edf2f7' }}>
+          <Space size={[6, 6]} wrap>
+            {renderWrappedTag(renderSignalName(item.signal), 'processing')}
+            {renderWrappedTag(renderSignalSource(item.source), 'cyan')}
+          </Space>
+          <div>
+            <Typography.Text type="secondary">来源字段：</Typography.Text>
+            {renderTextTags(item.sourceFields, '未返回')}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderTemplateSignalSection(plan: NormalizedIngestionPlan) {
+  if (plan.signalEvidence.length) {
+    return (
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        {renderSignalEvidence(plan.signalEvidence)}
+        {!!plan.missingSignals.length && (
+          <div>
+            <Typography.Text type="secondary">缺失：</Typography.Text>
+            {renderTextTags(plan.missingSignals.map(renderSignalName), '无')}
+          </div>
+        )}
+      </Space>
+    );
+  }
+  if (plan.matchedSignals.length || plan.missingSignals.length) {
+    return (
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <div>
+          <Typography.Text type="secondary">已命中：</Typography.Text>
+          {renderTextTags(plan.matchedSignals.map(renderSignalName), '无')}
+        </div>
+        <div>
+          <Typography.Text type="secondary">缺失：</Typography.Text>
+          {renderTextTags(plan.missingSignals.map(renderSignalName), '无')}
+        </div>
+      </Space>
+    );
+  }
+  return '-';
 }
 
 export default function IngestionPlanReasonDrawer({
@@ -46,6 +124,9 @@ export default function IngestionPlanReasonDrawer({
                 {plan.reasons.map((reason) => <li key={reason}>{reason}</li>)}
               </ul>
             ) : '后端未返回详细原因'}
+          </IngestionPlanDetailSection>
+          <IngestionPlanDetailSection title="模板信号依据">
+            {renderTemplateSignalSection(plan)}
           </IngestionPlanDetailSection>
           <IngestionPlanDetailSection title="字段映射原因">
             {plan.fieldMappings.length ? (

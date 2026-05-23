@@ -9,6 +9,13 @@ export interface NormalizedPlanMapping {
   reason?: string;
 }
 
+export interface NormalizedSignalEvidence {
+  key: string;
+  signal: string;
+  sourceFields: string[];
+  source: string;
+}
+
 export interface NormalizedIngestionPlan {
   id: number;
   name: string;
@@ -28,6 +35,9 @@ export interface NormalizedIngestionPlan {
   risks: string[];
   recommendedActions: string[];
   reasons: string[];
+  signalEvidence: NormalizedSignalEvidence[];
+  matchedSignals: string[];
+  missingSignals: string[];
   generationVersion: string;
   generatedAt?: string | number;
 }
@@ -141,6 +151,33 @@ function normalizeFieldEvidence(value: unknown, rowId: number) {
   return [];
 }
 
+function normalizeSignalEvidenceItem(value: unknown, key: string, signalFallback = ''): NormalizedSignalEvidence {
+  const evidence = parsePlanJson(value);
+  const normalized: NormalizedSignalEvidence = {
+    key,
+    signal: toText(firstDefined([evidence], ['signal', 'name', 'key'])) || signalFallback,
+    sourceFields: toTextArray(firstDefined([evidence], ['sourceFields', 'source_fields', 'fields', 'sourceField', 'source_field', 'fieldName', 'field_name', 'field'])),
+    source: toText(firstDefined([evidence], ['source', 'matchedBy', 'matched_by', 'origin'])),
+  };
+  return normalized;
+}
+
+function normalizeSignalEvidence(value: unknown, rowId: number): NormalizedSignalEvidence[] {
+  if (!value) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => normalizeSignalEvidenceItem(item, `${rowId}-signal-${index}`))
+      .filter((evidence) => evidence.signal || evidence.sourceFields.length || evidence.source);
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([signalKey, rawEvidence]) => normalizeSignalEvidenceItem(rawEvidence, `${rowId}-signal-${signalKey}`, signalKey))
+      .filter((evidence) => evidence.signal || evidence.sourceFields.length || evidence.source);
+  }
+  return [];
+}
+
 export function normalizePlan(row: IngestionPlanRow): NormalizedIngestionPlan {
   const rowRecord = row as unknown as Record<string, unknown>;
   const planRecord = parsePlanJson(row.plan_json ?? row.planJson);
@@ -148,6 +185,9 @@ export function normalizePlan(row: IngestionPlanRow): NormalizedIngestionPlan {
   const records = [rowRecord, planRecord];
   const rawMappings = firstDefined([planRecord], ['fieldMappingDetails', 'field_mapping_details', 'fieldMappings', 'field_mappings', 'mappings']);
   const fieldEvidence = normalizeFieldEvidence(firstDefined([planRecord], ['fieldEvidence', 'field_evidence']), row.id);
+  const signalEvidence = normalizeSignalEvidence(firstDefined([templateRecord], ['signalEvidence', 'signal_evidence']), row.id);
+  const matchedSignals = toTextArray(firstDefined([templateRecord], ['matchedSignals', 'matched_signals']));
+  const missingSignals = toTextArray(firstDefined([templateRecord], ['missingSignals', 'missing_signals']));
   const findEvidence = (sourceField: string, standardField: string) => fieldEvidence.find((evidence) =>
     (sourceField && evidence.sourceField === sourceField)
     || (standardField && evidence.standardField === standardField)
@@ -209,6 +249,9 @@ export function normalizePlan(row: IngestionPlanRow): NormalizedIngestionPlan {
       ...fieldEvidence.map((evidence) => [evidence.sourceField, evidence.standardField, evidence.reason].filter(Boolean).join('：')).filter(Boolean),
       ...(reasonText ? [reasonText] : []),
     ],
+    signalEvidence,
+    matchedSignals,
+    missingSignals,
     generationVersion: toText(firstDefined(records, ['generation_version', 'generationVersion', 'version'])) || '-',
     generatedAt: firstDefined(records, ['generated_at', 'generatedAt', 'created_at', 'createdAt', 'updated_at', 'updatedAt']) as string | number | undefined,
   };

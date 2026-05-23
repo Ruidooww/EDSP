@@ -94,6 +94,11 @@ class IngestionPlanServiceTest {
         assertEquals("ID", plan.path("idField").asText());
         assertEquals("shadow_validate", plan.path("recommendedAction").asText());
         assertEquals("alert_table", plan.path("templateMatch").path("templateKey").asText());
+        assertSignalEvidence(plan, "occurred_at", "field_name", List.of("CREATE_TIME"));
+        assertSignalEvidence(plan, "severity", "field_name", List.of("SEVERITY"));
+        assertSignalEvidence(plan, "actor", "field_name", List.of("USER_ACCOUNT"));
+        assertSignalEvidence(plan, "asset_ref", "field_name", List.of("HOST_NAME"));
+        assertFalse(jsonTextList(plan.path("templateMatch").path("missingSignals")).contains("external_id"));
         assertEquals("USER_ACCOUNT", plan.path("fieldEvidence").path("USER_ACCOUNT").path("sourceField").asText());
         assertEquals("actor", plan.path("fieldEvidence").path("USER_ACCOUNT").path("existingMapping").asText());
         assertEquals("existing_mapping", plan.path("fieldEvidence").path("USER_ACCOUNT").path("source").asText());
@@ -699,6 +704,21 @@ class IngestionPlanServiceTest {
 
     private List<String> jsonTextList(JsonNode node) {
         return objectMapper.convertValue(node, objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+    }
+
+    private void assertSignalEvidence(JsonNode plan, String signal, String source, List<String> sourceFields) {
+        var evidence = signalEvidence(plan, signal);
+        assertEquals(source, evidence.path("source").asText());
+        assertIterableEquals(sourceFields, jsonTextList(evidence.path("sourceFields")));
+    }
+
+    private JsonNode signalEvidence(JsonNode plan, String signal) {
+        for (var evidence : plan.path("templateMatch").path("signalEvidence")) {
+            if (signal.equals(evidence.path("signal").asText())) {
+                return evidence;
+            }
+        }
+        throw new AssertionError("Signal evidence not found: " + signal);
     }
 
     private JsonNode fieldMappingBySource(JsonNode plan, String sourceField) {

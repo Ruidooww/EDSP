@@ -37,6 +37,24 @@ public class IngestionPlanShadowRunService {
     private static final Set<String> RUN_ALLOWED_PLAN_STATUSES = Set.of("approved", "shadow_ready");
     private static final List<String> EXCLUDED_SEMANTICS = List.of("detail");
     private static final List<String> EXCLUDED_FIELD_PATTERNS = List.of("payload", "raw", "content", "body");
+    private static final Map<String, String> NORMALIZED_SEVERITIES = Map.ofEntries(
+        Map.entry("critical", "critical"),
+        Map.entry("严重", "critical"),
+        Map.entry("1", "critical"),
+        Map.entry("high", "high"),
+        Map.entry("高", "high"),
+        Map.entry("2", "high"),
+        Map.entry("medium", "medium"),
+        Map.entry("中", "medium"),
+        Map.entry("一般", "medium"),
+        Map.entry("warning", "medium"),
+        Map.entry("3", "medium"),
+        Map.entry("low", "low"),
+        Map.entry("低", "low"),
+        Map.entry("4", "low"),
+        Map.entry("info", "info"),
+        Map.entry("提示", "info")
+    );
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
@@ -107,6 +125,25 @@ public class IngestionPlanShadowRunService {
                 analysis.report()
             );
             return runRow(runId, true);
+        } catch (PlanBlockerException ex) {
+            var error = support.stringOrDefault(ex.getMessage(), "Shadow run blocked");
+            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
+            var blockers = new LinkedHashSet<>(stringList(report.get("blockers")));
+            blockers.addAll(ex.blockers());
+            var checks = new ArrayList<Object>();
+            if (report.get("checks") instanceof List<?> existingChecks) {
+                checks.addAll(existingChecks);
+            }
+            checks.add(failedCheck(ex, error));
+            report.put("status", "blocked");
+            report.put("summary", summary("blocked", sampleLimit, 0, 0, 0, 0, 0));
+            report.put("checks", checks);
+            report.put("blockers", new ArrayList<>(blockers));
+            report.put("errorsByType", Map.of(ex.errorType(), 1));
+            report.put("errorMessage", error);
+            var runId = insertRun(planId, dataSourceId, "blocked", sampleLimit, 0, 0, 0, 0, 0,
+                startedAt, error, report);
+            return runRow(runId, true);
         } catch (RuntimeException ex) {
             var error = support.stringOrDefault(ex.getMessage(), "Shadow run failed");
             var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
@@ -159,7 +196,8 @@ public class IngestionPlanShadowRunService {
     ) {
         var fieldMappings = fieldMappingSources(source.plan());
         var dedupFields = dedupFields(source.plan());
-        var cursorField = support.stringOrNull(source.plan().get("cursorField"));
+        var occurredAtField = sourceFieldForStandardField(fieldMappings, "occurredAt");
+        var severityField = sourceFieldForStandardField(fieldMappings, "severity");
         var seenDedupKeys = new LinkedHashSet<String>();
         var samples = new ArrayList<Map<String, Object>>();
         var errorsByType = new LinkedHashMap<String, Integer>();
@@ -172,14 +210,38 @@ public class IngestionPlanShadowRunService {
         for (var sourceRow : rows) {
             var errors = new ArrayList<String>();
             var sampleWarnings = new ArrayList<String>();
-            if (cursorField == null || blank(sourceRow.get(cursorField))) {
+            OffsetDateTime parsedOccurredAt = null;
+            String normalizedSeverity = null;
+            var missingRequired = false;
+            if (occurredAtField == null || blank(sourceRow.get(occurredAtField))) {
                 errors.add("missing_occurred_at");
                 increment(errorsByType, "missing_occurred_at");
+                missingRequired = true;
+            } else {
+                try {
+                    parsedOccurredAt = support.parseTime(String.valueOf(sourceRow.get(occurredAtField)));
+                    if (parsedOccurredAt == null) {
+                        errors.add("missing_occurred_at");
+                        increment(errorsByType, "missing_occurred_at");
+                        missingRequired = true;
+                    }
+                } catch (RuntimeException ex) {
+                    errors.add("invalid_time_format");
+                    increment(errorsByType, "invalid_time_format");
+                }
+            }
+            if (severityField != null) {
+                normalizedSeverity = normalizeSeverity(sourceRow.get(severityField));
+                if (normalizedSeverity == null) {
+                    errors.add("severity_unrecognized");
+                    increment(errorsByType, "severity_unrecognized");
+                }
             }
             var dedupKey = dedupKey(sourceRow, dedupFields);
             if (dedupKey == null) {
                 errors.add("dedup_key_missing");
                 increment(errorsByType, "dedup_key_missing");
+                missingRequired = true;
             } else if (!seenDedupKeys.add(dedupKey)) {
                 duplicateCount++;
                 sampleWarnings.add("duplicate_in_sample");
@@ -189,12 +251,18 @@ public class IngestionPlanShadowRunService {
                 successCount++;
             } else {
                 failedCount++;
-                missingRequiredCount++;
+                if (missingRequired) {
+                    missingRequiredCount++;
+                }
             }
             samples.add(samplePreview(sourceRow, source.selectedFields(), fieldMappings,
-                source.fieldMetadata(), errors, sampleWarnings));
+                source.fieldMetadata(), dedupKey == null ? null : sha256(dedupKey), parsedOccurredAt,
+                normalizedSeverity, errors, sampleWarnings));
         }
 
+        if (rows.isEmpty()) {
+            warnings.add("no_sample_rows");
+        }
         var precheckResult = support.stringOrDefault(precheck.get("result"), "passed");
         var status = failedCount > 0 || duplicateCount > 0 || !warnings.isEmpty() || "warning".equals(precheckResult)
             ? "warning"
@@ -219,6 +287,9 @@ public class IngestionPlanShadowRunService {
         List<String> selectedFields,
         Map<String, String> fieldMappings,
         Map<String, FieldMetadata> metadata,
+        String dedupKeyPreview,
+        OffsetDateTime parsedOccurredAt,
+        String normalizedSeverity,
         List<String> errors,
         List<String> warnings
     ) {
@@ -230,14 +301,27 @@ public class IngestionPlanShadowRunService {
             sourcePreview.put(sourceField, previewValue(sourceField, fieldMetadata.semanticType(), value));
         }
         for (var entry : fieldMappings.entrySet()) {
+            var standardField = entry.getValue();
+            if ("occurredAt".equals(standardField) || "severity".equals(standardField)) {
+                continue;
+            }
             var value = sourceRow.get(entry.getKey());
             var fieldMetadata = metadata.getOrDefault(entry.getKey(), new FieldMetadata(entry.getKey(), ""));
-            standardPreview.put(entry.getValue(), standardPreviewValue(entry.getValue(), entry.getKey(),
+            standardPreview.put(standardField, standardPreviewValue(standardField, entry.getKey(),
                 fieldMetadata.semanticType(), value));
+        }
+        if (parsedOccurredAt != null) {
+            standardPreview.put("occurredAt", parsedOccurredAt.toString());
+        }
+        if (normalizedSeverity != null) {
+            standardPreview.put("severity", normalizedSeverity);
         }
         var sample = new LinkedHashMap<String, Object>();
         sample.put("sourcePreview", sourcePreview);
         sample.put("standardEventPreview", standardPreview);
+        if (dedupKeyPreview != null) {
+            sample.put("dedupKeyPreview", dedupKeyPreview);
+        }
         sample.put("errors", errors);
         sample.put("warnings", warnings);
         return sample;
@@ -276,7 +360,11 @@ public class IngestionPlanShadowRunService {
         var dataSourceId = support.number(row.get("data_source_id"));
         var schemaTableId = longValue(plan.get("schemaTableId"));
         if (dataSourceId == null || schemaTableId == null) {
-            throw new IllegalStateException("Plan does not reference a scanned source table");
+            throw new PlanBlockerException(
+                "source_table_missing",
+                "source_table",
+                "Plan does not reference a scanned source table"
+            );
         }
         var tableRows = jdbcTemplate.queryForList("""
             select ds.source_type, ds.config_json, st.schema_name, st.table_name
@@ -287,7 +375,7 @@ public class IngestionPlanShadowRunService {
               and coalesce(st.lifecycle_status, 'active') = 'active'
             """, schemaTableId, dataSourceId);
         if (tableRows.isEmpty()) {
-            throw new IllegalStateException("Plan source table is not active");
+            throw new PlanBlockerException("source_table_missing", "source_table", "Plan source table is not active");
         }
         var tableRow = tableRows.get(0);
         var selectedFields = selectedFields(plan);
@@ -295,7 +383,11 @@ public class IngestionPlanShadowRunService {
         var activeFields = metadata.keySet();
         var missing = selectedFields.stream().filter(field -> !activeFields.contains(field)).toList();
         if (!missing.isEmpty()) {
-            throw new IllegalStateException("Plan references inactive source fields: " + missing);
+            throw new PlanBlockerException(
+                "source_fields_missing",
+                "source_fields",
+                "Plan references inactive source fields: " + missing
+            );
         }
         return new Source(
             support.stringOrDefault(tableRow.get("source_type"), ""),
@@ -364,6 +456,15 @@ public class IngestionPlanShadowRunService {
         return mappings;
     }
 
+    private String sourceFieldForStandardField(Map<String, String> fieldMappings, String standardField) {
+        for (var entry : fieldMappings.entrySet()) {
+            if (standardField.equals(entry.getValue())) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
     private List<String> dedupFields(Map<String, Object> plan) {
         if (!(plan.get("dedupStrategy") instanceof Map<?, ?> strategy)) {
             return List.of();
@@ -383,6 +484,14 @@ public class IngestionPlanShadowRunService {
             values.add(String.valueOf(row.get(field)));
         }
         return String.join("|", values);
+    }
+
+    private String normalizeSeverity(Object value) {
+        var text = support.stringOrNull(value);
+        if (text == null) {
+            return null;
+        }
+        return NORMALIZED_SEVERITIES.get(text.toLowerCase(Locale.ROOT));
     }
 
     private Map<String, Object> reportSkeleton(
@@ -424,6 +533,15 @@ public class IngestionPlanShadowRunService {
         summary.put("duplicateCount", duplicateCount);
         summary.put("missingRequiredCount", missingRequiredCount);
         return summary;
+    }
+
+    private Map<String, Object> failedCheck(PlanBlockerException ex, String message) {
+        var check = new LinkedHashMap<String, Object>();
+        check.put("code", ex.checkCode());
+        check.put("result", "failed");
+        check.put("message", message);
+        check.put("blockers", ex.blockers());
+        return check;
     }
 
     private Map<String, Object> previewPolicy() {
@@ -659,5 +777,28 @@ public class IngestionPlanShadowRunService {
         int missingRequiredCount,
         Map<String, Object> report
     ) {
+    }
+
+    private static final class PlanBlockerException extends RuntimeException {
+        private final String errorType;
+        private final String checkCode;
+
+        private PlanBlockerException(String errorType, String checkCode, String message) {
+            super(message);
+            this.errorType = errorType;
+            this.checkCode = checkCode;
+        }
+
+        private String errorType() {
+            return errorType;
+        }
+
+        private String checkCode() {
+            return checkCode;
+        }
+
+        private List<String> blockers() {
+            return List.of(errorType);
+        }
     }
 }

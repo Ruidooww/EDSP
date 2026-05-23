@@ -112,10 +112,12 @@ class IngestionPlanShadowRunServiceTest {
         assertFalse(String.valueOf(sourcePreview.get("raw_payload")).contains("raw secret payload"));
         var standardPreview = objectValue(firstSample.get("standardEventPreview"));
         assertEquals("ALERT-1", standardPreview.get("externalId"));
+        assertEquals("2026-05-20T10:30+08:00", standardPreview.get("occurredAt"));
         assertEquals("Sensitive file export", standardPreview.get("title"));
         assertEquals("******", standardPreview.get("subjectRef"));
         assertTrue(objectValue(standardPreview.get("detail")).containsKey("sha256"));
         assertFalse(String.valueOf(standardPreview.get("detail")).contains("raw secret payload"));
+        assertEquals(64, String.valueOf(firstSample.get("dedupKeyPreview")).length());
 
         var recentRuns = service.listShadowRuns(planId, 10);
         assertEquals(1, recentRuns.size());
@@ -144,6 +146,108 @@ class IngestionPlanShadowRunServiceTest {
         var standardPreview = objectValue(samples.get(0).get("standardEventPreview"));
         assertTrue(objectValue(standardPreview.get("detail")).containsKey("sha256"));
         assertFalse(String.valueOf(standardPreview.get("detail")).contains("message with sensitive narrative"));
+    }
+
+    @Test
+    void createShadowRunWarnsOnInvalidTimeAndSeverityWhileNormalizingValidPreview() throws Exception {
+        executeSourceSql("""
+            update sec_alert_event
+            set risk_level = case id when 'ALERT-1' then '高' else 'unknown-level' end,
+                create_time = case id when 'ALERT-1' then '2026-05-20 10:30:00' else 'not-a-time' end
+            """);
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        insertField(tableId, scanRunId, "user_account", "varchar", 4, null);
+        insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
+        insertField(tableId, scanRunId, "risk_level", "varchar", 6, null);
+        var planId = insertSeverityPlan(dataSourceId, scanRunId, tableId);
+
+        var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
+
+        assertEquals("warning", run.get("status"));
+        assertEquals(2, ((Number) run.get("readCount")).intValue());
+        assertEquals(1, ((Number) run.get("successCount")).intValue());
+        assertEquals(1, ((Number) run.get("failedCount")).intValue());
+        var report = objectValue(run.get("report"));
+        var errorsByType = objectValue(report.get("errorsByType"));
+        assertEquals(1, ((Number) errorsByType.get("invalid_time_format")).intValue());
+        assertEquals(1, ((Number) errorsByType.get("severity_unrecognized")).intValue());
+        var samples = objectList(report.get("samples"));
+        var failedSample = samples.stream()
+            .filter(sample -> stringList(sample.get("errors")).contains("invalid_time_format"))
+            .findFirst()
+            .orElseThrow();
+        assertTrue(stringList(failedSample.get("errors")).contains("severity_unrecognized"));
+        var failedStandardPreview = objectValue(failedSample.get("standardEventPreview"));
+        assertFalse(failedStandardPreview.containsKey("occurredAt"));
+        assertFalse(failedStandardPreview.containsKey("severity"));
+        var validSample = samples.stream()
+            .filter(sample -> "ALERT-1".equals(objectValue(sample.get("sourcePreview")).get("id")))
+            .findFirst()
+            .orElseThrow();
+        assertEquals(64, String.valueOf(validSample.get("dedupKeyPreview")).length());
+        var standardPreview = objectValue(validSample.get("standardEventPreview"));
+        assertEquals("2026-05-20T10:30+08:00", standardPreview.get("occurredAt"));
+        assertEquals("high", standardPreview.get("severity"));
+    }
+
+    @Test
+    void createShadowRunNormalizesSupportedSeverityAliases() throws Exception {
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        insertField(tableId, scanRunId, "user_account", "varchar", 4, null);
+        insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
+        insertField(tableId, scanRunId, "risk_level", "varchar", 6, null);
+        var planId = insertSeverityPlan(dataSourceId, scanRunId, tableId);
+
+        for (var entry : Map.of(
+            "warning", "medium",
+            "1", "critical",
+            "严重", "critical",
+            "提示", "info"
+        ).entrySet()) {
+            updateSourceSeverity(entry.getKey());
+
+            var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
+
+            assertEquals("passed", run.get("status"));
+            var samples = objectList(objectValue(run.get("report")).get("samples"));
+            var firstStandardPreview = objectValue(samples.get(0).get("standardEventPreview"));
+            assertEquals(entry.getValue(), firstStandardPreview.get("severity"));
+        }
+    }
+
+    @Test
+    void createShadowRunWarnsWhenNoSampleRowsAreRead() throws Exception {
+        executeSourceSql("delete from sec_alert_event");
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        insertField(tableId, scanRunId, "user_account", "varchar", 4, null);
+        insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
+        insertField(tableId, scanRunId, "phone", "varchar", 6, "sensitive_value");
+        insertField(tableId, scanRunId, "raw_payload", "json", 7, "detail");
+        var planId = insertPlan(dataSourceId, scanRunId, tableId, "approved");
+
+        var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
+
+        assertEquals("warning", run.get("status"));
+        assertEquals(0, ((Number) run.get("readCount")).intValue());
+        assertEquals(0, ((Number) run.get("successCount")).intValue());
+        assertEquals(0, ((Number) run.get("failedCount")).intValue());
+        var report = objectValue(run.get("report"));
+        assertTrue(stringList(report.get("warnings")).contains("no_sample_rows"));
     }
 
     @Test
@@ -206,6 +310,30 @@ class IngestionPlanShadowRunServiceTest {
     }
 
     @Test
+    void createShadowRunPersistsBlockedReportWhenPlanReferencesInactiveSourceFieldAfterPrecheck() {
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        var planId = insertMissingCursorMetadataPlan(dataSourceId, scanRunId, tableId);
+
+        var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
+
+        assertEquals("blocked", run.get("status"));
+        assertEquals(0, ((Number) run.get("readCount")).intValue());
+        assertEquals(1L, count("ingestion_plan_shadow_runs"));
+        assertNotNull(run.get("errorMessage"));
+        var report = objectValue(run.get("report"));
+        assertTrue(stringList(report.get("blockers")).contains("source_fields_missing"));
+        assertEquals(1, ((Number) objectValue(report.get("errorsByType")).get("source_fields_missing")).intValue());
+        assertTrue(objectList(report.get("checks")).stream().anyMatch(check ->
+            "source_fields".equals(check.get("code")) && "failed".equals(check.get("result"))
+        ));
+    }
+
+    @Test
     void createShadowRunPersistsFailedRunWhenJdbcSamplingFails() {
         var dataSourceId = insertDataSource("jdbc:h2:mem:shadow_missing_source;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE");
         var scanRunId = insertCompleteScan(dataSourceId);
@@ -239,6 +367,7 @@ class IngestionPlanShadowRunServiceTest {
                     event_name varchar(200),
                     user_account varchar(80),
                     host_name varchar(80),
+                    risk_level varchar(40),
                     phone varchar(40),
                     raw_payload varchar(500),
                     ignored_secret varchar(80)
@@ -246,12 +375,12 @@ class IngestionPlanShadowRunServiceTest {
                 """);
             statement.executeUpdate("""
                 insert into sec_alert_event(
-                    id, create_time, event_name, user_account, host_name, phone, raw_payload, ignored_secret
+                    id, create_time, event_name, user_account, host_name, risk_level, phone, raw_payload, ignored_secret
                 ) values
                 ('ALERT-1', '2026-05-20 10:30:00', 'Sensitive file export', 'zhangsan', 'WIN-01',
-                 '13800000000', '{"text":"raw secret payload"}', 'do-not-store'),
+                 'high', '13800000000', '{"text":"raw secret payload"}', 'do-not-store'),
                 ('ALERT-2', '2026-05-20 10:31:00', 'Suspicious login', 'lisi', 'WIN-02',
-                 '13900000000', '{"text":"another raw secret"}', 'do-not-store-2')
+                 'medium', '13900000000', '{"text":"another raw secret"}', 'do-not-store-2')
                 """);
             statement.execute("alter table sec_alert_event add column if not exists message varchar(500)");
             statement.executeUpdate("""
@@ -264,6 +393,21 @@ class IngestionPlanShadowRunServiceTest {
                 set message = 'another message with sensitive narrative'
                 where id = 'ALERT-2'
                 """);
+        }
+    }
+
+    private void executeSourceSql(String sql) throws Exception {
+        try (var connection = DriverManager.getConnection(SOURCE_URL, "sa", "super-secret");
+             var statement = connection.createStatement()) {
+            statement.execute(sql);
+        }
+    }
+
+    private void updateSourceSeverity(String severity) throws Exception {
+        try (var connection = DriverManager.getConnection(SOURCE_URL, "sa", "super-secret");
+             var statement = connection.prepareStatement("update sec_alert_event set risk_level = ?")) {
+            statement.setString(1, severity);
+            statement.executeUpdate();
         }
     }
 
@@ -313,6 +457,14 @@ class IngestionPlanShadowRunServiceTest {
         return lastId("ingestion_plans");
     }
 
+    private Long insertSeverityPlan(Long dataSourceId, Long scanRunId, Long tableId) {
+        jdbcTemplate.update("""
+            insert into ingestion_plans(data_source_id, scan_run_id, name, status, plan_json)
+            values (?, ?, 'Severity plan', 'approved', cast(? as jsonb))
+            """, dataSourceId, scanRunId, severityPlanJson(tableId));
+        return lastId("ingestion_plans");
+    }
+
     private Long insertWarningPlan(Long dataSourceId, Long scanRunId, Long tableId) {
         jdbcTemplate.update("""
             insert into ingestion_plans(data_source_id, scan_run_id, name, status, plan_json)
@@ -326,6 +478,14 @@ class IngestionPlanShadowRunServiceTest {
             insert into ingestion_plans(data_source_id, scan_run_id, name, status, plan_json)
             values (?, ?, 'Target detail plan', 'approved', cast(? as jsonb))
             """, dataSourceId, scanRunId, targetDetailPlanJson(tableId));
+        return lastId("ingestion_plans");
+    }
+
+    private Long insertMissingCursorMetadataPlan(Long dataSourceId, Long scanRunId, Long tableId) {
+        jdbcTemplate.update("""
+            insert into ingestion_plans(data_source_id, scan_run_id, name, status, plan_json)
+            values (?, ?, 'Missing cursor metadata plan', 'approved', cast(? as jsonb))
+            """, dataSourceId, scanRunId, missingCursorMetadataPlanJson(tableId));
         return lastId("ingestion_plans");
     }
 
@@ -353,6 +513,30 @@ class IngestionPlanShadowRunServiceTest {
                 "host_name": "assetRef",
                 "phone": "subjectRef",
                 "raw_payload": "detail"
+              },
+              "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
+              "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
+              "risks": [],
+              "requiredFieldsMissing": []
+            }
+            """.formatted(tableId);
+    }
+
+    private String severityPlanJson(Long tableId) {
+        return """
+            {
+              "version": "ingestion-plan-v1",
+              "mode": "database_polling",
+              "mainTable": "sec_alert_event",
+              "schemaTableId": %d,
+              "cursorField": "create_time",
+              "fieldMappings": {
+                "id": "externalId",
+                "create_time": "occurredAt",
+                "event_name": "title",
+                "user_account": "actor",
+                "host_name": "assetRef",
+                "risk_level": "severity"
               },
               "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
               "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
@@ -405,6 +589,27 @@ class IngestionPlanShadowRunServiceTest {
               },
               "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
               "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
+              "risks": [],
+              "requiredFieldsMissing": []
+            }
+            """.formatted(tableId);
+    }
+
+    private String missingCursorMetadataPlanJson(Long tableId) {
+        return """
+            {
+              "version": "ingestion-plan-v1",
+              "mode": "database_polling",
+              "mainTable": "sec_alert_event",
+              "schemaTableId": %d,
+              "cursorField": "missing_cursor",
+              "fieldMappings": {
+                "id": "externalId",
+                "create_time": "occurredAt",
+                "event_name": "title"
+              },
+              "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
+              "syncStrategy": {"type": "polling", "cursorField": "missing_cursor", "shadowOnly": true, "enabled": false},
               "risks": [],
               "requiredFieldsMissing": []
             }

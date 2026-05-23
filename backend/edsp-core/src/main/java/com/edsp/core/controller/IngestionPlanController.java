@@ -2,9 +2,12 @@ package com.edsp.core.controller;
 
 import com.edsp.common.api.ApiResponse;
 import com.edsp.core.dto.IngestionPlanGenerateRequest;
+import com.edsp.core.dto.IngestionPlanShadowRunRequest;
 import com.edsp.core.dto.IngestionPlanShadowValidationRequest;
 import com.edsp.core.dto.IngestionPlanStatusRequest;
+import com.edsp.core.service.IngestionPlanShadowRunService;
 import com.edsp.core.service.IngestionPlanService;
+import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,9 +23,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/core/ingestion-plans")
 public class IngestionPlanController {
     private final IngestionPlanService ingestionPlanService;
+    private final IngestionPlanShadowRunService shadowRunService;
 
-    public IngestionPlanController(IngestionPlanService ingestionPlanService) {
+    public IngestionPlanController(
+        IngestionPlanService ingestionPlanService,
+        IngestionPlanShadowRunService shadowRunService
+    ) {
         this.ingestionPlanService = ingestionPlanService;
+        this.shadowRunService = shadowRunService;
     }
 
     @GetMapping
@@ -52,5 +60,21 @@ public class IngestionPlanController {
         @RequestBody(required = false) IngestionPlanShadowValidationRequest request
     ) {
         return ApiResponse.ok(ingestionPlanService.shadowValidate(id, request), "validated");
+    }
+
+    @PostMapping("/{id}/shadow-runs")
+    public ApiResponse<Map<String, Object>> createShadowRun(
+        @PathVariable("id") long id,
+        @Valid @RequestBody(required = false) IngestionPlanShadowRunRequest request
+    ) {
+        return ApiResponse.ok(shadowRunService.createShadowRun(id, request), "created");
+    }
+
+    @GetMapping("/{id}/shadow-runs")
+    public ApiResponse<List<Map<String, Object>>> shadowRuns(
+        @PathVariable("id") long id,
+        @RequestParam(name = "limit", defaultValue = "10") int limit
+    ) {
+        return ApiResponse.ok(shadowRunService.listShadowRuns(id, limit));
     }
 }

@@ -1,5 +1,5 @@
 import { Button, Card, Select, Space } from 'antd';
-import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
+import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow, IngestionPlanSyncRunRow } from '../../../types';
 import { PLAN_STATUS_FILTER_OPTIONS } from '../utils/ingestionPlanLabels';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanPanel from './IngestionPlanPanel';
@@ -21,6 +21,7 @@ interface IngestionPlanSectionProps {
   rows: IngestionPlanViewRow[];
   activationsByPlanId: Record<number, IngestionPlanActivationRow | null>;
   latestShadowRunsByPlanId: Record<number, IngestionPlanShadowRunRow | null>;
+  syncRunsByPlanId: Record<number, IngestionPlanSyncRunRow[]>;
   loading: boolean;
   generating: boolean;
   actionId: number | null;
@@ -36,6 +37,7 @@ interface IngestionPlanSectionProps {
   onViewShadowReport: (row: IngestionPlanRow) => void;
   onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
   onDeactivate: (activation: IngestionPlanActivationRow) => void;
+  onSyncOnce: (row: IngestionPlanRow, activation: IngestionPlanActivationRow) => void;
 }
 
 export default function IngestionPlanSection({
@@ -45,6 +47,7 @@ export default function IngestionPlanSection({
   rows,
   activationsByPlanId,
   latestShadowRunsByPlanId,
+  syncRunsByPlanId,
   loading,
   generating,
   actionId,
@@ -60,6 +63,7 @@ export default function IngestionPlanSection({
   onViewShadowReport,
   onActivate,
   onDeactivate,
+  onSyncOnce,
 }: IngestionPlanSectionProps) {
   return (
     <Card className="ops-card" title="推荐接入方案">
@@ -101,6 +105,7 @@ export default function IngestionPlanSection({
               plan={plan}
               activation={activationsByPlanId[row.id] ?? null}
               latestShadowRun={latestShadowRunsByPlanId[row.id] ?? null}
+              syncRuns={syncRunsByPlanId[row.id] ?? []}
               busy={actionId === row.id}
               formatTime={formatTime}
               onViewReason={onViewReason}
@@ -110,6 +115,7 @@ export default function IngestionPlanSection({
               onViewShadowReport={onViewShadowReport}
               onActivate={onActivate}
               onDeactivate={onDeactivate}
+              onSyncOnce={onSyncOnce}
             />
           ))}
         </div>

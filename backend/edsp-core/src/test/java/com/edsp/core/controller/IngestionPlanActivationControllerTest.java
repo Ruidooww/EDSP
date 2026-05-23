@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.core.dto.IngestionPlanActivationRequest;
+import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
+import com.edsp.core.service.IngestionPlanSyncOnceService;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -43,8 +45,9 @@ class IngestionPlanActivationControllerTest {
     @Test
     void controllerMethodsReturnServicePayloads() {
         var activationService = new StubActivationService();
-        var planController = new IngestionPlanController(null, null, activationService);
-        var activationController = new IngestionPlanActivationController(activationService);
+        var syncOnceService = new StubSyncOnceService();
+        var planController = new IngestionPlanController(null, null, activationService, syncOnceService);
+        var activationController = new IngestionPlanActivationController(activationService, syncOnceService);
 
         var created = planController.activate(7L, new IngestionPlanActivationRequest(9L, "ops", "validated"));
         var list = planController.activations(7L, 10);
@@ -79,6 +82,17 @@ class IngestionPlanActivationControllerTest {
         @Override
         public Map<String, Object> deactivate(long activationId, IngestionPlanActivationRequest request) {
             return Map.of("id", activationId, "status", "deactivated");
+        }
+    }
+
+    private static class StubSyncOnceService extends IngestionPlanSyncOnceService {
+        StubSyncOnceService() {
+            super(null, null, null, null, null);
+        }
+
+        @Override
+        public Map<String, Object> syncOnce(long activationId, IngestionPlanSyncOnceRequest request) {
+            return Map.of("id", activationId, "status", "passed");
         }
     }
 }

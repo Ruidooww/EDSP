@@ -1,4 +1,4 @@
-import { FileSearchOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { FileSearchOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined, SyncOutlined } from '@ant-design/icons';
 import { Button, Space } from 'antd';
 import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
 import { canActivatePlan, getActivationStatus } from '../utils/ingestionPlanActivation';
@@ -17,6 +17,7 @@ interface IngestionPlanActionsProps {
   onViewShadowReport: (row: IngestionPlanRow) => void;
   onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
   onDeactivate: (activation: IngestionPlanActivationRow) => void;
+  onSyncOnce: (row: IngestionPlanRow, activation: IngestionPlanActivationRow) => void;
 }
 
 export default function IngestionPlanActions({
@@ -32,6 +33,7 @@ export default function IngestionPlanActions({
   onViewShadowReport,
   onActivate,
   onDeactivate,
+  onSyncOnce,
 }: IngestionPlanActionsProps) {
   const status = plan.status;
   const isActive = getActivationStatus(activation) === 'active';
@@ -82,6 +84,11 @@ export default function IngestionPlanActions({
       {canActivate && latestShadowRun && (
         <Button size="small" type="primary" icon={<PoweroffOutlined />} loading={busy} onClick={() => onActivate(row, latestShadowRun)}>
           启用方案
+        </Button>
+      )}
+      {isActive && activation && (
+        <Button size="small" icon={<SyncOutlined />} loading={busy} onClick={() => onSyncOnce(row, activation)}>
+          手动同步一次
         </Button>
       )}
       {isActive && activation && (

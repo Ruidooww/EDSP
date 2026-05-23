@@ -2,7 +2,9 @@ package com.edsp.core.controller;
 
 import com.edsp.common.api.ApiResponse;
 import com.edsp.core.dto.IngestionPlanActivationRequest;
+import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
+import com.edsp.core.service.IngestionPlanSyncOnceService;
 import java.util.Map;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -14,9 +16,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/core/ingestion-plan-activations")
 public class IngestionPlanActivationController {
     private final IngestionPlanActivationService activationService;
+    private final IngestionPlanSyncOnceService syncOnceService;
 
-    public IngestionPlanActivationController(IngestionPlanActivationService activationService) {
+    public IngestionPlanActivationController(
+        IngestionPlanActivationService activationService,
+        IngestionPlanSyncOnceService syncOnceService
+    ) {
         this.activationService = activationService;
+        this.syncOnceService = syncOnceService;
     }
 
     @PostMapping("/{activationId}/deactivate")
@@ -25,5 +32,13 @@ public class IngestionPlanActivationController {
         @RequestBody(required = false) IngestionPlanActivationRequest request
     ) {
         return ApiResponse.ok(activationService.deactivate(activationId, request), "deactivated");
+    }
+
+    @PostMapping("/{activationId}/sync-once")
+    public ApiResponse<Map<String, Object>> syncOnce(
+        @PathVariable("activationId") long activationId,
+        @RequestBody(required = false) IngestionPlanSyncOnceRequest request
+    ) {
+        return ApiResponse.ok(syncOnceService.syncOnce(activationId, request), "synced");
     }
 }

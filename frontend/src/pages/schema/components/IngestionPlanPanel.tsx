@@ -1,5 +1,5 @@
 import { Alert, Descriptions, Space, Tag, Typography } from 'antd';
-import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
+import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow, IngestionPlanSyncRunRow } from '../../../types';
 import {
   formatConfidence,
   planStatusTag,
@@ -14,6 +14,11 @@ import {
   getActivationStatus,
   getActivationTime,
   getShadowRunStatus,
+  getSyncRunErrorMessage,
+  getSyncRunMetric,
+  getSyncRunStatus,
+  getSyncRunTime,
+  getSyncRunWarnings,
 } from '../utils/ingestionPlanActivation';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanActions from './IngestionPlanActions';
@@ -24,6 +29,7 @@ interface IngestionPlanPanelProps {
   plan: NormalizedIngestionPlan;
   activation?: IngestionPlanActivationRow | null;
   latestShadowRun?: IngestionPlanShadowRunRow | null;
+  syncRuns: IngestionPlanSyncRunRow[];
   busy: boolean;
   formatTime: (value?: string | number) => string;
   onViewReason: (row: IngestionPlanRow) => void;
@@ -33,6 +39,23 @@ interface IngestionPlanPanelProps {
   onViewShadowReport: (row: IngestionPlanRow) => void;
   onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
   onDeactivate: (activation: IngestionPlanActivationRow) => void;
+  onSyncOnce: (row: IngestionPlanRow, activation: IngestionPlanActivationRow) => void;
+}
+
+function syncRunStatusTag(value?: string) {
+  if (value === 'passed') {
+    return <Tag color="success">passed</Tag>;
+  }
+  if (value === 'warning') {
+    return <Tag color="warning">warning</Tag>;
+  }
+  if (value === 'blocked') {
+    return <Tag color="error">blocked</Tag>;
+  }
+  if (value === 'failed') {
+    return <Tag color="error">failed</Tag>;
+  }
+  return <Tag>{value || '-'}</Tag>;
 }
 
 export default function IngestionPlanPanel({
@@ -40,6 +63,7 @@ export default function IngestionPlanPanel({
   plan,
   activation,
   latestShadowRun,
+  syncRuns,
   busy,
   formatTime,
   onViewReason,
@@ -49,12 +73,16 @@ export default function IngestionPlanPanel({
   onViewShadowReport,
   onActivate,
   onDeactivate,
+  onSyncOnce,
 }: IngestionPlanPanelProps) {
   const activationStatus = getActivationStatus(activation);
   const activationShadowRunId = getActivationShadowRunId(activation);
   const activationOperator = getActivationOperator(activation);
   const activationTime = getActivationTime(activation);
   const latestShadowRunStatus = getShadowRunStatus(latestShadowRun);
+  const latestSyncRun = syncRuns[0] ?? null;
+  const syncRunWarnings = getSyncRunWarnings(latestSyncRun);
+  const syncRunErrorMessage = getSyncRunErrorMessage(latestSyncRun);
   const isActive = activationStatus === 'active';
   const canActivate = canActivatePlan(plan.status, latestShadowRun, activation);
   const activationHint = isActive
@@ -100,6 +128,7 @@ export default function IngestionPlanPanel({
             onViewShadowReport={onViewShadowReport}
             onActivate={onActivate}
             onDeactivate={onDeactivate}
+            onSyncOnce={onSyncOnce}
           />
         </div>
       </div>
@@ -137,6 +166,32 @@ export default function IngestionPlanPanel({
         message={isActive ? '方案已启用' : '方案未启用'}
         description={activationHint}
       />
+
+      {isActive && (
+        <Alert
+          showIcon
+          type="info"
+          message="手动同步一次"
+          description="执行后会写入 raw_events / standard_events；不会生成 alert_decisions / alerts，也不会触发通知。"
+        />
+      )}
+
+      {latestSyncRun && (
+        <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title="最近同步结果">
+          <Descriptions.Item label="状态">{syncRunStatusTag(getSyncRunStatus(latestSyncRun))}</Descriptions.Item>
+          <Descriptions.Item label="完成时间">{formatTime(getSyncRunTime(latestSyncRun))}</Descriptions.Item>
+          <Descriptions.Item label="读取">{getSyncRunMetric(latestSyncRun, 'readCount', 'read_count')}</Descriptions.Item>
+          <Descriptions.Item label="成功">{getSyncRunMetric(latestSyncRun, 'successCount', 'success_count')}</Descriptions.Item>
+          <Descriptions.Item label="失败">{getSyncRunMetric(latestSyncRun, 'failedCount', 'failed_count')}</Descriptions.Item>
+          <Descriptions.Item label="重复">{getSyncRunMetric(latestSyncRun, 'duplicateCount', 'duplicate_count')}</Descriptions.Item>
+          <Descriptions.Item label="raw_events">{getSyncRunMetric(latestSyncRun, 'rawCount', 'raw_count')}</Descriptions.Item>
+          <Descriptions.Item label="standard_events">{getSyncRunMetric(latestSyncRun, 'standardCount', 'standard_count')}</Descriptions.Item>
+          <Descriptions.Item label="warnings" span={2}>
+            {syncRunWarnings.length ? renderTextTags(syncRunWarnings) : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="错误信息" span={2}>{syncRunErrorMessage || '-'}</Descriptions.Item>
+        </Descriptions>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
         <IngestionPlanDetailSection title="字段映射">

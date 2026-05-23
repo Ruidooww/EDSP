@@ -17,6 +17,32 @@ Clean master before the next stage.
 
 Agents must not expand the current stage scope without explicit user instruction.
 
+## Agent Execution Mode
+
+When executing development tasks, use available agent capabilities actively and safely.
+
+Rules:
+
+```text
+- Follow the existing stage plan and do not expand scope without explicit user instruction.
+- Make an implementation plan before changing code when the task is non-trivial.
+- Check key boundaries before implementation, during implementation, and before merge.
+- If there are two or more independent tasks with low file-conflict risk, dispatch them to separate sub-agents in parallel when the environment supports it.
+- If a task has a clear implementation plan and can be split safely, use multiple sub-agents with clear ownership.
+- Do not assign multiple sub-agents to modify the same files at the same time unless explicitly coordinated.
+- One agent must own final integration and conflict resolution.
+- Before marking the task complete or before merge, request a code review focused on:
+  - bugs
+  - scope drift
+  - missing tests
+  - state boundary violations
+  - accidental writes to forbidden tables
+  - frontend permission/button visibility issues
+  - migration compatibility
+- Do not skip tests because sub-agents completed their parts.
+- Final verification must still be run from the integrated branch.
+```
+
 ## Branch Rules
 
 Every new stage must start from a clean `master`.

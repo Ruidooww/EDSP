@@ -46,10 +46,65 @@ export interface RuleRow {
   id: number;
   name: string;
   event_type: string;
+  eventType?: string;
   severity: Severity;
   expression: string;
   enabled: boolean;
   updated_at: string;
+  created_at?: string;
+  createdAt?: string | number;
+  updatedAt?: string | number;
+}
+
+export type RuleDecision = 'matched' | 'not_matched' | 'skipped' | 'error';
+
+export interface RuleRequest {
+  name: string;
+  eventType: string;
+  severity: Severity;
+  expression: string;
+  enabled: boolean;
+}
+
+export interface RuleEnabledRequest {
+  enabled: boolean;
+}
+
+export interface RuleEvaluationRunRequest {
+  standardEventId: number;
+  ruleId?: number;
+  operatorName?: string;
+}
+
+export interface RuleEvaluationRunResult {
+  standardEventId: number;
+  ruleId?: number;
+  evaluatedCount: number;
+  matchedCount?: number;
+  notMatchedCount?: number;
+  skippedCount?: number;
+  errorCount?: number;
+  decisions?: RuleEvaluationDecisionRow[];
+}
+
+export interface RuleEvaluationDecisionRow {
+  id?: number;
+  standardEventId?: number;
+  standard_event_id?: number;
+  ruleId?: number;
+  rule_id?: number;
+  ruleName?: string;
+  rule_name?: string;
+  decision: RuleDecision | string;
+  severity?: Severity;
+  riskScore?: number;
+  risk_score?: number;
+  reason?: string;
+  detail?: Record<string, unknown> | string;
+  detailJson?: Record<string, unknown> | string;
+  detail_json?: Record<string, unknown> | string;
+  createdAt?: string | number;
+  created_at?: string | number;
 }
 
 export interface AlertRow {

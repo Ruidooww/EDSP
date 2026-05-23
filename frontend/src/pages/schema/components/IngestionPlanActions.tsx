@@ -1,7 +1,20 @@
-import { FileSearchOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined, SyncOutlined } from '@ant-design/icons';
+import {
+  FileSearchOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  PoweroffOutlined,
+  SafetyCertificateOutlined,
+  ScheduleOutlined,
+  SyncOutlined,
+} from '@ant-design/icons';
 import { Button, Space } from 'antd';
-import type { IngestionPlanActivationRow, IngestionPlanRow, IngestionPlanShadowRunRow } from '../../../types';
-import { canActivatePlan, getActivationStatus } from '../utils/ingestionPlanActivation';
+import type {
+  IngestionPlanActivationRow,
+  IngestionPlanRow,
+  IngestionPlanShadowRunRow,
+  IngestionPlanSyncScheduleRow,
+} from '../../../types';
+import { canActivatePlan, getActivationStatus, getSyncScheduleStatus } from '../utils/ingestionPlanActivation';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 
 interface IngestionPlanActionsProps {
@@ -9,6 +22,7 @@ interface IngestionPlanActionsProps {
   plan: NormalizedIngestionPlan;
   activation?: IngestionPlanActivationRow | null;
   latestShadowRun?: IngestionPlanShadowRunRow | null;
+  syncSchedule?: IngestionPlanSyncScheduleRow | null;
   busy: boolean;
   onViewReason: (row: IngestionPlanRow) => void;
   onUpdateStatus: (row: IngestionPlanRow, status: string, successText: string) => void;
@@ -18,6 +32,13 @@ interface IngestionPlanActionsProps {
   onActivate: (row: IngestionPlanRow, latestShadowRun: IngestionPlanShadowRunRow) => void;
   onDeactivate: (activation: IngestionPlanActivationRow) => void;
   onSyncOnce: (row: IngestionPlanRow, activation: IngestionPlanActivationRow) => void;
+  onConfigureSyncSchedule: (
+    row: IngestionPlanRow,
+    activation: IngestionPlanActivationRow,
+    schedule?: IngestionPlanSyncScheduleRow | null,
+  ) => void;
+  onPauseSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
+  onResumeSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
 }
 
 export default function IngestionPlanActions({
@@ -25,6 +46,7 @@ export default function IngestionPlanActions({
   plan,
   activation,
   latestShadowRun,
+  syncSchedule,
   busy,
   onViewReason,
   onUpdateStatus,
@@ -34,6 +56,9 @@ export default function IngestionPlanActions({
   onActivate,
   onDeactivate,
   onSyncOnce,
+  onConfigureSyncSchedule,
+  onPauseSyncSchedule,
+  onResumeSyncSchedule,
 }: IngestionPlanActionsProps) {
   const status = plan.status;
   const isActive = getActivationStatus(activation) === 'active';
@@ -45,6 +70,7 @@ export default function IngestionPlanActions({
   const canShadowRun = status === 'approved' || status === 'shadow_ready';
   const canDiscard = status === 'approved' || status === 'shadow_ready';
   const canActivate = canActivatePlan(status, latestShadowRun, activation);
+  const syncScheduleStatus = getSyncScheduleStatus(syncSchedule);
 
   return (
     <Space size={[4, 6]} wrap style={{ justifyContent: 'flex-end' }}>
@@ -68,7 +94,7 @@ export default function IngestionPlanActions({
       )}
       {canShadowValidate && (
         <Button size="small" icon={<SafetyCertificateOutlined />} loading={busy} onClick={() => onShadowValidate(row)}>
-          试运行前校验 / Shadow Precheck
+          Shadow Precheck
         </Button>
       )}
       {canShadowRun && (
@@ -89,6 +115,21 @@ export default function IngestionPlanActions({
       {isActive && activation && (
         <Button size="small" icon={<SyncOutlined />} loading={busy} onClick={() => onSyncOnce(row, activation)}>
           手动同步一次
+        </Button>
+      )}
+      {isActive && activation && (
+        <Button size="small" icon={<ScheduleOutlined />} loading={busy} onClick={() => onConfigureSyncSchedule(row, activation, syncSchedule)}>
+          {syncSchedule ? '配置定时同步' : '启用定时同步'}
+        </Button>
+      )}
+      {isActive && syncSchedule && syncScheduleStatus === 'enabled' && (
+        <Button size="small" icon={<PauseCircleOutlined />} loading={busy} onClick={() => onPauseSyncSchedule(row, syncSchedule)}>
+          暂停定时同步
+        </Button>
+      )}
+      {isActive && syncSchedule && syncScheduleStatus === 'paused' && (
+        <Button size="small" icon={<PlayCircleOutlined />} loading={busy} onClick={() => onResumeSyncSchedule(row, syncSchedule)}>
+          恢复定时同步
         </Button>
       )}
       {isActive && activation && (

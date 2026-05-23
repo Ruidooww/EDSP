@@ -578,6 +578,8 @@ export interface IngestionPlanSyncRunReport {
   boundary?: string;
   planId?: number;
   activationId?: number;
+  scheduleId?: number;
+  triggerType?: 'manual' | 'scheduled' | string;
   ingestionRunId?: number;
   status?: 'passed' | 'warning' | 'blocked' | 'failed' | string;
   sampleLimit?: number;
@@ -605,6 +607,10 @@ export interface IngestionPlanSyncRunRow {
   shadow_run_id?: number;
   ingestionRunId?: number;
   ingestion_run_id?: number;
+  scheduleId?: number;
+  schedule_id?: number;
+  triggerType?: 'manual' | 'scheduled' | string;
+  trigger_type?: 'manual' | 'scheduled' | string;
   status: 'passed' | 'warning' | 'blocked' | 'failed' | string;
   sampleLimit?: number;
   sample_limit?: number;
@@ -629,6 +635,47 @@ export interface IngestionPlanSyncRunRow {
   errorMessage?: string;
   error_message?: string;
   report?: IngestionPlanSyncRunReport;
+  createdAt?: string | number;
+  created_at?: string | number;
+  updatedAt?: string | number;
+  updated_at?: string | number;
+}
+
+export interface IngestionPlanSyncScheduleRow {
+  id: number;
+  ingestionPlanId?: number;
+  ingestion_plan_id?: number;
+  activationId?: number;
+  activation_id?: number;
+  dataSourceId?: number;
+  data_source_id?: number;
+  status: 'enabled' | 'paused' | string;
+  intervalSeconds?: number;
+  interval_seconds?: number;
+  sampleLimit?: number;
+  sample_limit?: number;
+  nextRunAt?: string | number;
+  next_run_at?: string | number;
+  lastRunAt?: string | number;
+  last_run_at?: string | number;
+  lastSyncRunId?: number;
+  last_sync_run_id?: number;
+  lastStatus?: string;
+  last_status?: string;
+  lastErrorMessage?: string;
+  last_error_message?: string;
+  consecutiveFailures?: number;
+  consecutive_failures?: number;
+  lockedAt?: string | number;
+  locked_at?: string | number;
+  lockOwner?: string;
+  lock_owner?: string;
+  createdBy?: string;
+  created_by?: string;
+  updatedBy?: string;
+  updated_by?: string;
+  config?: Record<string, unknown>;
+  config_json?: Record<string, unknown> | string;
   createdAt?: string | number;
   created_at?: string | number;
   updatedAt?: string | number;

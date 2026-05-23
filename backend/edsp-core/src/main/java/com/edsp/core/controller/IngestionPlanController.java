@@ -1,10 +1,12 @@
 package com.edsp.core.controller;
 
 import com.edsp.common.api.ApiResponse;
+import com.edsp.core.dto.IngestionPlanActivationRequest;
 import com.edsp.core.dto.IngestionPlanGenerateRequest;
 import com.edsp.core.dto.IngestionPlanShadowRunRequest;
 import com.edsp.core.dto.IngestionPlanShadowValidationRequest;
 import com.edsp.core.dto.IngestionPlanStatusRequest;
+import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanShadowRunService;
 import com.edsp.core.service.IngestionPlanService;
 import jakarta.validation.Valid;
@@ -24,13 +26,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class IngestionPlanController {
     private final IngestionPlanService ingestionPlanService;
     private final IngestionPlanShadowRunService shadowRunService;
+    private final IngestionPlanActivationService activationService;
 
     public IngestionPlanController(
         IngestionPlanService ingestionPlanService,
-        IngestionPlanShadowRunService shadowRunService
+        IngestionPlanShadowRunService shadowRunService,
+        IngestionPlanActivationService activationService
     ) {
         this.ingestionPlanService = ingestionPlanService;
         this.shadowRunService = shadowRunService;
+        this.activationService = activationService;
     }
 
     @GetMapping
@@ -76,5 +81,21 @@ public class IngestionPlanController {
         @RequestParam(name = "limit", defaultValue = "10") int limit
     ) {
         return ApiResponse.ok(shadowRunService.listShadowRuns(id, limit));
+    }
+
+    @PostMapping("/{id}/activations")
+    public ApiResponse<Map<String, Object>> activate(
+        @PathVariable("id") long id,
+        @RequestBody(required = false) IngestionPlanActivationRequest request
+    ) {
+        return ApiResponse.ok(activationService.activate(id, request), "created");
+    }
+
+    @GetMapping("/{id}/activations")
+    public ApiResponse<List<Map<String, Object>>> activations(
+        @PathVariable("id") long id,
+        @RequestParam(name = "limit", defaultValue = "10") int limit
+    ) {
+        return ApiResponse.ok(activationService.list(id, limit));
     }
 }

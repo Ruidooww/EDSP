@@ -117,6 +117,107 @@ Requirements:
 
 Line-ending warnings caused by Git `autocrlf` are not blocking if no whitespace error is reported.
 
+## Review And Merge Authorization Rules
+
+Before marking a stage complete, and before any merge into `master`, the agent must request code review.
+
+The review must focus on bugs, scope drift, missing tests, state boundary violations, accidental writes to forbidden tables, frontend permission/button visibility issues, migration compatibility, idempotency problems, unintended background execution, and stale or inaccurate handoff notes.
+
+The agent must report review findings using this severity model:
+
+```text
+- P0: must fix before merge
+- P1: should fix before merge
+- P2: can be tracked after merge
+```
+
+A stage with unresolved P0 or P1 must not be merged.
+
+Passing tests does not equal review approval.
+
+Agents must not merge a stage branch into `master` unless the user explicitly approves the merge after review.
+
+This rule is mandatory.
+
+Allowed before explicit user merge approval:
+
+```text
+- implement code
+- add tests
+- update files inside the stage branch
+- run verification commands
+- push the stage branch
+- report test/build results
+- request review
+- propose merge commands
+```
+
+Forbidden before explicit user merge approval:
+
+```text
+- do not run `git merge`
+- do not push to `master`
+- do not run `git push origin master`
+- do not update `HANDOFF.md` on `master`
+- do not create a post-merge docs commit
+- do not treat passing tests as approval
+- do not self-approve code review
+- do not assume "looks good" means merge approval unless the user explicitly says to merge
+```
+
+Explicit merge approval means the user says something clearly equivalent to:
+
+```text
+- 可以合并
+- 合并吧
+- merge it
+- approved to merge
+- 可以 merge 到 master
+```
+
+If the user only says something like:
+
+```text
+- 看一下
+- 审查一下
+- 测试通过了
+- 我提交了
+- 我 push 了
+- 继续
+- 下一步
+```
+
+that is not merge approval.
+
+In those cases, the agent must stop after review and report whether the branch is ready to merge.
+
+After implementation and verification, the agent must stop and report:
+
+```text
+- Stage branch
+- Latest branch commit
+- Changed files
+- Tests run
+- Frontend build result
+- git diff --check result
+- git status result
+- Known risks
+- Review result
+- Merge recommendation
+```
+
+Then the agent must wait for explicit user approval.
+
+Do not merge automatically.
+
+Only after the user explicitly approves merge may the agent run:
+
+```powershell
+git checkout master
+git pull --ff-only origin master
+git merge --no-ff <stage-branch-name> -m "merge: <stage name>"
+```
+
 ## Merge Rules
 
 After verification passes, merge the stage branch into `master` using `--no-ff`:

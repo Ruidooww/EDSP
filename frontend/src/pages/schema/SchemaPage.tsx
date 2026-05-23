@@ -18,6 +18,7 @@ import type {
   IngestionPlanActivationRow,
   IngestionPlanRow,
   IngestionPlanShadowRunRow,
+  IngestionPlanSyncRunRow,
   IngestionPlanShadowValidationReport,
   SchemaChangeEventRow,
   SchemaFieldRow,
@@ -34,6 +35,7 @@ import {
 } from './utils/ingestionPlanLabels';
 import {
   canActivatePlan,
+  canSyncOnce,
   findActiveActivation,
   getActivationPlanId,
   getShadowRunId,
@@ -244,6 +246,7 @@ export default function SchemaPage() {
   const [shadowRunsByPlanId, setShadowRunsByPlanId] = useState<Record<number, IngestionPlanShadowRunRow>>({});
   const [latestShadowRunsByPlanId, setLatestShadowRunsByPlanId] = useState<Record<number, IngestionPlanShadowRunRow | null>>({});
   const [activationsByPlanId, setActivationsByPlanId] = useState<Record<number, IngestionPlanActivationRow | null>>({});
+  const [syncRunsByPlanId, setSyncRunsByPlanId] = useState<Record<number, IngestionPlanSyncRunRow[]>>({});
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
@@ -294,19 +297,22 @@ export default function SchemaPage() {
 
   async function loadPlanRuntimeState(planRows: IngestionPlanRow[]) {
     const entries = await Promise.all(planRows.map(async (row) => {
-      const [activations, shadowRuns] = await Promise.all([
+      const [activations, shadowRuns, syncRuns] = await Promise.all([
         apiGet<IngestionPlanActivationRow[]>(`/api/core/ingestion-plans/${row.id}/activations?limit=10`).catch(() => []),
         apiGet<IngestionPlanShadowRunRow[]>(`/api/core/ingestion-plans/${row.id}/shadow-runs?limit=1`).catch(() => []),
+        apiGet<IngestionPlanSyncRunRow[]>(`/api/core/ingestion-plans/${row.id}/sync-runs?limit=5`).catch(() => []),
       ]);
       return {
         planId: row.id,
         activation: findActiveActivation(activations),
         latestShadowRun: shadowRuns[0] ?? null,
+        syncRuns,
       };
     }));
 
     setActivationsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.activation])));
     setLatestShadowRunsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.latestShadowRun])));
+    setSyncRunsByPlanId(Object.fromEntries(entries.map((entry) => [entry.planId, entry.syncRuns])));
   }
 
   async function loadPlans(sourceId = planSourceId, status = planStatusFilter) {
@@ -327,6 +333,7 @@ export default function SchemaPage() {
       setPlans([]);
       setActivationsByPlanId({});
       setLatestShadowRunsByPlanId({});
+      setSyncRunsByPlanId({});
     } finally {
       setPlanLoading(false);
     }
@@ -565,6 +572,52 @@ export default function SchemaPage() {
           await loadPlans();
         } catch (error) {
           message.error(error instanceof Error ? error.message : '方案停用失败');
+        } finally {
+          setPlanActionId(null);
+        }
+      },
+    });
+  }
+
+  function syncOncePlan(row: IngestionPlanRow, activation: IngestionPlanActivationRow) {
+    if (!canSyncOnce(activation)) {
+      message.warning('只有 active activation 可以执行手动同步一次');
+      return;
+    }
+
+    Modal.confirm({
+      title: '手动同步一次',
+      content: (
+        <div>
+          <p>将通过 active activation #{activation.id} 执行一次正式同步。</p>
+          <p>本操作会写入 raw_events / standard_events，但不会生成 alert_decisions / alerts，也不会触发通知。</p>
+        </div>
+      ),
+      okText: '执行同步',
+      cancelText: '取消',
+      onOk: async () => {
+        setPlanActionId(row.id);
+        try {
+          const run = await apiPost<IngestionPlanSyncRunRow>(`/api/core/ingestion-plan-activations/${activation.id}/sync-once`, {
+            sampleLimit: 50,
+            operatorName: 'admin',
+          });
+          setSyncRunsByPlanId((current) => ({
+            ...current,
+            [row.id]: [
+              run,
+              ...(current[row.id] || []).filter((item) => item.id !== run.id),
+            ].slice(0, 5),
+          }));
+          if (run.status === 'warning') {
+            message.warning('手动同步已完成，存在行级异常，请查看同步结果');
+          } else if (run.status === 'blocked' || run.status === 'failed') {
+            message.error('手动同步未通过，请查看同步结果');
+          } else {
+            message.success('手动同步完成，已写入 raw_events / standard_events');
+          }
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '手动同步失败');
         } finally {
           setPlanActionId(null);
         }
@@ -893,6 +946,7 @@ export default function SchemaPage() {
         rows={planViewRows}
         activationsByPlanId={activationsByPlanId}
         latestShadowRunsByPlanId={latestShadowRunsByPlanId}
+        syncRunsByPlanId={syncRunsByPlanId}
         loading={planLoading}
         generating={planGenerating}
         actionId={planActionId}
@@ -908,6 +962,7 @@ export default function SchemaPage() {
         onViewShadowReport={viewShadowRunReport}
         onActivate={activatePlan}
         onDeactivate={deactivatePlan}
+        onSyncOnce={syncOncePlan}
       />
 
       <Card className="ops-card" title="扫描运行记录">

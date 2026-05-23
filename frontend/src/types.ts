@@ -572,3 +572,65 @@ export interface IngestionPlanActivationRow {
   updatedAt?: string | number;
   updated_at?: string | number;
 }
+
+export interface IngestionPlanSyncRunReport {
+  mode?: string;
+  boundary?: string;
+  planId?: number;
+  activationId?: number;
+  ingestionRunId?: number;
+  status?: 'passed' | 'warning' | 'blocked' | 'failed' | string;
+  sampleLimit?: number;
+  readCount?: number;
+  successCount?: number;
+  failedCount?: number;
+  duplicateCount?: number;
+  rawCount?: number;
+  standardCount?: number;
+  warnings?: string[];
+  errorsByType?: Record<string, number>;
+  blockers?: string[];
+  errorMessage?: string;
+}
+
+export interface IngestionPlanSyncRunRow {
+  id: number;
+  ingestionPlanId?: number;
+  ingestion_plan_id?: number;
+  activationId?: number;
+  activation_id?: number;
+  dataSourceId?: number;
+  data_source_id?: number;
+  shadowRunId?: number;
+  shadow_run_id?: number;
+  ingestionRunId?: number;
+  ingestion_run_id?: number;
+  status: 'passed' | 'warning' | 'blocked' | 'failed' | string;
+  sampleLimit?: number;
+  sample_limit?: number;
+  readCount?: number;
+  read_count?: number;
+  successCount?: number;
+  success_count?: number;
+  failedCount?: number;
+  failed_count?: number;
+  duplicateCount?: number;
+  duplicate_count?: number;
+  rawCount?: number;
+  raw_count?: number;
+  standardCount?: number;
+  standard_count?: number;
+  startedAt?: string | number;
+  started_at?: string | number;
+  finishedAt?: string | number;
+  finished_at?: string | number;
+  durationMs?: number;
+  duration_ms?: number;
+  errorMessage?: string;
+  error_message?: string;
+  report?: IngestionPlanSyncRunReport;
+  createdAt?: string | number;
+  created_at?: string | number;
+  updatedAt?: string | number;
+  updated_at?: string | number;
+}

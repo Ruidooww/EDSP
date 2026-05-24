@@ -4,34 +4,24 @@ import com.edsp.alert.dto.NotificationChannelRequest;
 import com.edsp.alert.dto.NotificationSendRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.sql.Timestamp;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class NotificationService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
 
     public NotificationService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
-        this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .build();
     }
 
     public List<Map<String, Object>> listChannels() {
@@ -44,7 +34,26 @@ public class NotificationService {
     }
 
     public List<Map<String, Object>> listDeliveries(int limit) {
+        return listDeliveries(limit, null);
+    }
+
+    public List<Map<String, Object>> listDeliveries(int limit, Long alertId) {
         var safeLimit = Math.max(1, Math.min(limit, 200));
+        if (alertId != null) {
+            return jdbcTemplate.queryForList("""
+                select d.id, d.channel_id, c.name as channel_name, c.channel_type,
+                       d.alert_id, a.title as alert_title,
+                       d.title, d.severity, d.status, d.response_code, d.response_body,
+                       cast(d.payload_json as varchar) as payload_json,
+                       d.created_at
+                from notification_deliveries d
+                left join notification_channels c on c.id = d.channel_id
+                left join alerts a on a.id = d.alert_id
+                where d.alert_id = ?
+                order by d.created_at desc
+                limit ?
+                """, alertId, safeLimit);
+        }
         return jdbcTemplate.queryForList("""
             select d.id, d.channel_id, c.name as channel_name, c.channel_type,
                    d.alert_id, a.title as alert_title,
@@ -60,6 +69,8 @@ public class NotificationService {
     }
 
     public Map<String, Object> createChannel(NotificationChannelRequest request) {
+        var channelType = normalizeType(request.channelType());
+        var endpointUrl = normalizeWebhookEndpoint(request.webhookUrl());
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             var statement = connection.prepareStatement("""
@@ -69,8 +80,8 @@ public class NotificationService {
                 values (?, ?, ?, ?, cast(? as jsonb), ?, ?)
                 """, new String[] {"id"});
             statement.setString(1, request.name());
-            statement.setString(2, normalizeType(request.channelType()));
-            statement.setString(3, normalizeOptional(request.webhookUrl()));
+            statement.setString(2, channelType);
+            statement.setString(3, endpointUrl);
             statement.setString(4, request.description());
             statement.setString(5, configJson(request));
             statement.setBoolean(6, request.enabled());
@@ -83,13 +94,15 @@ public class NotificationService {
     }
 
     public Map<String, Object> updateChannel(long id, NotificationChannelRequest request) {
+        var channelType = normalizeType(request.channelType());
+        var endpointUrl = normalizeWebhookEndpoint(request.webhookUrl());
         jdbcTemplate.update("""
             update notification_channels
             set name = ?, channel_type = ?, endpoint_url = ?, description = ?,
                 config_json = cast(? as jsonb), enabled = ?, status = ?, updated_at = now()
             where id = ?
             """,
-            request.name(), normalizeType(request.channelType()), normalizeOptional(request.webhookUrl()),
+            request.name(), channelType, endpointUrl,
             request.description(), configJson(request), request.enabled(),
             request.enabled() ? "ready" : "disabled", id);
         return Map.of("id", id);
@@ -101,137 +114,11 @@ public class NotificationService {
     }
 
     public Map<String, Object> testChannel(long id) {
-        var channel = fetchChannel(id);
-        var payload = new LinkedHashMap<String, Object>();
-        payload.put("event", "security-alert-platform.notification.test");
-        payload.put("title", "数据安全预警分析平台通知通道测试");
-        payload.put("message", "这是一条来自数据安全预警分析平台的测试消息。");
-        payload.put("severity", "info");
-        payload.put("channelId", id);
-        payload.put("sentAt", Instant.now().toString());
-
-        var result = dispatch(channel, payload);
-        jdbcTemplate.update("""
-            update notification_channels
-            set last_test_status = ?, last_test_message = ?, last_test_at = ?, status = ?, updated_at = now()
-            where id = ?
-            """,
-            result.get("status"), result.get("message"), Timestamp.from(Instant.now()),
-            "success".equals(result.get("status")) ? "ready" : "error", id);
-        return result;
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "use_alert_notification_endpoint");
     }
 
     public Map<String, Object> send(NotificationSendRequest request) {
-        var channels = targetChannels(request.channelIds());
-        var results = new ArrayList<Map<String, Object>>();
-        for (var channel : channels) {
-            var payload = new LinkedHashMap<String, Object>();
-            payload.put("event", "security-alert-platform.alert.notification");
-            payload.put("alertId", request.alertId());
-            payload.put("title", request.title());
-            payload.put("message", request.message());
-            payload.put("severity", request.severity());
-            payload.put("detail", request.detail());
-            payload.put("sentAt", Instant.now().toString());
-
-            var result = dispatch(channel, payload);
-            saveDelivery(channel, request, payload, result);
-            results.add(result);
-        }
-        var success = results.stream().filter(result -> "success".equals(result.get("status"))).count();
-        return Map.of(
-            "total", results.size(),
-            "success", success,
-            "failed", results.size() - success,
-            "results", results
-        );
-    }
-
-    private Map<String, Object> dispatch(Map<String, Object> channel, Map<String, Object> payload) {
-        var result = new LinkedHashMap<String, Object>();
-        result.put("channelId", channel.get("id"));
-        result.put("channelName", channel.get("name"));
-
-        var type = String.valueOf(channel.get("channel_type"));
-        if (!"webhook".equalsIgnoreCase(type)) {
-            result.put("status", "success");
-            result.put("message", channelTypeName(type) + "演示发送成功");
-            result.put("responseCode", 200);
-            result.put("responseBody", "demo delivery accepted");
-            return result;
-        }
-
-        var url = channel.get("endpoint_url") == null ? "" : String.valueOf(channel.get("endpoint_url"));
-        if (url.isBlank()) {
-            result.put("status", "failed");
-            result.put("message", "Webhook 地址为空");
-            return result;
-        }
-
-        try {
-            var request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(8))
-                .header("Content-Type", "application/json; charset=utf-8")
-                .POST(HttpRequest.BodyPublishers.ofString(toJson(payload)))
-                .build();
-            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            var success = response.statusCode() >= 200 && response.statusCode() < 300;
-            result.put("status", success ? "success" : "failed");
-            result.put("message", success ? "发送成功" : "发送失败，HTTP " + response.statusCode());
-            result.put("responseCode", response.statusCode());
-            result.put("responseBody", truncate(response.body()));
-        } catch (IllegalArgumentException ex) {
-            result.put("status", "failed");
-            result.put("message", "Webhook 地址格式不正确");
-        } catch (IOException ex) {
-            result.put("status", "failed");
-            result.put("message", "Webhook 连接失败：" + ex.getMessage());
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            result.put("status", "failed");
-            result.put("message", "Webhook 发送被中断");
-        }
-        return result;
-    }
-
-    private void saveDelivery(
-        Map<String, Object> channel,
-        NotificationSendRequest request,
-        Map<String, Object> payload,
-        Map<String, Object> result
-    ) {
-        jdbcTemplate.update("""
-            insert into notification_deliveries(
-                channel_id, alert_id, title, severity, status, response_code, response_body, payload_json
-            )
-            values (?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))
-            """,
-            channel.get("id"), request.alertId(), request.title(), request.severity(), result.get("status"),
-            result.get("responseCode"), result.get("responseBody"), toJson(payload));
-    }
-
-    private List<Map<String, Object>> targetChannels(List<Long> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return jdbcTemplate.queryForList("""
-                select id, name, channel_type, endpoint_url
-                from notification_channels
-                where enabled = true
-                order by id
-                """);
-        }
-        var channels = new ArrayList<Map<String, Object>>();
-        for (var id : ids) {
-            channels.add(fetchChannel(id));
-        }
-        return channels;
-    }
-
-    private Map<String, Object> fetchChannel(long id) {
-        return jdbcTemplate.queryForMap("""
-            select id, name, channel_type, endpoint_url, enabled
-            from notification_channels
-            where id = ? and enabled = true
-            """, id);
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "use_alert_notification_endpoint");
     }
 
     private Map<String, Object> presentChannel(Map<String, Object> row) {
@@ -259,11 +146,28 @@ public class NotificationService {
     }
 
     private String normalizeType(String value) {
-        return value == null || value.isBlank() ? "webhook" : value.trim().toLowerCase();
+        var type = value == null || value.isBlank() ? "webhook" : value.trim().toLowerCase();
+        if (!"webhook".equals(type)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
+        }
+        return type;
     }
 
-    private String normalizeOptional(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
+    private String normalizeWebhookEndpoint(String value) {
+        if (value == null || value.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
+        }
+        var endpoint = value.trim();
+        try {
+            var uri = URI.create(endpoint);
+            var scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+            if (!("http".equals(scheme) || "https".equals(scheme)) || uri.getHost() == null || uri.getHost().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
+            }
+            return endpoint;
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
+        }
     }
 
     private String maskEndpoint(Object endpoint) {
@@ -273,28 +177,11 @@ public class NotificationService {
         try {
             var uri = URI.create(String.valueOf(endpoint));
             var port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
-            var path = uri.getPath() == null || uri.getPath().isBlank() ? "" : uri.getPath();
+            var path = uri.getPath() == null || uri.getPath().isBlank() ? "" : "/...";
             return uri.getScheme() + "://" + uri.getHost() + port + path;
         } catch (IllegalArgumentException ex) {
             return "地址格式异常";
         }
     }
 
-    private String channelTypeName(String type) {
-        return switch (type == null ? "" : type.toLowerCase()) {
-            case "wecom" -> "企业微信";
-            case "feishu" -> "飞书";
-            case "sms" -> "短信";
-            case "email" -> "邮件";
-            case "webhook" -> "Webhook";
-            default -> "通知通道";
-        };
-    }
-
-    private String truncate(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() > 1000 ? value.substring(0, 1000) : value;
-    }
 }

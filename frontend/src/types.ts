@@ -198,7 +198,9 @@ export interface NotificationChannelRow {
   id: number;
   name: string;
   channel_type: string;
+  channelType?: string;
   endpoint_masked: string;
+  endpointMasked?: string;
   description?: string;
   enabled: boolean;
   status: string;
@@ -222,6 +224,33 @@ export interface NotificationDeliveryRow {
   response_body?: string;
   payload_json?: Record<string, unknown> | string;
   created_at: string;
+}
+
+export interface NotificationAlertSendRequest {
+  alertId: number;
+  channelId: number;
+}
+
+export interface NotificationAlertSendResult {
+  alertId?: number;
+  channelId?: number;
+  channelName?: string;
+  status?: string;
+  message?: string;
+  responseCode?: number;
+  responseBody?: string;
+  deliveryId?: number;
+  total?: number;
+  success?: number;
+  failed?: number;
+  results?: Array<{
+    channelId?: number;
+    channelName?: string;
+    status?: string;
+    message?: string;
+    responseCode?: number;
+    responseBody?: string;
+  }>;
 }
 
 export interface OverviewTrendPoint {

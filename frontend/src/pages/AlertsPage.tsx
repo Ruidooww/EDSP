@@ -1,9 +1,20 @@
-import { BellOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Drawer, Empty, Form, InputNumber, Space, Table, Tag, Typography, message } from 'antd';
+import { BellOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Drawer, Empty, Form, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../api';
-import type { AlertGenerationRunResult, AlertRow } from '../types';
+import type {
+  AlertGenerationRunResult,
+  AlertRow,
+  NotificationAlertSendRequest,
+  NotificationAlertSendResult,
+  NotificationChannelRow,
+  NotificationDeliveryRow,
+} from '../types';
+
+interface AlertNotificationFormValues {
+  channelId: number;
+}
 
 function severityLabel(value?: string) {
   return {
@@ -94,12 +105,32 @@ function ruleId(row: AlertRow) {
   return row.ruleId ?? row.rule_id;
 }
 
+function channelType(row: NotificationChannelRow) {
+  return row.channelType ?? row.channel_type;
+}
+
+function deliveryStatusColor(status?: string) {
+  if (status === 'success') {
+    return 'success';
+  }
+  if (status === 'failed' || status === 'error') {
+    return 'error';
+  }
+  return 'processing';
+}
+
 export default function AlertsPage() {
   const [rows, setRows] = useState<AlertRow[]>([]);
+  const [channels, setChannels] = useState<NotificationChannelRow[]>([]);
+  const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [sending, setSending] = useState(false);
   const [activeRow, setActiveRow] = useState<AlertRow | null>(null);
+  const [notificationRow, setNotificationRow] = useState<AlertRow | null>(null);
+  const [sendResult, setSendResult] = useState<NotificationAlertSendResult | null>(null);
   const [form] = Form.useForm<{ decisionId: number }>();
+  const [notificationForm] = Form.useForm<AlertNotificationFormValues>();
 
   async function load() {
     setLoading(true);
@@ -114,7 +145,24 @@ export default function AlertsPage() {
 
   useEffect(() => {
     void load();
+    void loadChannels();
   }, []);
+
+  async function loadChannels() {
+    try {
+      setChannels(await apiGet<NotificationChannelRow[]>('/api/notifications/channels'));
+    } catch {
+      setChannels([]);
+    }
+  }
+
+  async function loadDeliveries(row: AlertRow) {
+    try {
+      setDeliveries(await apiGet<NotificationDeliveryRow[]>(`/api/notifications/deliveries?limit=50&alertId=${alertId(row)}`));
+    } catch {
+      setDeliveries([]);
+    }
+  }
 
   async function generateAlert(values: { decisionId: number }) {
     setGenerating(true);
@@ -130,6 +178,40 @@ export default function AlertsPage() {
       setGenerating(false);
     }
   }
+
+  function openNotificationModal(row: AlertRow) {
+    setNotificationRow(row);
+    setSendResult(null);
+    setDeliveries([]);
+    notificationForm.resetFields();
+    void loadChannels();
+    void loadDeliveries(row);
+  }
+
+  async function sendNotification(values: AlertNotificationFormValues) {
+    if (!notificationRow) {
+      return;
+    }
+    setSending(true);
+    try {
+      const request: NotificationAlertSendRequest = {
+        alertId: alertId(notificationRow),
+        channelId: values.channelId,
+      };
+      const result = await apiPost<NotificationAlertSendResult>('/api/notifications/alerts/send', request);
+      setSendResult(result);
+      if (result.status === 'success') {
+        message.success(result.message || '通知发送成功');
+      } else {
+        message.warning(result.message || '通知发送失败');
+      }
+      await loadDeliveries(notificationRow);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const enabledWebhookChannels = channels.filter((channel) => channel.enabled && channelType(channel) === 'webhook');
 
   const columns: ColumnsType<AlertRow> = [
     {
@@ -172,12 +254,22 @@ export default function AlertsPage() {
     },
     {
       title: '操作',
-      width: 100,
+      width: 190,
       fixed: 'right',
       render: (_, row) => (
-        <Button size="small" icon={<EyeOutlined />} onClick={() => setActiveRow(row)}>
-          详情
-        </Button>
+        <Space>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => setActiveRow(row)}>
+            详情
+          </Button>
+          <Button
+            size="small"
+            icon={<SendOutlined />}
+            disabled={row.status !== 'open'}
+            onClick={() => openNotificationModal(row)}
+          >
+            发送通知
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -197,7 +289,7 @@ export default function AlertsPage() {
           className="form-hint"
           type="info"
           showIcon
-          message="本阶段只从 matched alert_decisions 创建 alerts，不发送通知。"
+          message="本阶段支持从 open alerts 手动发送 webhook 通知，不做自动通知或批量群发。"
         />
         <Card size="small" className="section-card" title="手动生成告警">
           <Form form={form} layout="inline" onFinish={generateAlert}>
@@ -269,6 +361,95 @@ export default function AlertsPage() {
           <Empty />
         )}
       </Drawer>
+      <Modal
+        title="发送通知"
+        open={Boolean(notificationRow)}
+        onCancel={() => setNotificationRow(null)}
+        footer={null}
+        destroyOnHidden
+      >
+        {notificationRow ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Typography.Text type="secondary">告警标题</Typography.Text>
+              <Typography.Title level={5} style={{ marginTop: 4, marginBottom: 8 }}>
+                {notificationRow.title}
+              </Typography.Title>
+              <Space wrap>
+                <Tag color={severityColor(notificationRow.severity)}>{severityLabel(notificationRow.severity)}</Tag>
+                <Tag color={statusColor(notificationRow.status)}>{statusLabel(notificationRow.status)}</Tag>
+              </Space>
+            </div>
+
+            <Form form={notificationForm} layout="vertical" onFinish={sendNotification}>
+              <Form.Item
+                name="channelId"
+                label="Webhook Channel"
+                rules={[{ required: true, message: '请选择一个已启用的 webhook channel' }]}
+              >
+                <Select
+                  placeholder="选择一个已启用的 webhook channel"
+                  options={enabledWebhookChannels.map((channel) => ({
+                    value: channel.id,
+                    label: channel.name,
+                  }))}
+                  notFoundContent="暂无已启用的 webhook channel"
+                />
+              </Form.Item>
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<BellOutlined />}
+                loading={sending}
+                disabled={enabledWebhookChannels.length === 0}
+              >
+                发送通知
+              </Button>
+            </Form>
+
+            {sendResult ? (
+              <Alert
+                type={sendResult.status === 'failed' || sendResult.failed ? 'warning' : 'success'}
+                showIcon
+                message="发送结果"
+                description={
+                  sendResult.message ||
+                  `成功 ${sendResult.success ?? (sendResult.status === 'success' ? 1 : 0)}，失败 ${
+                    sendResult.failed ?? (sendResult.status === 'failed' ? 1 : 0)
+                  }`
+                }
+              />
+            ) : null}
+
+            <Table<NotificationDeliveryRow>
+              size="small"
+              rowKey="id"
+              dataSource={deliveries}
+              pagination={false}
+              columns={[
+                {
+                  title: '通道',
+                  dataIndex: 'channel_name',
+                  render: (value) => value || '-',
+                },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 90,
+                  render: (value) => <Tag color={deliveryStatusColor(value)}>{value || '-'}</Tag>,
+                },
+                {
+                  title: '发送时间',
+                  dataIndex: 'created_at',
+                  width: 150,
+                  render: formatTime,
+                },
+              ]}
+              locale={{ emptyText: '告警手动触发通知后会在这里显示' }}
+            />
+          </Space>
+        ) : null}
+      </Modal>
     </div>
   );
 }

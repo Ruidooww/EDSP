@@ -187,19 +187,15 @@ public class DemoDataSeeder implements ApplicationRunner {
         seedChannel("安全运营 Webhook", "webhook", "https://demo.mizuumi.top/mock/security-webhook",
             "统一推送到安全运营工作台，用于演示标准 Webhook 投递。", "{\"mode\":\"demo\",\"owner\":\"SOC\"}", true, "ready", "success", "演示通道测试成功");
         seedChannel("企业微信值班群", "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=demo",
-            "高危告警推送到企业微信安全值班群。", "{\"robot\":\"security-duty\",\"mention\":\"@all\"}", true, "ready", "success", "演示通道测试成功");
+            "高危告警推送到企业微信安全值班群。", "{\"robot\":\"security-duty\",\"mention\":\"@all\"}", false, "disabled", "unsupported", "后续扩展");
         seedChannel("飞书安全群", "feishu", "https://open.feishu.cn/open-apis/bot/v2/hook/demo",
-            "中高危告警推送到飞书安全群。", "{\"robot\":\"security-alert\"}", true, "ready", "success", "演示通道测试成功");
+            "中高危告警推送到飞书安全群。", "{\"robot\":\"security-alert\"}", false, "disabled", "unsupported", "后续扩展");
         seedChannel("短信告警", "sms", "https://sms.demo.local/send",
-            "严重风险通过短信通知值班负责人。", "{\"provider\":\"demo-sms\",\"template\":\"risk-alert\"}", true, "ready", "success", "演示通道测试成功");
+            "严重风险通过短信通知值班负责人。", "{\"provider\":\"demo-sms\",\"template\":\"risk-alert\"}", false, "disabled", "unsupported", "后续扩展");
         seedChannel("邮件审计归档", "email", "https://mail.demo.local/api/send",
-            "处置结果、日报和审计材料发送到安全邮箱。", "{\"mailbox\":\"security-archive@example.com\"}", true, "ready", "success", "演示通道测试成功");
+            "处置结果、日报和审计材料发送到安全邮箱。", "{\"mailbox\":\"security-archive@example.com\"}", false, "disabled", "unsupported", "后续扩展");
 
         seedNotificationDelivery("安全运营 Webhook", "terminal-security", "DEMO-ALERT-001", "疑似敏感文件外发", "high", "success", 200, "webhook accepted");
-        seedNotificationDelivery("企业微信值班群", "dlp-api", "DLP-20260520-008", "邮件外发包含敏感附件", "critical", "success", 200, "wecom demo accepted");
-        seedNotificationDelivery("飞书安全群", "ueba-risk", "UEBA-88421", "异地登录后访问核心系统", "high", "success", 200, "feishu demo accepted");
-        seedNotificationDelivery("短信告警", "dlp-api", "DLP-20260520-008", "严重风险短信通知", "critical", "success", 200, "sms demo accepted");
-        seedNotificationDelivery("邮件审计归档", "terminal-security", "DEMO-ALERT-010", "敏感数据访问处置归档", "high", "success", 200, "email demo accepted");
     }
 
     private void seedRules() {
@@ -287,16 +283,16 @@ public class DemoDataSeeder implements ApplicationRunner {
             "{\"created\":3,\"updated\":8,\"source\":\"DLP 告警 API\"}");
         seedAudit("admin", "创建规则", "rule", "非工作时间大文件外发",
             "{\"severity\":\"high\",\"notify\":true}");
-        seedAudit("system", "推送告警通知", "notification_channel", "企业微信值班群",
-            "{\"channel\":\"企业微信值班群\",\"result\":\"success\"}");
+        seedAudit("system", "标记通知通道为后续扩展", "notification_channel", "企业微信值班群",
+            "{\"channel\":\"企业微信值班群\",\"result\":\"unsupported\"}");
         seedAudit("security-ops", "添加告警处置记录", "alert", "疑似敏感文件外发",
             "{\"status\":\"processing\",\"note\":\"冻结外接存储策略\"}");
         seedAudit("admin", "创建报表任务", "report_job", "每日风险汇总",
             "{\"period\":\"today\",\"scope\":\"all\",\"includeRaw\":true}");
         seedAudit("system", "同步元数据快照", "schema_table", "security_alert_event",
             "{\"fields\":6,\"mappings\":5}");
-        seedAudit("admin", "测试通知通道", "notification_channel", "安全运营 Webhook",
-            "{\"channel\":\"安全运营 Webhook\",\"result\":\"success\"}");
+        seedAudit("admin", "配置 Webhook 通道", "notification_channel", "安全运营 Webhook",
+            "{\"channel\":\"安全运营 Webhook\",\"result\":\"ready\"}");
     }
 
     private Long seedDataSource(String name, String sourceType, String connectionKind, String description, String configJson, String status, boolean enabled) {

@@ -90,6 +90,25 @@ Forbidden unless explicitly instructed:
 - Do not bypass raw_events / standard_events to generate alerts directly.
 ```
 
+## Architecture Boundary Rules
+
+The current project is a modular monolith with microservice-ready boundaries.
+
+Module ownership:
+
+- `edsp-core` owns ingestion, schema discovery, ingestion plans, `raw_events`, `standard_events`, rule evaluation, `alert_decisions`, `alerts`, and alert lifecycle.
+- `edsp-alert` owns `notification_channels`, `notification_deliveries`, webhook delivery, and future external notification adapters.
+
+Boundary rules:
+
+- Notification code must not modify alert lifecycle state.
+- Alert lifecycle code must not write `notification_deliveries` or call notification delivery services.
+- Rule evaluation must not directly create alerts or send notifications.
+- Alert generation must only create alerts from matched `alert_decisions`.
+- Notification delivery must only start from existing `alerts`, never directly from `standard_events`, `alert_decisions`, or raw payloads.
+- New stages must keep APIs and database writes aligned with module ownership.
+- If a stage requires crossing module boundaries, the plan must explicitly state the boundary crossing, reason, and allowed read/write scope before implementation.
+
 ## Verification Before Merge
 
 Before merging any stage branch into `master`, run:

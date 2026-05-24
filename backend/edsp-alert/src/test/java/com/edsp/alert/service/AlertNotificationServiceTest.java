@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Map;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 class AlertNotificationServiceTest {
     private JdbcTemplate jdbcTemplate;
     private StubWebhookClient webhookClient;
+    private StubNotificationChannelAdapter feishuAdapter;
     private AlertNotificationService service;
 
     @BeforeEach
@@ -79,12 +81,24 @@ class AlertNotificationServiceTest {
                 created_at timestamptz not null default now()
             )
             """);
+        jdbcTemplate.execute("""
+            create table alert_lifecycle_events (
+                id bigserial primary key,
+                alert_id bigint not null,
+                from_status varchar(32),
+                to_status varchar(32) not null,
+                actor varchar(160),
+                note text,
+                created_at timestamptz not null default now()
+            )
+            """);
 
         webhookClient = new StubWebhookClient();
         var webhookAdapter = new WebhookNotificationAdapter(webhookClient);
         var objectMapper = new ObjectMapper();
         var weComAdapter = new WeComNotificationAdapter(webhookClient, objectMapper);
-        var adapterRegistry = new NotificationChannelAdapterRegistry(List.of(webhookAdapter, weComAdapter));
+        feishuAdapter = new StubNotificationChannelAdapter("feishu");
+        var adapterRegistry = new NotificationChannelAdapterRegistry(List.of(webhookAdapter, weComAdapter, feishuAdapter));
         service = new AlertNotificationService(jdbcTemplate, objectMapper, adapterRegistry);
     }
 
@@ -101,6 +115,22 @@ class AlertNotificationServiceTest {
         assertStatus(HttpStatus.BAD_REQUEST, () -> service.send(openAlertId, disabledChannelId));
         assertStatus(HttpStatus.BAD_REQUEST, "unsupported_channel", () -> service.send(openAlertId, emailChannelId));
         assertEquals(0L, countDeliveries());
+    }
+
+    @Test
+    void keepsPreAdapterBoundariesForFeishuChannels() {
+        var closedAlertId = insertAlert("closed feishu alert", "closed");
+        var openAlertId = insertAlert("open feishu alert", "open");
+        var disabledChannelId = insertChannel(
+            "feishu",
+            "https://open.feishu.cn/open-apis/bot/v2/hook/FEISHUTOKEN123456",
+            false
+        );
+
+        assertStatus(HttpStatus.BAD_REQUEST, "alert_not_open", () -> service.send(closedAlertId, disabledChannelId));
+        assertStatus(HttpStatus.BAD_REQUEST, "channel_disabled", () -> service.send(openAlertId, disabledChannelId));
+        assertEquals(0L, countDeliveries());
+        assertEquals(0, feishuAdapter.calls);
     }
 
     @Test
@@ -159,6 +189,50 @@ class AlertNotificationServiceTest {
         assertEquals(true, webhookClient.lastPayloadJson.contains("Alert ID"));
         assertEquals(false, webhookClient.lastPayloadJson.contains("WESECRET123456"));
         assertEquals(false, storedPayload.contains("WESECRET123456"));
+    }
+
+    @Test
+    void sendsFeishuThroughAdapterRegistryWithoutChangingAlertLifecycleState() {
+        var alertId = insertAlert("feishu alert", "open");
+        var channelId = insertChannel(
+            "feishu",
+            "https://open.feishu.cn/open-apis/bot/v2/hook/FEISHUTOKEN123456",
+            true
+        );
+
+        var result = service.send(alertId, channelId);
+
+        assertEquals(alertId, result.get("alertId"));
+        assertEquals(channelId, result.get("channelId"));
+        assertEquals("success", result.get("status"));
+        assertEquals(202, result.get("responseCode"));
+        assertEquals(1, feishuAdapter.calls);
+        assertEquals("feishu", feishuAdapter.lastChannel.get("channel_type"));
+        assertEquals(true, feishuAdapter.lastPayloadJson.contains("\"alertId\":" + alertId));
+        assertEquals(1L, countDeliveries());
+        assertEquals(1L, countDeliveriesByStatus("success"));
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
+    }
+
+    @Test
+    void preservesAlertIdAndChannelIdOnFailedFeishuDelivery() {
+        var alertId = insertAlert("failed feishu alert", "open");
+        var channelId = insertChannel(
+            "feishu",
+            "https://open.feishu.cn/open-apis/bot/v2/hook/FEISHUTOKEN123456",
+            true
+        );
+        feishuAdapter.nextResult = new WebhookDeliveryResult("failed", 200, "{\"code\":9499}", "feishu_code_9499");
+
+        var result = service.send(alertId, channelId);
+
+        assertEquals(alertId, result.get("alertId"));
+        assertEquals(channelId, result.get("channelId"));
+        assertEquals("failed", result.get("status"));
+        assertEquals(1L, countDeliveriesByStatus("failed"));
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
     }
 
     @Test
@@ -265,6 +339,14 @@ class AlertNotificationServiceTest {
         );
     }
 
+    private long countAlertLifecycleEvents() {
+        return jdbcTemplate.queryForObject("select count(*) from alert_lifecycle_events", Long.class);
+    }
+
+    private String alertStatus(Long alertId) {
+        return jdbcTemplate.queryForObject("select status from alerts where id = ?", String.class, alertId);
+    }
+
     private static class StubWebhookClient extends WebhookClient {
         private WebhookDeliveryResult nextResult = new WebhookDeliveryResult("success", 200, "ok", "ok");
         private int calls;
@@ -275,6 +357,32 @@ class AlertNotificationServiceTest {
         public WebhookDeliveryResult postJson(String endpointUrl, String payloadJson) {
             calls += 1;
             lastEndpointUrl = endpointUrl;
+            lastPayloadJson = payloadJson;
+            return nextResult;
+        }
+    }
+
+    private static class StubNotificationChannelAdapter implements NotificationChannelAdapter {
+        private final String channelType;
+        private WebhookDeliveryResult nextResult =
+            new WebhookDeliveryResult("success", 202, "{\"code\":0}", "feishu_stub_delivered");
+        private int calls;
+        private Map<String, Object> lastChannel;
+        private String lastPayloadJson;
+
+        private StubNotificationChannelAdapter(String channelType) {
+            this.channelType = channelType;
+        }
+
+        @Override
+        public String channelType() {
+            return channelType;
+        }
+
+        @Override
+        public WebhookDeliveryResult send(Map<String, Object> alert, Map<String, Object> channel, String payloadJson) {
+            calls += 1;
+            lastChannel = channel;
             lastPayloadJson = payloadJson;
             return nextResult;
         }

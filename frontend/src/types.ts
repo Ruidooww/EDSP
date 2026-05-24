@@ -112,17 +112,46 @@ export interface AlertRow {
   title: string;
   severity: Severity;
   status: string;
-  subject_type: string;
-  subject_ref: string;
+  subject_type?: string;
+  subject_ref?: string;
+  subjectType?: string;
+  subjectRef?: string;
   source_system?: string;
+  sourceSystem?: string;
   external_id?: string;
+  externalId?: string;
   alert_type?: string;
+  alertType?: string;
   occurred_at?: string;
+  occurredAt?: string | number;
   actor?: string;
   asset_ref?: string;
+  assetRef?: string;
   policy_name?: string;
+  policyName?: string;
+  standard_event_id?: number;
+  standardEventId?: number;
+  rule_id?: number;
+  ruleId?: number;
+  rule_name?: string;
+  ruleName?: string;
+  alert_decision_id?: number;
+  alertDecisionId?: number;
+  decisionId?: number;
+  detail?: Record<string, unknown> | string;
   detail_json?: Record<string, unknown> | string;
   created_at: string;
+  createdAt?: string | number;
+  updatedAt?: string | number;
+}
+
+export interface AlertGenerationRunRequest {
+  decisionId: number;
+}
+
+export interface AlertGenerationRunResult extends AlertRow {
+  action: 'created' | 'existing';
+  decisionId?: number;
 }
 
 export interface AlertNoteRow {

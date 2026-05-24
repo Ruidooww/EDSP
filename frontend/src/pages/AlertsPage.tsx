@@ -1,11 +1,40 @@
-import { BellOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Drawer, Empty, Form, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
+import {
+  BellOutlined,
+  CheckOutlined,
+  CloseCircleOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SendOutlined,
+  UserSwitchOutlined,
+} from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Card,
+  Drawer,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Timeline,
+  Typography,
+  message,
+} from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../api';
 import type {
   AlertGenerationRunResult,
+  AlertLifecycleAction,
+  AlertLifecycleRequest,
   AlertRow,
+  AlertTimelineRow,
   NotificationAlertSendRequest,
   NotificationAlertSendResult,
   NotificationChannelRow,
@@ -15,6 +44,14 @@ import type {
 interface AlertNotificationFormValues {
   channelId: number;
 }
+
+interface AlertLifecycleFormValues {
+  operatorName: string;
+  assignee?: string;
+  note?: string;
+}
+
+type AlertStatusFilter = 'all' | 'open' | 'acknowledged' | 'closed';
 
 function severityLabel(value?: string) {
   return {
@@ -39,6 +76,7 @@ function severityColor(value?: string) {
 function statusLabel(value?: string) {
   return {
     open: '开放',
+    acknowledged: '已确认',
     processing: '处理中',
     resolved: '已确认',
     closed: '已关闭',
@@ -48,6 +86,7 @@ function statusLabel(value?: string) {
 function statusColor(value?: string) {
   return {
     open: 'warning',
+    acknowledged: 'success',
     processing: 'processing',
     resolved: 'success',
     closed: 'default',
@@ -105,8 +144,32 @@ function ruleId(row: AlertRow) {
   return row.ruleId ?? row.rule_id;
 }
 
+function assignedTo(row: AlertRow) {
+  return row.assignedTo ?? row.assigned_to;
+}
+
+function updatedAt(row: AlertRow) {
+  return row.updatedAt ?? row.updated_at;
+}
+
 function channelType(row: NotificationChannelRow) {
   return row.channelType ?? row.channel_type;
+}
+
+function timelineAction(row: AlertTimelineRow) {
+  return row.action ?? row.eventType ?? row.event_type ?? '-';
+}
+
+function timelineOperator(row: AlertTimelineRow) {
+  return row.operatorName ?? row.operator_name ?? '-';
+}
+
+function timelineAssignee(row: AlertTimelineRow) {
+  return row.assignedTo ?? row.assigned_to ?? row.assignee;
+}
+
+function timelineCreatedAt(row: AlertTimelineRow) {
+  return row.createdAt ?? row.created_at;
 }
 
 function deliveryStatusColor(status?: string) {
@@ -121,21 +184,29 @@ function deliveryStatusColor(status?: string) {
 
 export default function AlertsPage() {
   const [rows, setRows] = useState<AlertRow[]>([]);
+  const [statusFilter, setStatusFilter] = useState<AlertStatusFilter>('all');
   const [channels, setChannels] = useState<NotificationChannelRow[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
+  const [timeline, setTimeline] = useState<AlertTimelineRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
+  const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
   const [activeRow, setActiveRow] = useState<AlertRow | null>(null);
   const [notificationRow, setNotificationRow] = useState<AlertRow | null>(null);
+  const [lifecycleRow, setLifecycleRow] = useState<AlertRow | null>(null);
+  const [lifecycleAction, setLifecycleAction] = useState<AlertLifecycleAction | null>(null);
   const [sendResult, setSendResult] = useState<NotificationAlertSendResult | null>(null);
   const [form] = Form.useForm<{ decisionId: number }>();
   const [notificationForm] = Form.useForm<AlertNotificationFormValues>();
+  const [lifecycleForm] = Form.useForm<AlertLifecycleFormValues>();
 
   async function load() {
     setLoading(true);
     try {
-      setRows(await apiGet<AlertRow[]>('/api/core/alerts?limit=50'));
+      const statusQuery = statusFilter === 'all' ? '' : `&status=${encodeURIComponent(statusFilter)}`;
+      setRows(await apiGet<AlertRow[]>(`/api/core/alerts?limit=50${statusQuery}`));
     } catch {
       setRows([]);
     } finally {
@@ -145,6 +216,9 @@ export default function AlertsPage() {
 
   useEffect(() => {
     void load();
+  }, [statusFilter]);
+
+  useEffect(() => {
     void loadChannels();
   }, []);
 
@@ -164,6 +238,17 @@ export default function AlertsPage() {
     }
   }
 
+  async function loadTimeline(row: AlertRow) {
+    setTimelineLoading(true);
+    try {
+      setTimeline(await apiGet<AlertTimelineRow[]>(`/api/core/alerts/${alertId(row)}/timeline`));
+    } catch {
+      setTimeline([]);
+    } finally {
+      setTimelineLoading(false);
+    }
+  }
+
   async function generateAlert(values: { decisionId: number }) {
     setGenerating(true);
     try {
@@ -179,13 +264,115 @@ export default function AlertsPage() {
     }
   }
 
+  function openDetailDrawer(row: AlertRow) {
+    setActiveRow(row);
+    setTimeline([]);
+    void loadTimeline(row);
+  }
+
   function openNotificationModal(row: AlertRow) {
+    if (row.status !== 'open') {
+      message.warning('只有 open alert 可以手动发送通知');
+      return;
+    }
     setNotificationRow(row);
     setSendResult(null);
     setDeliveries([]);
     notificationForm.resetFields();
     void loadChannels();
     void loadDeliveries(row);
+  }
+
+  function openLifecycleModal(action: AlertLifecycleAction, row: AlertRow) {
+    setLifecycleAction(action);
+    setLifecycleRow(row);
+    lifecycleForm.setFieldsValue({
+      operatorName: 'admin',
+      assignee: action === 'assign' ? assignedTo(row) : undefined,
+      note: undefined,
+    });
+  }
+
+  async function submitLifecycle(values: AlertLifecycleFormValues) {
+    if (!lifecycleRow || !lifecycleAction) {
+      return;
+    }
+    setLifecycleSubmitting(true);
+    try {
+      const request: AlertLifecycleRequest = {
+        operatorName: values.operatorName,
+        assignee: values.assignee ?? '',
+        note: values.note ?? '',
+      };
+      const updatedAlert = await apiPost<AlertRow | null>(`/api/core/alerts/${alertId(lifecycleRow)}/${lifecycleAction}`, request);
+      message.success('告警生命周期操作已提交');
+      setLifecycleRow(null);
+      setLifecycleAction(null);
+      lifecycleForm.resetFields();
+      await load();
+      if (activeRow && alertId(activeRow) === alertId(lifecycleRow)) {
+        setActiveRow({ ...activeRow, ...lifecycleRow, ...(updatedAlert ?? {}) });
+        await loadTimeline(lifecycleRow);
+      }
+    } finally {
+      setLifecycleSubmitting(false);
+    }
+  }
+
+  function renderLifecycleActions(row: AlertRow) {
+    if (row.status === 'closed') {
+      return (
+        <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
+          详情/时间线
+        </Button>
+      );
+    }
+
+    if (row.status === 'acknowledged') {
+      return (
+        <Space>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
+            详情
+          </Button>
+          <Button size="small" icon={<UserSwitchOutlined />} onClick={() => openLifecycleModal('assign', row)}>
+            指派
+          </Button>
+          <Button size="small" icon={<CloseCircleOutlined />} onClick={() => openLifecycleModal('close', row)}>
+            关闭
+          </Button>
+        </Space>
+      );
+    }
+
+    if (row.status === 'open') {
+      return (
+        <Space>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
+            详情
+          </Button>
+          <Button size="small" icon={<CheckOutlined />} onClick={() => openLifecycleModal('acknowledge', row)}>
+            确认
+          </Button>
+          <Button size="small" icon={<UserSwitchOutlined />} onClick={() => openLifecycleModal('assign', row)}>
+            指派
+          </Button>
+          <Button size="small" icon={<CloseCircleOutlined />} onClick={() => openLifecycleModal('close', row)}>
+            关闭
+          </Button>
+          <Button size="small" icon={<SendOutlined />} onClick={() => openNotificationModal(row)}>
+            发送通知
+          </Button>
+        </Space>
+      );
+    }
+
+    return (
+      <Space>
+        <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
+          详情
+        </Button>
+      </Space>
+    );
   }
 
   async function sendNotification(values: AlertNotificationFormValues) {
@@ -241,6 +428,7 @@ export default function AlertsPage() {
     { title: '规则', width: 180, render: (_, row) => ruleName(row) },
     { title: 'Decision ID', width: 120, render: (_, row) => decisionId(row) ?? '-' },
     { title: 'Standard Event', width: 140, render: (_, row) => standardEventId(row) ?? '-' },
+    { title: '指派给', width: 120, render: (_, row) => assignedTo(row) || '-' },
     { title: '用户', dataIndex: 'actor', width: 120, render: (value) => value || '-' },
     {
       title: '资产',
@@ -253,26 +441,23 @@ export default function AlertsPage() {
       render: (_, row) => formatTime(row.occurredAt || row.occurred_at),
     },
     {
+      title: '更新时间',
+      width: 150,
+      render: (_, row) => formatTime(updatedAt(row)),
+    },
+    {
       title: '操作',
-      width: 190,
+      width: 340,
       fixed: 'right',
-      render: (_, row) => (
-        <Space>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => setActiveRow(row)}>
-            详情
-          </Button>
-          <Button
-            size="small"
-            icon={<SendOutlined />}
-            disabled={row.status !== 'open'}
-            onClick={() => openNotificationModal(row)}
-          >
-            发送通知
-          </Button>
-        </Space>
-      ),
+      render: (_, row) => renderLifecycleActions(row),
     },
   ];
+
+  const lifecycleTitle = {
+    acknowledge: '确认告警',
+    assign: '指派告警',
+    close: '关闭告警',
+  }[lifecycleAction ?? 'acknowledge'];
 
   return (
     <div className="alerts-page">
@@ -289,8 +474,22 @@ export default function AlertsPage() {
           className="form-hint"
           type="info"
           showIcon
-          message="本阶段支持从 open alerts 手动发送 webhook 通知，不做自动通知或批量群发。"
+          message="本阶段只处理 alert 生命周期：确认、指派、关闭与 open alert 手动发送通知；不自动发送通知，不做重试、升级、通知编排。"
         />
+        <Space className="form-hint" wrap>
+          <Typography.Text type="secondary">状态筛选</Typography.Text>
+          <Select<AlertStatusFilter>
+            value={statusFilter}
+            style={{ width: 180 }}
+            onChange={setStatusFilter}
+            options={[
+              { value: 'all', label: '全部' },
+              { value: 'open', label: 'Open' },
+              { value: 'acknowledged', label: 'Acknowledged' },
+              { value: 'closed', label: 'Closed' },
+            ]}
+          />
+        </Space>
         <Card size="small" className="section-card" title="手动生成告警">
           <Form form={form} layout="inline" onFinish={generateAlert}>
             <Form.Item
@@ -311,7 +510,7 @@ export default function AlertsPage() {
           loading={loading}
           dataSource={rows}
           columns={columns}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1480 }}
           locale={{ emptyText: '暂无告警。可先在规则评估页生成 matched alert_decisions，再按 Decision ID 手动生成告警。' }}
         />
       </Card>
@@ -338,6 +537,8 @@ export default function AlertsPage() {
               <strong>{ruleName(activeRow)}</strong>
               <span>Rule ID</span>
               <strong>{ruleId(activeRow) ?? '-'}</strong>
+              <span>Assigned To</span>
+              <strong>{assignedTo(activeRow) || '-'}</strong>
               <span>Source</span>
               <strong>{activeRow.sourceSystem || activeRow.source_system || '-'}</strong>
               <span>External ID</span>
@@ -352,10 +553,36 @@ export default function AlertsPage() {
               <strong>{activeRow.subjectRef || activeRow.subject_ref || '-'}</strong>
               <span>Occurred At</span>
               <strong>{formatTime(activeRow.occurredAt || activeRow.occurred_at)}</strong>
+              <span>Updated At</span>
+              <strong>{formatTime(updatedAt(activeRow))}</strong>
             </div>
             <Typography.Paragraph className="json-preview">
               <pre>{detailText(activeRow.detail || activeRow.detail_json)}</pre>
             </Typography.Paragraph>
+            <Typography.Title level={5}>生命周期时间线</Typography.Title>
+            {timeline.length > 0 ? (
+              <Timeline
+                pending={timelineLoading ? '加载中...' : false}
+                items={timeline.map((item) => ({
+                  key: item.id,
+                  children: (
+                    <Space direction="vertical" size={2}>
+                      <Space wrap>
+                        <Tag>{timelineAction(item)}</Tag>
+                        <Typography.Text>{timelineOperator(item)}</Typography.Text>
+                        {timelineAssignee(item) ? (
+                          <Typography.Text type="secondary">指派给 {timelineAssignee(item)}</Typography.Text>
+                        ) : null}
+                      </Space>
+                      <Typography.Text type="secondary">{formatTime(timelineCreatedAt(item))}</Typography.Text>
+                      {item.note ? <Typography.Text>{item.note}</Typography.Text> : null}
+                    </Space>
+                  ),
+                }))}
+              />
+            ) : (
+              <Empty description={timelineLoading ? '时间线加载中...' : '暂无生命周期事件'} />
+            )}
           </Space>
         ) : (
           <Empty />
@@ -447,6 +674,65 @@ export default function AlertsPage() {
               ]}
               locale={{ emptyText: '告警手动触发通知后会在这里显示' }}
             />
+          </Space>
+        ) : null}
+      </Modal>
+      <Modal
+        title={lifecycleTitle}
+        open={Boolean(lifecycleRow)}
+        onCancel={() => {
+          setLifecycleRow(null);
+          setLifecycleAction(null);
+        }}
+        onOk={() => lifecycleForm.submit()}
+        okText="提交"
+        confirmLoading={lifecycleSubmitting}
+        destroyOnHidden
+      >
+        {lifecycleRow ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Typography.Text type="secondary">告警标题</Typography.Text>
+              <Typography.Title level={5} style={{ marginTop: 4, marginBottom: 8 }}>
+                {lifecycleRow.title}
+              </Typography.Title>
+              <Space wrap>
+                <Tag color={severityColor(lifecycleRow.severity)}>{severityLabel(lifecycleRow.severity)}</Tag>
+                <Tag color={statusColor(lifecycleRow.status)}>{statusLabel(lifecycleRow.status)}</Tag>
+              </Space>
+            </div>
+            <Form form={lifecycleForm} layout="vertical" onFinish={submitLifecycle} initialValues={{ operatorName: 'admin' }}>
+              <Form.Item
+                name="operatorName"
+                label="Operator"
+                rules={[{ required: true, message: '请输入 operatorName' }]}
+              >
+                <Input placeholder="admin" />
+              </Form.Item>
+              {lifecycleAction === 'assign' ? (
+                <Form.Item
+                  name="assignee"
+                  label="Assignee"
+                  rules={[{ required: true, whitespace: true, message: '请输入 assignee' }]}
+                >
+                  <Input placeholder="例如：admin 或 oncall-user" />
+                </Form.Item>
+              ) : null}
+              <Form.Item
+                name="note"
+                label="Note"
+                rules={
+                  lifecycleAction === 'close'
+                    ? [{ required: true, whitespace: true, message: '关闭告警必须填写 note' }]
+                    : undefined
+                }
+              >
+                <Input.TextArea
+                  rows={4}
+                  placeholder={lifecycleAction === 'acknowledge' ? '可选：确认说明' : '请输入操作说明'}
+                />
+              </Form.Item>
+            </Form>
           </Space>
         ) : null}
       </Modal>

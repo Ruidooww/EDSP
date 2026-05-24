@@ -112,6 +112,8 @@ export interface AlertRow {
   title: string;
   severity: Severity;
   status: string;
+  assigned_to?: string;
+  assignedTo?: string;
   subject_type?: string;
   subject_ref?: string;
   subjectType?: string;
@@ -142,7 +144,35 @@ export interface AlertRow {
   detail_json?: Record<string, unknown> | string;
   created_at: string;
   createdAt?: string | number;
+  updated_at?: string | number;
   updatedAt?: string | number;
+}
+
+export type AlertLifecycleAction = 'acknowledge' | 'assign' | 'close';
+
+export interface AlertLifecycleRequest {
+  operatorName: string;
+  assignee?: string;
+  note?: string;
+}
+
+export interface AlertTimelineRow {
+  id: number;
+  alert_id?: number;
+  alertId?: number;
+  action?: string;
+  eventType?: string;
+  event_type?: string;
+  operator_name?: string;
+  operatorName?: string;
+  assignee?: string;
+  assigned_to?: string;
+  assignedTo?: string;
+  note?: string;
+  detail?: Record<string, unknown> | string;
+  detail_json?: Record<string, unknown> | string;
+  created_at?: string | number;
+  createdAt?: string | number;
 }
 
 export interface AlertGenerationRunRequest {

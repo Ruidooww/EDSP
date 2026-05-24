@@ -5,9 +5,8 @@ import {
   LinkOutlined,
   PlusOutlined,
   ReloadOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Drawer, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../api';
@@ -21,20 +20,8 @@ interface NotificationChannelFormValues {
   enabled: boolean;
 }
 
-interface NotificationTestResult {
-  channelId: number;
-  channelName: string;
-  status: string;
-  message: string;
-  responseCode?: number;
-}
-
 const CHANNEL_TYPE_OPTIONS = [
   { value: 'webhook', label: 'Webhook' },
-  { value: 'wecom', label: '企业微信' },
-  { value: 'feishu', label: '飞书' },
-  { value: 'sms', label: '短信' },
-  { value: 'email', label: '邮件' },
 ];
 
 function channelTypeLabel(value: string) {
@@ -105,17 +92,21 @@ export default function NotificationsPage() {
   const [rows, setRows] = useState<NotificationChannelRow[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [testingId, setTestingId] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
+  const [deliveryAlertId, setDeliveryAlertId] = useState<number | null>(null);
   const [activeDelivery, setActiveDelivery] = useState<NotificationDeliveryRow | null>(null);
   const [form] = Form.useForm<NotificationChannelFormValues>();
 
-  async function load() {
+  function deliveriesPath(alertId = deliveryAlertId) {
+    return `/api/notifications/deliveries?limit=50${alertId ? `&alertId=${alertId}` : ''}`;
+  }
+
+  async function load(alertId = deliveryAlertId) {
     setLoading(true);
     try {
       const [channelRows, deliveryRows] = await Promise.all([
         apiGet<NotificationChannelRow[]>('/api/notifications/channels'),
-        apiGet<NotificationDeliveryRow[]>('/api/notifications/deliveries?limit=50'),
+        apiGet<NotificationDeliveryRow[]>(deliveriesPath(alertId)),
       ]);
       setRows(channelRows);
       setDeliveries(deliveryRows);
@@ -125,6 +116,11 @@ export default function NotificationsPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function applyDeliveryAlertFilter(value: number | null) {
+    setDeliveryAlertId(value);
+    await load(value);
   }
 
   useEffect(() => {
@@ -138,21 +134,6 @@ export default function NotificationsPage() {
     setOpen(false);
     form.resetFields();
     await load();
-  }
-
-  async function testChannel(row: NotificationChannelRow) {
-    setTestingId(row.id);
-    try {
-      const result = await apiPost<NotificationTestResult>(`/api/notifications/channels/${row.id}/test`, {});
-      if (result.status === 'success') {
-        message.success(`${row.name} 测试发送成功`);
-      } else {
-        message.warning(result.message || `${row.name} 测试发送失败`);
-      }
-      await load();
-    } finally {
-      setTestingId(null);
-    }
   }
 
   function openCreate() {
@@ -211,16 +192,6 @@ export default function NotificationsPage() {
           {statusTag(row.last_test_status || 'draft')}
           <span className="table-subtext">{row.last_test_message || formatTime(row.last_test_at)}</span>
         </div>
-      ),
-    },
-    {
-      title: '操作',
-      align: 'right',
-      width: 120,
-      render: (_, row) => (
-        <Button size="small" icon={<ThunderboltOutlined />} loading={testingId === row.id} onClick={() => testChannel(row)}>
-          测试
-        </Button>
       ),
     },
   ];
@@ -291,7 +262,7 @@ export default function NotificationsPage() {
       title="通知中心"
       extra={
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+          <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>
             刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
@@ -304,7 +275,7 @@ export default function NotificationsPage() {
         className="form-hint"
         type="info"
         showIcon
-        message="通知中心用于把标准告警推送到 Webhook、企业微信、飞书、短信、邮件等通道。"
+        message="告警手动触发通知后会在这里显示"
       />
 
       <Typography.Title level={5} className="section-subtitle">
@@ -322,13 +293,26 @@ export default function NotificationsPage() {
       <Typography.Title level={5} className="section-subtitle">
         发送记录
       </Typography.Title>
+      <Space className="form-hint" wrap>
+        <InputNumber
+          min={1}
+          precision={0}
+          placeholder="Alert ID"
+          value={deliveryAlertId ?? undefined}
+          onChange={(value) => setDeliveryAlertId(typeof value === 'number' ? value : null)}
+        />
+        <Button type="primary" onClick={() => applyDeliveryAlertFilter(deliveryAlertId)}>
+          按告警查询
+        </Button>
+        <Button onClick={() => applyDeliveryAlertFilter(null)}>查看全部</Button>
+      </Space>
       <Table<NotificationDeliveryRow>
         rowKey="id"
         loading={loading}
         dataSource={deliveries}
         columns={deliveryColumns}
         scroll={{ x: 1080 }}
-        locale={{ emptyText: '暂无发送记录。规则命中并触发通知后会在这里显示。' }}
+        locale={{ emptyText: '告警手动触发通知后会在这里显示' }}
       />
 
       <Modal title="新增通知通道" open={open} onOk={submit} onCancel={() => setOpen(false)} okText="保存" destroyOnHidden>

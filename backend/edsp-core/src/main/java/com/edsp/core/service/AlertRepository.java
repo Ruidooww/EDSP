@@ -87,8 +87,8 @@ public class AlertRepository {
             select a.id, a.title, a.severity, a.status, a.rule_id, r.name as rule_name,
                    a.subject_type, a.subject_ref, a.source_system, a.external_id, a.alert_type,
                    a.occurred_at, a.actor, a.asset_ref, a.policy_name, a.standard_event_id,
-                   a.alert_decision_id, cast(a.detail_json as varchar) as detail_json,
-                   a.created_at, a.updated_at
+                   a.alert_decision_id, a.assigned_to, a.acknowledged_at, a.closed_at,
+                   cast(a.detail_json as varchar) as detail_json, a.created_at, a.updated_at
             from alerts a
             left join rules r on r.id = a.rule_id
             where a.alert_decision_id = ?
@@ -106,8 +106,8 @@ public class AlertRepository {
                 select a.id, a.title, a.severity, a.status, a.rule_id, r.name as rule_name,
                        a.subject_type, a.subject_ref, a.source_system, a.external_id, a.alert_type,
                        a.occurred_at, a.actor, a.asset_ref, a.policy_name, a.standard_event_id,
-                       a.alert_decision_id, cast(a.detail_json as varchar) as detail_json,
-                       a.created_at, a.updated_at
+                       a.alert_decision_id, a.assigned_to, a.acknowledged_at, a.closed_at,
+                       cast(a.detail_json as varchar) as detail_json, a.created_at, a.updated_at
                 from alerts a
                 left join rules r on r.id = a.rule_id
                 where a.status = ? and a.severity = ?
@@ -120,8 +120,8 @@ public class AlertRepository {
                 select a.id, a.title, a.severity, a.status, a.rule_id, r.name as rule_name,
                        a.subject_type, a.subject_ref, a.source_system, a.external_id, a.alert_type,
                        a.occurred_at, a.actor, a.asset_ref, a.policy_name, a.standard_event_id,
-                       a.alert_decision_id, cast(a.detail_json as varchar) as detail_json,
-                       a.created_at, a.updated_at
+                       a.alert_decision_id, a.assigned_to, a.acknowledged_at, a.closed_at,
+                       cast(a.detail_json as varchar) as detail_json, a.created_at, a.updated_at
                 from alerts a
                 left join rules r on r.id = a.rule_id
                 where a.status = ?
@@ -134,8 +134,8 @@ public class AlertRepository {
                 select a.id, a.title, a.severity, a.status, a.rule_id, r.name as rule_name,
                        a.subject_type, a.subject_ref, a.source_system, a.external_id, a.alert_type,
                        a.occurred_at, a.actor, a.asset_ref, a.policy_name, a.standard_event_id,
-                       a.alert_decision_id, cast(a.detail_json as varchar) as detail_json,
-                       a.created_at, a.updated_at
+                       a.alert_decision_id, a.assigned_to, a.acknowledged_at, a.closed_at,
+                       cast(a.detail_json as varchar) as detail_json, a.created_at, a.updated_at
                 from alerts a
                 left join rules r on r.id = a.rule_id
                 where a.severity = ?
@@ -147,8 +147,8 @@ public class AlertRepository {
             select a.id, a.title, a.severity, a.status, a.rule_id, r.name as rule_name,
                    a.subject_type, a.subject_ref, a.source_system, a.external_id, a.alert_type,
                    a.occurred_at, a.actor, a.asset_ref, a.policy_name, a.standard_event_id,
-                   a.alert_decision_id, cast(a.detail_json as varchar) as detail_json,
-                   a.created_at, a.updated_at
+                   a.alert_decision_id, a.assigned_to, a.acknowledged_at, a.closed_at,
+                   cast(a.detail_json as varchar) as detail_json, a.created_at, a.updated_at
             from alerts a
             left join rules r on r.id = a.rule_id
             order by a.created_at desc, a.id desc
@@ -176,6 +176,9 @@ public class AlertRepository {
             row.put("policyName", rs.getString("policy_name"));
             row.put("standardEventId", rs.getObject("standard_event_id"));
             row.put("decisionId", rs.getObject("alert_decision_id"));
+            row.put("assignedTo", rs.getString("assigned_to"));
+            row.put("acknowledgedAt", rs.getObject("acknowledged_at"));
+            row.put("closedAt", rs.getObject("closed_at"));
             row.put("detail", parseJson(rs.getObject("detail_json")));
             row.put("createdAt", rs.getObject("created_at"));
             row.put("updatedAt", rs.getObject("updated_at"));

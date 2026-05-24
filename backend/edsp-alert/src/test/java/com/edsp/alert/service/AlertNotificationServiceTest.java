@@ -1,0 +1,203 @@
+package com.edsp.alert.service;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.sql.Statement;
+import org.h2.jdbcx.JdbcDataSource;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.web.server.ResponseStatusException;
+
+class AlertNotificationServiceTest {
+    private JdbcTemplate jdbcTemplate;
+    private StubWebhookClient webhookClient;
+    private AlertNotificationService service;
+
+    @BeforeEach
+    void setUp() {
+        var dataSource = new JdbcDataSource();
+        dataSource.setURL(
+            "jdbc:h2:mem:alert_notification_service_test_" + System.nanoTime()
+                + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;"
+                + "DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1;"
+                + "INIT=CREATE DOMAIN IF NOT EXISTS JSONB AS JSON\\;"
+                + "CREATE DOMAIN IF NOT EXISTS TIMESTAMPTZ AS TIMESTAMP WITH TIME ZONE"
+        );
+        dataSource.setUser("sa");
+        dataSource.setPassword("");
+
+        jdbcTemplate = new JdbcTemplate(dataSource);
+        jdbcTemplate.execute("""
+            create table alerts (
+                id bigserial primary key,
+                title varchar(240) not null,
+                severity varchar(32) not null,
+                status varchar(32) not null default 'open',
+                rule_id bigint,
+                subject_type varchar(80),
+                subject_ref varchar(160),
+                detail_json jsonb not null default '{}',
+                source_system varchar(80),
+                external_id varchar(160),
+                alert_type varchar(80),
+                occurred_at timestamptz,
+                actor varchar(160),
+                asset_ref varchar(160),
+                policy_name varchar(180),
+                standard_event_id bigint,
+                alert_decision_id bigint,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now()
+            )
+            """);
+        jdbcTemplate.execute("""
+            create table notification_channels (
+                id bigserial primary key,
+                name varchar(160) not null,
+                channel_type varchar(40) not null default 'webhook',
+                endpoint_url text,
+                enabled boolean not null default true
+            )
+            """);
+        jdbcTemplate.execute("""
+            create table notification_deliveries (
+                id bigserial primary key,
+                channel_id bigint,
+                alert_id bigint,
+                title varchar(240) not null,
+                severity varchar(32),
+                status varchar(32) not null,
+                response_code integer,
+                response_body text,
+                payload_json jsonb not null default '{}',
+                created_at timestamptz not null default now()
+            )
+            """);
+
+        webhookClient = new StubWebhookClient();
+        service = new AlertNotificationService(jdbcTemplate, new ObjectMapper(), webhookClient);
+    }
+
+    @Test
+    void rejectsMissingAlertNonOpenAlertMissingChannelDisabledChannelAndUnsupportedType() {
+        var closedAlertId = insertAlert("closed alert", "closed");
+        var openAlertId = insertAlert("open alert", "open");
+        var disabledChannelId = insertChannel("webhook", "http://example.test/webhook", false);
+        var emailChannelId = insertChannel("email", "http://example.test/email", true);
+
+        assertStatus(HttpStatus.NOT_FOUND, () -> service.send(999999L, disabledChannelId));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> service.send(closedAlertId, disabledChannelId));
+        assertStatus(HttpStatus.NOT_FOUND, () -> service.send(openAlertId, 999999L));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> service.send(openAlertId, disabledChannelId));
+        assertStatus(HttpStatus.BAD_REQUEST, "unsupported_channel", () -> service.send(openAlertId, emailChannelId));
+        assertEquals(0L, countDeliveries());
+    }
+
+    @Test
+    void recordsSuccessFailedHttpAndTimeoutLikeFailuresWithoutRealHttpRequests() {
+        var successAlertId = insertAlert("success alert", "open");
+        var failedAlertId = insertAlert("failed alert", "open");
+        var timeoutAlertId = insertAlert("timeout alert", "open");
+        var channelId = insertChannel("webhook", "http://example.test/webhook?token=secret", true);
+
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 204, "accepted", "webhook_delivered");
+        var success = service.send(successAlertId, channelId);
+
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", 500, "server error", "webhook_http_500");
+        var failed = service.send(failedAlertId, channelId);
+
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", null, "webhook_timeout", "webhook_timeout");
+        var timeout = service.send(timeoutAlertId, channelId);
+
+        assertEquals("success", success.get("status"));
+        assertEquals(204, success.get("responseCode"));
+        assertEquals("failed", failed.get("status"));
+        assertEquals(500, failed.get("responseCode"));
+        assertEquals("failed", timeout.get("status"));
+        assertEquals(null, timeout.get("responseCode"));
+        assertEquals(3L, countDeliveries());
+        assertEquals(1L, countDeliveriesByStatus("success"));
+        assertEquals(2L, countDeliveriesByStatus("failed"));
+        assertEquals(3, webhookClient.calls);
+        assertEquals(true, webhookClient.lastPayloadJson.contains("\"alertId\""));
+    }
+
+    private void assertStatus(HttpStatus status, Runnable action) {
+        var error = assertThrows(ResponseStatusException.class, action::run);
+        assertEquals(status, error.getStatusCode());
+    }
+
+    private void assertStatus(HttpStatus status, String reason, Runnable action) {
+        var error = assertThrows(ResponseStatusException.class, action::run);
+        assertEquals(status, error.getStatusCode());
+        assertEquals(reason, error.getReason());
+    }
+
+    private Long insertAlert(String title, String status) {
+        return insertAndReturnId("""
+            insert into alerts(title, severity, status, detail_json)
+            values (?, 'high', ?, cast('{}' as jsonb))
+            """, title, status);
+    }
+
+    private Long insertChannel(String type, String endpointUrl, boolean enabled) {
+        return insertAndReturnId("""
+            insert into notification_channels(name, channel_type, endpoint_url, enabled)
+            values ('channel', ?, ?, ?)
+            """, type, endpointUrl, enabled);
+    }
+
+    private Long insertAndReturnId(String sql, Object... args) {
+        var keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
+            for (var index = 0; index < args.length; index++) {
+                statement.setObject(index + 1, args[index]);
+            }
+            return statement;
+        }, keyHolder);
+        var keys = keyHolder.getKeys();
+        Number key = null;
+        if (keys != null && keys.get("id") instanceof Number id) {
+            key = id;
+        } else if (keys != null && keys.get("ID") instanceof Number id) {
+            key = id;
+        } else {
+            key = keyHolder.getKey();
+        }
+        if (key == null) {
+            throw new IllegalStateException("Insert did not return a generated id");
+        }
+        return key.longValue();
+    }
+
+    private long countDeliveries() {
+        return jdbcTemplate.queryForObject("select count(*) from notification_deliveries", Long.class);
+    }
+
+    private long countDeliveriesByStatus(String status) {
+        return jdbcTemplate.queryForObject(
+            "select count(*) from notification_deliveries where status = ?",
+            Long.class,
+            status
+        );
+    }
+
+    private static class StubWebhookClient extends WebhookClient {
+        private WebhookDeliveryResult nextResult = new WebhookDeliveryResult("success", 200, "ok", "ok");
+        private int calls;
+        private String lastPayloadJson;
+
+        @Override
+        public WebhookDeliveryResult postJson(String endpointUrl, String payloadJson) {
+            calls += 1;
+            lastPayloadJson = payloadJson;
+            return nextResult;
+        }
+    }
+}

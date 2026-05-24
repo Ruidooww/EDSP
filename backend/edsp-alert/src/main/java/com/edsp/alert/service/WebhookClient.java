@@ -20,9 +20,13 @@ public class WebhookClient {
     private final HttpClient httpClient;
 
     public WebhookClient() {
-        this.httpClient = HttpClient.newBuilder()
+        this(HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
-            .build();
+            .build());
+    }
+
+    WebhookClient(HttpClient httpClient) {
+        this.httpClient = httpClient;
     }
 
     public WebhookDeliveryResult postJson(String endpointUrl, String payloadJson) {

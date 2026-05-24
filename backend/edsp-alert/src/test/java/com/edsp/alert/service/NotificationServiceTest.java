@@ -145,6 +145,67 @@ class NotificationServiceTest {
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("QUERYSECRET123456"));
     }
 
+    @Test
+    void createWeComChannelRequiresHttpsRobotUrlAndDoesNotDuplicateKeyInConfigOrMaskedEndpoint() {
+        var httpUrl = assertThrows(ResponseStatusException.class, () -> service.createChannel(
+            new NotificationChannelRequest(
+                "bad wecom",
+                "wecom",
+                "http://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+        var missingKey = assertThrows(ResponseStatusException.class, () -> service.createChannel(
+            new NotificationChannelRequest(
+                "bad wecom",
+                "wecom",
+                "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?not_key=WESECRET123456",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+
+        var created = service.createChannel(new NotificationChannelRequest(
+            "wecom",
+            "wecom",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+            "wecom robot",
+            true,
+            Map.of(
+                "team", "secops",
+                "key", "WESECRET123456",
+                "robotKey", "WESECRET123456",
+                "webhookUrl", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456"
+            )
+        ));
+        var id = ((Number) created.get("id")).longValue();
+        var channel = service.listChannels().stream()
+            .filter(row -> ((Number) row.get("id")).longValue() == id)
+            .findFirst()
+            .orElseThrow();
+        var storedConfig = jdbcTemplate.queryForObject(
+            "select cast(config_json as varchar) from notification_channels where id = ?",
+            String.class,
+            id
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, httpUrl.getStatusCode());
+        assertEquals("invalid_wecom_webhook_url", httpUrl.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, missingKey.getStatusCode());
+        assertEquals("invalid_wecom_webhook_url", missingKey.getReason());
+        assertEquals("wecom", channel.get("channel_type"));
+        assertEquals("https://qyapi.weixin.qq.com/...", channel.get("endpoint_masked"));
+        assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("WESECRET123456"));
+        assertFalse(storedConfig.contains("WESECRET123456"));
+        assertFalse(storedConfig.contains("qyapi.weixin.qq.com"));
+        assertFalse(storedConfig.contains("webhookUrl"));
+        assertFalse(storedConfig.contains("robotKey"));
+        assertEquals(true, storedConfig.contains("secops"));
+    }
+
     private Long insertAlert(String title) {
         return insertAndReturnId("insert into alerts(title, severity, status) values (?, 'high', 'open')", title);
     }

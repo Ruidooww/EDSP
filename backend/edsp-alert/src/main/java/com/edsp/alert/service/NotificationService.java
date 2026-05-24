@@ -7,7 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -70,7 +72,7 @@ public class NotificationService {
 
     public Map<String, Object> createChannel(NotificationChannelRequest request) {
         var channelType = normalizeType(request.channelType());
-        var endpointUrl = normalizeWebhookEndpoint(request.webhookUrl());
+        var endpointUrl = normalizeEndpoint(channelType, request.webhookUrl());
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             var statement = connection.prepareStatement("""
@@ -95,7 +97,7 @@ public class NotificationService {
 
     public Map<String, Object> updateChannel(long id, NotificationChannelRequest request) {
         var channelType = normalizeType(request.channelType());
-        var endpointUrl = normalizeWebhookEndpoint(request.webhookUrl());
+        var endpointUrl = normalizeEndpoint(channelType, request.webhookUrl());
         jdbcTemplate.update("""
             update notification_channels
             set name = ?, channel_type = ?, endpoint_url = ?, description = ?,
@@ -129,9 +131,19 @@ public class NotificationService {
     }
 
     private String configJson(NotificationChannelRequest request) {
+        var channelType = normalizeType(request.channelType());
+        var weComKey = "wecom".equals(channelType) ? extractQueryKey(request.webhookUrl()) : "";
         var config = new LinkedHashMap<String, Object>();
-        config.putAll(request.config());
-        if (request.webhookUrl() != null && !request.webhookUrl().isBlank()) {
+        if ("wecom".equals(channelType)) {
+            request.config().forEach((key, value) -> {
+                if (!isSensitiveWeComConfig(key, value, weComKey)) {
+                    config.put(key, value);
+                }
+            });
+        } else {
+            config.putAll(request.config());
+        }
+        if (!"wecom".equals(channelType) && request.webhookUrl() != null && !request.webhookUrl().isBlank()) {
             config.put("webhookUrl", request.webhookUrl().trim());
         }
         return toJson(config);
@@ -147,27 +159,72 @@ public class NotificationService {
 
     private String normalizeType(String value) {
         var type = value == null || value.isBlank() ? "webhook" : value.trim().toLowerCase();
-        if (!"webhook".equals(type)) {
+        if (!Set.of("webhook", "wecom").contains(type)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
         }
         return type;
     }
 
-    private String normalizeWebhookEndpoint(String value) {
+    private String normalizeEndpoint(String channelType, String value) {
         if (value == null || value.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, invalidEndpointReason(channelType));
         }
         var endpoint = value.trim();
         try {
             var uri = URI.create(endpoint);
             var scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
-            if (!("http".equals(scheme) || "https".equals(scheme)) || uri.getHost() == null || uri.getHost().isBlank()) {
+            var host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+            if ("wecom".equals(channelType)) {
+                var path = uri.getPath() == null ? "" : uri.getPath();
+                var query = uri.getQuery() == null ? "" : uri.getQuery();
+                if (!"https".equals(scheme)
+                    || !"qyapi.weixin.qq.com".equals(host)
+                    || !path.contains("/cgi-bin/webhook/send")
+                    || !hasQueryKey(query)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_wecom_webhook_url");
+                }
+                return endpoint;
+            }
+            if (!("http".equals(scheme) || "https".equals(scheme)) || host.isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
             }
             return endpoint;
         } catch (IllegalArgumentException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, invalidEndpointReason(channelType));
         }
+    }
+
+    private String invalidEndpointReason(String channelType) {
+        return "wecom".equals(channelType) ? "invalid_wecom_webhook_url" : "invalid_webhook_url";
+    }
+
+    private boolean hasQueryKey(String query) {
+        return !extractQueryKeyFromQuery(query).isBlank();
+    }
+
+    private String extractQueryKey(String endpointUrl) {
+        if (endpointUrl == null || endpointUrl.isBlank()) {
+            return "";
+        }
+        try {
+            return extractQueryKeyFromQuery(URI.create(endpointUrl.trim()).getQuery());
+        } catch (IllegalArgumentException ex) {
+            return "";
+        }
+    }
+
+    private String extractQueryKeyFromQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return "";
+        }
+        for (var part : query.split("&")) {
+            var equalsIndex = part.indexOf('=');
+            var key = equalsIndex >= 0 ? part.substring(0, equalsIndex) : part;
+            if ("key".equals(key) && equalsIndex >= 0 && equalsIndex < part.length() - 1) {
+                return part.substring(equalsIndex + 1);
+            }
+        }
+        return "";
     }
 
     private String maskEndpoint(Object endpoint) {
@@ -182,6 +239,31 @@ public class NotificationService {
         } catch (IllegalArgumentException ex) {
             return "地址格式异常";
         }
+    }
+
+    private boolean isSensitiveWeComConfig(String key, Object value, String weComKey) {
+        var normalizedKey = key == null ? "" : key.trim().toLowerCase(Locale.ROOT);
+        if (Set.of("webhookurl", "webhook_url", "endpointurl", "endpoint_url", "url", "key").contains(normalizedKey)) {
+            return true;
+        }
+        if (value instanceof String text) {
+            var normalizedValue = text.toLowerCase(Locale.ROOT);
+            return normalizedValue.contains("qyapi.weixin.qq.com")
+                || normalizedValue.contains("key=")
+                || (!weComKey.isBlank() && text.contains(weComKey));
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.entrySet().stream()
+                .anyMatch(entry -> isSensitiveWeComConfig(String.valueOf(entry.getKey()), entry.getValue(), weComKey));
+        }
+        if (value instanceof Iterable<?> iterable) {
+            for (var item : iterable) {
+                if (isSensitiveWeComConfig("", item, weComKey)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
 }

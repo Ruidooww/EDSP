@@ -398,7 +398,10 @@ export default function AlertsPage() {
     }
   }
 
-  const enabledWebhookChannels = channels.filter((channel) => channel.enabled && channelType(channel) === 'webhook');
+  const enabledNotificationChannels = channels.filter((channel) => {
+    const type = channelType(channel);
+    return channel.enabled && (type === 'webhook' || type === 'wecom');
+  });
 
   const columns: ColumnsType<AlertRow> = [
     {
@@ -611,16 +614,16 @@ export default function AlertsPage() {
             <Form form={notificationForm} layout="vertical" onFinish={sendNotification}>
               <Form.Item
                 name="channelId"
-                label="Webhook Channel"
-                rules={[{ required: true, message: '请选择一个已启用的 webhook channel' }]}
+                label="Notification Channel"
+                rules={[{ required: true, message: '请选择一个已启用的通知通道' }]}
               >
                 <Select
-                  placeholder="选择一个已启用的 webhook channel"
-                  options={enabledWebhookChannels.map((channel) => ({
+                  placeholder="选择一个已启用的通知通道"
+                  options={enabledNotificationChannels.map((channel) => ({
                     value: channel.id,
-                    label: channel.name,
+                    label: `${channel.name} / ${channelType(channel) === 'wecom' ? '企业微信' : 'Webhook'}`,
                   }))}
-                  notFoundContent="暂无已启用的 webhook channel"
+                  notFoundContent="暂无已启用的通知通道"
                 />
               </Form.Item>
               <Button
@@ -628,7 +631,7 @@ export default function AlertsPage() {
                 htmlType="submit"
                 icon={<BellOutlined />}
                 loading={sending}
-                disabled={enabledWebhookChannels.length === 0}
+                disabled={enabledNotificationChannels.length === 0}
               >
                 发送通知
               </Button>

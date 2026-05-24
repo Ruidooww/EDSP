@@ -199,7 +199,7 @@ export default function NotificationsPage() {
       render: statusTag,
     },
     {
-      title: '最近测试',
+      title: '最近状态',
       dataIndex: 'last_test_status',
       render: (_, row) => (
         <div>
@@ -332,7 +332,7 @@ export default function NotificationsPage() {
       <Modal title="新增通知通道" open={open} onOk={submit} onCancel={() => setOpen(false)} okText="保存" destroyOnHidden>
         <Form layout="vertical" form={form} initialValues={{ channelType: 'webhook', enabled: true }}>
           <Form.Item name="name" label="通道名称" rules={[{ required: true, message: '请输入通道名称' }]}>
-            <Input prefix={<CheckCircleOutlined />} placeholder="例如：安全运营 Webhook、企业微信值班群、短信告警" />
+            <Input prefix={<CheckCircleOutlined />} placeholder="例如：安全运营 Webhook、企业微信、飞书" />
           </Form.Item>
 
           <Form.Item name="channelType" label="通道类型">

@@ -1,7 +1,6 @@
 package com.edsp.alert.service;
 
 import com.edsp.alert.dto.IngestAlertRequest;
-import com.edsp.alert.dto.NotificationSendRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,16 +21,13 @@ public class RuleExecutionService {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
-    private final NotificationService notificationService;
 
     public RuleExecutionService(
         JdbcTemplate jdbcTemplate,
-        ObjectMapper objectMapper,
-        NotificationService notificationService
+        ObjectMapper objectMapper
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
-        this.notificationService = notificationService;
     }
 
     public Map<String, Object> execute(long alertId, IngestAlertRequest request, String severity, Timestamp occurredAt) {
@@ -60,16 +56,11 @@ public class RuleExecutionService {
 
             var action = mapValue(expression.get("action"));
             if (Boolean.TRUE.equals(action.get("notify"))) {
-                var channelIds = channelIds(action.get("channelIds"));
-                var sendResult = notificationService.send(new NotificationSendRequest(
-                    channelIds,
-                    alertId,
-                    request.title(),
-                    notificationMessage(rule, request),
-                    severity,
-                    notificationDetail(rule, expression, request, detail)
+                notifications.add(Map.of(
+                    "status", "skipped",
+                    "message", "automatic_notification_disabled",
+                    "channelIds", channelIds(action.get("channelIds"))
                 ));
-                notifications.add(sendResult);
             }
         }
 
@@ -161,31 +152,6 @@ public class RuleExecutionService {
             return true;
         }
         return ruleScope.equals(normalize(String.valueOf(actualScope)));
-    }
-
-    private Map<String, Object> notificationDetail(
-        Map<String, Object> rule,
-        Map<String, Object> expression,
-        IngestAlertRequest request,
-        Map<String, Object> detail
-    ) {
-        var payload = new LinkedHashMap<String, Object>();
-        payload.put("ruleId", rule.get("id"));
-        payload.put("ruleName", rule.get("name"));
-        payload.put("sourceSystem", request.sourceSystem());
-        payload.put("externalId", request.externalId());
-        payload.put("alertType", request.alertType());
-        payload.put("actor", request.actor());
-        payload.put("asset", request.asset());
-        payload.put("subjectType", request.subjectType());
-        payload.put("subjectRef", request.subjectRef());
-        payload.put("ruleExpression", expression);
-        payload.put("detail", detail);
-        return payload;
-    }
-
-    private String notificationMessage(Map<String, Object> rule, IngestAlertRequest request) {
-        return "规则「" + rule.get("name") + "」命中告警：" + request.title();
     }
 
     private void saveAudit(long alertId, List<Map<String, Object>> matchedRules, List<Map<String, Object>> notifications) {

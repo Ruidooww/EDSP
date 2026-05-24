@@ -23,6 +23,7 @@ interface NotificationChannelFormValues {
 const CHANNEL_TYPE_OPTIONS = [
   { value: 'webhook', label: 'Webhook' },
   { value: 'wecom', label: '企业微信' },
+  { value: 'feishu', label: '飞书' },
 ];
 
 function channelTypeLabel(value: string) {
@@ -146,10 +147,16 @@ export default function NotificationsPage() {
   }
 
   const selectedChannelType = Form.useWatch('channelType', form) || 'webhook';
-  const endpointLabel = selectedChannelType === 'wecom' ? '企业微信机器人 Webhook 地址' : '通道地址';
+  const endpointLabel = selectedChannelType === 'wecom'
+    ? '企业微信机器人 Webhook 地址'
+    : selectedChannelType === 'feishu'
+      ? '飞书机器人 Webhook 地址'
+      : '通道地址';
   const endpointPlaceholder = selectedChannelType === 'wecom'
     ? 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'
-    : 'https://example.com/webhook';
+    : selectedChannelType === 'feishu'
+      ? 'https://open.feishu.cn/open-apis/bot/v2/hook/...'
+      : 'https://example.com/webhook';
 
   const channelColumns: ColumnsType<NotificationChannelRow> = [
     {

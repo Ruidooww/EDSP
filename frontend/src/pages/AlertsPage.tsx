@@ -156,6 +156,14 @@ function channelType(row: NotificationChannelRow) {
   return row.channelType ?? row.channel_type;
 }
 
+function notificationChannelTypeLabel(value?: string) {
+  return {
+    webhook: 'Webhook',
+    wecom: '企业微信',
+    feishu: '飞书',
+  }[value ?? ''] ?? (value || '-');
+}
+
 function timelineAction(row: AlertTimelineRow) {
   return row.action ?? row.eventType ?? row.event_type ?? '-';
 }
@@ -400,7 +408,7 @@ export default function AlertsPage() {
 
   const enabledNotificationChannels = channels.filter((channel) => {
     const type = channelType(channel);
-    return channel.enabled && (type === 'webhook' || type === 'wecom');
+    return channel.enabled && (type === 'webhook' || type === 'wecom' || type === 'feishu');
   });
 
   const columns: ColumnsType<AlertRow> = [
@@ -621,7 +629,7 @@ export default function AlertsPage() {
                   placeholder="选择一个已启用的通知通道"
                   options={enabledNotificationChannels.map((channel) => ({
                     value: channel.id,
-                    label: `${channel.name} / ${channelType(channel) === 'wecom' ? '企业微信' : 'Webhook'}`,
+                    label: `${channel.name} / ${notificationChannelTypeLabel(channelType(channel))}`,
                   }))}
                   notFoundContent="暂无已启用的通知通道"
                 />

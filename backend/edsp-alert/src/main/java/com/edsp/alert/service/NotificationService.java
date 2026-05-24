@@ -18,6 +18,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class NotificationService {
+    private static final String FEISHU_HOST = "open.feishu.cn";
+    private static final String FEISHU_PATH_PREFIX = "/open-apis/bot/v2/hook/";
+
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
 
@@ -133,6 +136,7 @@ public class NotificationService {
     private String configJson(NotificationChannelRequest request) {
         var channelType = normalizeType(request.channelType());
         var weComKey = "wecom".equals(channelType) ? extractQueryKey(request.webhookUrl()) : "";
+        var feishuToken = "feishu".equals(channelType) ? extractFeishuToken(request.webhookUrl()) : "";
         var config = new LinkedHashMap<String, Object>();
         if ("wecom".equals(channelType)) {
             request.config().forEach((key, value) -> {
@@ -140,10 +144,16 @@ public class NotificationService {
                     config.put(key, value);
                 }
             });
+        } else if ("feishu".equals(channelType)) {
+            request.config().forEach((key, value) -> {
+                if (!isSensitiveFeishuConfig(key, value, feishuToken)) {
+                    config.put(key, value);
+                }
+            });
         } else {
             config.putAll(request.config());
         }
-        if (!"wecom".equals(channelType) && request.webhookUrl() != null && !request.webhookUrl().isBlank()) {
+        if ("webhook".equals(channelType) && request.webhookUrl() != null && !request.webhookUrl().isBlank()) {
             config.put("webhookUrl", request.webhookUrl().trim());
         }
         return toJson(config);
@@ -159,7 +169,7 @@ public class NotificationService {
 
     private String normalizeType(String value) {
         var type = value == null || value.isBlank() ? "webhook" : value.trim().toLowerCase();
-        if (!Set.of("webhook", "wecom").contains(type)) {
+        if (!Set.of("webhook", "wecom", "feishu").contains(type)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
         }
         return type;
@@ -185,6 +195,18 @@ public class NotificationService {
                 }
                 return endpoint;
             }
+            if ("feishu".equals(channelType)) {
+                var path = uri.getPath() == null ? "" : uri.getPath();
+                if (!"https".equals(scheme)
+                    || !FEISHU_HOST.equals(host)
+                    || !path.startsWith(FEISHU_PATH_PREFIX)
+                    || !isSingleFeishuTokenPath(path)
+                    || uri.getQuery() != null
+                    || uri.getFragment() != null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_feishu_webhook_url");
+                }
+                return endpoint;
+            }
             if (!("http".equals(scheme) || "https".equals(scheme)) || host.isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
             }
@@ -195,7 +217,13 @@ public class NotificationService {
     }
 
     private String invalidEndpointReason(String channelType) {
-        return "wecom".equals(channelType) ? "invalid_wecom_webhook_url" : "invalid_webhook_url";
+        if ("wecom".equals(channelType)) {
+            return "invalid_wecom_webhook_url";
+        }
+        if ("feishu".equals(channelType)) {
+            return "invalid_feishu_webhook_url";
+        }
+        return "invalid_webhook_url";
     }
 
     private boolean hasQueryKey(String query) {
@@ -227,12 +255,37 @@ public class NotificationService {
         return "";
     }
 
+    private String extractFeishuToken(String endpointUrl) {
+        if (endpointUrl == null || endpointUrl.isBlank()) {
+            return "";
+        }
+        try {
+            var path = URI.create(endpointUrl.trim()).getPath();
+            if (path == null || !path.startsWith(FEISHU_PATH_PREFIX)) {
+                return "";
+            }
+            return path.substring(FEISHU_PATH_PREFIX.length()).trim();
+        } catch (IllegalArgumentException ex) {
+            return "";
+        }
+    }
+
+    private boolean isSingleFeishuTokenPath(String path) {
+        var token = path.substring(FEISHU_PATH_PREFIX.length()).trim();
+        return !token.isBlank() && !token.contains("/");
+    }
+
     private String maskEndpoint(Object endpoint) {
         if (endpoint == null || String.valueOf(endpoint).isBlank()) {
             return "-";
         }
         try {
             var uri = URI.create(String.valueOf(endpoint));
+            var host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+            var rawPath = uri.getPath() == null ? "" : uri.getPath();
+            if (FEISHU_HOST.equals(host) && rawPath.startsWith(FEISHU_PATH_PREFIX)) {
+                return uri.getScheme() + "://" + FEISHU_HOST + FEISHU_PATH_PREFIX + "...";
+            }
             var port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
             var path = uri.getPath() == null || uri.getPath().isBlank() ? "" : "/...";
             return uri.getScheme() + "://" + uri.getHost() + port + path;
@@ -259,6 +312,31 @@ public class NotificationService {
         if (value instanceof Iterable<?> iterable) {
             for (var item : iterable) {
                 if (isSensitiveWeComConfig("", item, weComKey)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isSensitiveFeishuConfig(String key, Object value, String feishuToken) {
+        var normalizedKey = key == null ? "" : key.trim().toLowerCase(Locale.ROOT);
+        if (Set.of("webhookurl", "webhook_url", "endpointurl", "endpoint_url", "url", "token").contains(normalizedKey)) {
+            return true;
+        }
+        if (value instanceof String text) {
+            var normalizedValue = text.toLowerCase(Locale.ROOT);
+            return normalizedValue.contains(FEISHU_HOST)
+                || normalizedValue.contains(FEISHU_PATH_PREFIX)
+                || (!feishuToken.isBlank() && text.contains(feishuToken));
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.entrySet().stream()
+                .anyMatch(entry -> isSensitiveFeishuConfig(String.valueOf(entry.getKey()), entry.getValue(), feishuToken));
+        }
+        if (value instanceof Iterable<?> iterable) {
+            for (var item : iterable) {
+                if (isSensitiveFeishuConfig("", item, feishuToken)) {
                     return true;
                 }
             }

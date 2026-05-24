@@ -19,6 +19,10 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.web.server.ResponseStatusException;
 
 class NotificationServiceTest {
+    private static final String FEISHU_TOKEN = "FEISHUTOKEN123456";
+    private static final String FEISHU_URL =
+        "https://open.feishu.cn/open-apis/bot/v2/hook/" + FEISHU_TOKEN;
+
     private JdbcTemplate jdbcTemplate;
     private NotificationService service;
 
@@ -203,6 +207,91 @@ class NotificationServiceTest {
         assertFalse(storedConfig.contains("qyapi.weixin.qq.com"));
         assertFalse(storedConfig.contains("webhookUrl"));
         assertFalse(storedConfig.contains("robotKey"));
+        assertEquals(true, storedConfig.contains("secops"));
+    }
+
+    @Test
+    void createFeishuChannelRequiresOfficialHttpsHookAndDoesNotStoreTokenInConfigOrMaskedEndpoint() {
+        var httpUrl = assertThrows(ResponseStatusException.class, () -> service.createChannel(
+            new NotificationChannelRequest(
+                "bad feishu",
+                "feishu",
+                "http://open.feishu.cn/open-apis/bot/v2/hook/" + FEISHU_TOKEN,
+                null,
+                true,
+                Map.of()
+            )
+        ));
+        var wrongHost = assertThrows(ResponseStatusException.class, () -> service.createChannel(
+            new NotificationChannelRequest(
+                "bad feishu",
+                "feishu",
+                "https://example.test/open-apis/bot/v2/hook/" + FEISHU_TOKEN,
+                null,
+                true,
+                Map.of()
+            )
+        ));
+        var emptyToken = assertThrows(ResponseStatusException.class, () -> service.createChannel(
+            new NotificationChannelRequest(
+                "bad feishu",
+                "feishu",
+                "https://open.feishu.cn/open-apis/bot/v2/hook/",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+        var extraPathSegment = assertThrows(ResponseStatusException.class, () -> service.createChannel(
+            new NotificationChannelRequest(
+                "bad feishu",
+                "feishu",
+                FEISHU_URL + "/extra",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+
+        var created = service.createChannel(new NotificationChannelRequest(
+            "feishu",
+            "feishu",
+            FEISHU_URL,
+            "feishu robot",
+            true,
+            Map.of(
+                "team", "secops",
+                "token", FEISHU_TOKEN,
+                "webhookUrl", FEISHU_URL,
+                "endpointUrl", FEISHU_URL
+            )
+        ));
+        var id = ((Number) created.get("id")).longValue();
+        var channel = service.listChannels().stream()
+            .filter(row -> ((Number) row.get("id")).longValue() == id)
+            .findFirst()
+            .orElseThrow();
+        var storedConfig = jdbcTemplate.queryForObject(
+            "select cast(config_json as varchar) from notification_channels where id = ?",
+            String.class,
+            id
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, httpUrl.getStatusCode());
+        assertEquals("invalid_feishu_webhook_url", httpUrl.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, wrongHost.getStatusCode());
+        assertEquals("invalid_feishu_webhook_url", wrongHost.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, emptyToken.getStatusCode());
+        assertEquals("invalid_feishu_webhook_url", emptyToken.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, extraPathSegment.getStatusCode());
+        assertEquals("invalid_feishu_webhook_url", extraPathSegment.getReason());
+        assertEquals("feishu", channel.get("channel_type"));
+        assertEquals("https://open.feishu.cn/open-apis/bot/v2/hook/...", channel.get("endpoint_masked"));
+        assertFalse(String.valueOf(channel.get("endpoint_masked")).contains(FEISHU_TOKEN));
+        assertFalse(storedConfig.contains(FEISHU_TOKEN));
+        assertFalse(storedConfig.contains(FEISHU_URL));
+        assertFalse(storedConfig.contains("webhookUrl"));
+        assertFalse(storedConfig.contains("endpointUrl"));
         assertEquals(true, storedConfig.contains("secops"));
     }
 

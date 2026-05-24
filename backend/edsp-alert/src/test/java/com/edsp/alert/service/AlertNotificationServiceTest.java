@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Statement;
+import java.util.List;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,7 +81,11 @@ class AlertNotificationServiceTest {
             """);
 
         webhookClient = new StubWebhookClient();
-        service = new AlertNotificationService(jdbcTemplate, new ObjectMapper(), webhookClient);
+        var webhookAdapter = new WebhookNotificationAdapter(webhookClient);
+        var objectMapper = new ObjectMapper();
+        var weComAdapter = new WeComNotificationAdapter(webhookClient, objectMapper);
+        var adapterRegistry = new NotificationChannelAdapterRegistry(List.of(webhookAdapter, weComAdapter));
+        service = new AlertNotificationService(jdbcTemplate, objectMapper, adapterRegistry);
     }
 
     @Test
@@ -124,7 +129,79 @@ class AlertNotificationServiceTest {
         assertEquals(1L, countDeliveriesByStatus("success"));
         assertEquals(2L, countDeliveriesByStatus("failed"));
         assertEquals(3, webhookClient.calls);
+        assertEquals("http://example.test/webhook?token=secret", webhookClient.lastEndpointUrl);
         assertEquals(true, webhookClient.lastPayloadJson.contains("\"alertId\""));
+    }
+
+    @Test
+    void sendsWeComMarkdownAndTreatsErrcodeZeroAsSuccess() {
+        var alertId = insertAlert("wecom alert", "open");
+        var channelId = insertChannel(
+            "wecom",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+            true
+        );
+
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 200, "{\"errcode\":0,\"errmsg\":\"ok\"}", "ok");
+        var result = service.send(alertId, channelId);
+        var storedPayload = jdbcTemplate.queryForObject(
+            "select cast(payload_json as varchar) from notification_deliveries where alert_id = ?",
+            String.class,
+            alertId
+        );
+
+        assertEquals("success", result.get("status"));
+        assertEquals(1L, countDeliveriesByStatus("success"));
+        assertEquals(true, webhookClient.lastEndpointUrl.startsWith("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?"));
+        assertEquals(true, webhookClient.lastEndpointUrl.contains("key="));
+        assertEquals(true, webhookClient.lastPayloadJson.contains("\"msgtype\":\"markdown\""));
+        assertEquals(true, webhookClient.lastPayloadJson.contains("wecom alert"));
+        assertEquals(true, webhookClient.lastPayloadJson.contains("Alert ID"));
+        assertEquals(false, webhookClient.lastPayloadJson.contains("WESECRET123456"));
+        assertEquals(false, storedPayload.contains("WESECRET123456"));
+    }
+
+    @Test
+    void marksWeComBusinessFailureAndMalformedResponseAsFailedWithoutDuplicatingDeliveriesAsSuccess() {
+        var failedAlertId = insertAlert("wecom business failure", "open");
+        var malformedAlertId = insertAlert("wecom malformed", "open");
+        var channelId = insertChannel(
+            "wecom",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+            true
+        );
+
+        webhookClient.nextResult = new WebhookDeliveryResult(
+            "success",
+            200,
+            "{\"errcode\":93000,\"errmsg\":\"invalid hook\"}",
+            "ok"
+        );
+        var failed = service.send(failedAlertId, channelId);
+
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 200, "not-json", "ok");
+        var malformed = service.send(malformedAlertId, channelId);
+
+        assertEquals("failed", failed.get("status"));
+        assertEquals("wecom_errcode_93000", failed.get("message"));
+        assertEquals("failed", malformed.get("status"));
+        assertEquals("wecom_malformed_response", malformed.get("message"));
+        assertEquals(0L, countDeliveriesByStatus("success"));
+        assertEquals(2L, countDeliveriesByStatus("failed"));
+    }
+
+    @Test
+    void rejectsInvalidWeComUrlBeforeWritingDelivery() {
+        var alertId = insertAlert("wecom invalid", "open");
+        var channelId = insertChannel(
+            "wecom",
+            "http://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+            true
+        );
+
+        assertStatus(HttpStatus.BAD_REQUEST, "invalid_wecom_webhook_url", () -> service.send(alertId, channelId));
+        assertEquals(0L, countDeliveries());
+        assertEquals(0, webhookClient.calls);
     }
 
     private void assertStatus(HttpStatus status, Runnable action) {
@@ -191,11 +268,13 @@ class AlertNotificationServiceTest {
     private static class StubWebhookClient extends WebhookClient {
         private WebhookDeliveryResult nextResult = new WebhookDeliveryResult("success", 200, "ok", "ok");
         private int calls;
+        private String lastEndpointUrl;
         private String lastPayloadJson;
 
         @Override
         public WebhookDeliveryResult postJson(String endpointUrl, String payloadJson) {
             calls += 1;
+            lastEndpointUrl = endpointUrl;
             lastPayloadJson = payloadJson;
             return nextResult;
         }

@@ -17,16 +17,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class AlertNotificationService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
-    private final WebhookClient webhookClient;
+    private final NotificationChannelAdapterRegistry adapterRegistry;
 
     public AlertNotificationService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
-        WebhookClient webhookClient
+        NotificationChannelAdapterRegistry adapterRegistry
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
-        this.webhookClient = webhookClient;
+        this.adapterRegistry = adapterRegistry;
     }
 
     public Map<String, Object> send(long alertId, long channelId) {
@@ -45,18 +45,15 @@ public class AlertNotificationService {
         if (!Boolean.TRUE.equals(channel.get("enabled"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "channel_disabled");
         }
-        if (!"webhook".equalsIgnoreCase(String.valueOf(channel.get("channel_type")))) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
-        }
-
-        var endpointUrl = channel.get("endpoint_url") == null ? "" : String.valueOf(channel.get("endpoint_url")).trim();
-        if (endpointUrl.isBlank()) {
+        var adapter = adapterRegistry.find(String.valueOf(channel.get("channel_type")))
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel"));
+        if ("webhook".equalsIgnoreCase(adapter.channelType()) && isBlank(channel.get("endpoint_url"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
         }
 
         var payload = payload(alert, channelId);
         var payloadJson = toJson(payload);
-        var deliveryResult = webhookClient.postJson(endpointUrl, payloadJson);
+        var deliveryResult = adapter.send(alert, channel, payloadJson);
         var deliveryId = saveDelivery(channelId, alert, payloadJson, deliveryResult);
 
         var result = new LinkedHashMap<String, Object>();
@@ -180,5 +177,9 @@ public class AlertNotificationService {
 
     private String stringOrNull(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private boolean isBlank(Object value) {
+        return value == null || String.valueOf(value).trim().isBlank();
     }
 }

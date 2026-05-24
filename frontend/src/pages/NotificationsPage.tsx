@@ -22,6 +22,7 @@ interface NotificationChannelFormValues {
 
 const CHANNEL_TYPE_OPTIONS = [
   { value: 'webhook', label: 'Webhook' },
+  { value: 'wecom', label: '企业微信' },
 ];
 
 function channelTypeLabel(value: string) {
@@ -143,6 +144,12 @@ export default function NotificationsPage() {
       enabled: true,
     });
   }
+
+  const selectedChannelType = Form.useWatch('channelType', form) || 'webhook';
+  const endpointLabel = selectedChannelType === 'wecom' ? '企业微信机器人 Webhook 地址' : '通道地址';
+  const endpointPlaceholder = selectedChannelType === 'wecom'
+    ? 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'
+    : 'https://example.com/webhook';
 
   const channelColumns: ColumnsType<NotificationChannelRow> = [
     {
@@ -327,13 +334,13 @@ export default function NotificationsPage() {
 
           <Form.Item
             name="webhookUrl"
-            label="通道地址"
+            label={endpointLabel}
             rules={[
-              { required: true, message: '请输入通道地址' },
+              { required: true, message: `请输入${endpointLabel}` },
               { type: 'url', message: '请输入合法 URL，例如 https://example.com/webhook' },
             ]}
           >
-            <Input prefix={<ApiOutlined />} placeholder="https://example.com/webhook" />
+            <Input prefix={<ApiOutlined />} placeholder={endpointPlaceholder} />
           </Form.Item>
 
           <Form.Item name="description" label="说明">

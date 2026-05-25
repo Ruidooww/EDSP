@@ -90,4 +90,38 @@ class WebhookClientTest {
         assertTrue(cleaned.contains("[redacted]"));
         assertTrue(cleaned.length() <= 1000);
     }
+
+    @Test
+    void cleanRedactsGenericSecretPatternsEvenWhenTheyAreNotEndpointParts() throws Exception {
+        var client = new WebhookClient();
+        Method clean = WebhookClient.class.getDeclaredMethod("clean", String.class, String.class);
+        clean.setAccessible(true);
+
+        var endpoint = "https://hook.example.test/webhook";
+        var response = "endpoint " + endpoint
+            + " Authorization: Bearer BEARERSECRET123456"
+            + " signature=SIGNATURESECRET123456"
+            + " access_token=ACCESSSECRET123456";
+
+        var cleaned = (String) clean.invoke(client, response, endpoint);
+
+        assertFalse(cleaned.contains(endpoint));
+        assertFalse(cleaned.contains("BEARERSECRET123456"));
+        assertFalse(cleaned.contains("SIGNATURESECRET123456"));
+        assertFalse(cleaned.contains("ACCESSSECRET123456"));
+        assertTrue(cleaned.contains("[redacted]"));
+    }
+
+    @Test
+    void cleanRedactsShortFeishuHookToken() throws Exception {
+        var client = new WebhookClient();
+        Method clean = WebhookClient.class.getDeclaredMethod("clean", String.class, String.class);
+        clean.setAccessible(true);
+
+        var endpoint = "https://open.feishu.cn/open-apis/bot/v2/hook/abc123";
+        var cleaned = (String) clean.invoke(client, "provider echoed abc123", endpoint);
+
+        assertFalse(cleaned.contains("abc123"));
+        assertTrue(cleaned.contains("[redacted]"));
+    }
 }

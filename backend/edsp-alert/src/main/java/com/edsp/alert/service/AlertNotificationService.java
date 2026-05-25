@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class AlertNotificationService {
     private static final int MAX_SAVED_TEXT_LENGTH = 1000;
+    private static final NotificationSecretSanitizer SECRET_SANITIZER = new NotificationSecretSanitizer();
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
@@ -90,8 +91,12 @@ public class AlertNotificationService {
 
         var payload = payload(alert, channelId);
         var payloadJson = toJson(payload);
-        var deliveryResult = sendWithAdapter(adapter, alert, channel, payloadJson);
-        var deliveryId = saveDelivery(channelId, alert, payloadJson, deliveryResult, retryOfDeliveryId);
+        var deliveryResult = sanitizeDeliveryResult(
+            sendWithAdapter(adapter, alert, channel, payloadJson),
+            channel
+        );
+        var safePayloadJson = SECRET_SANITIZER.redactPayloadSecrets(payloadJson, stringOrNull(channel.get("endpoint_url")));
+        var deliveryId = saveDelivery(channelId, alert, safePayloadJson, deliveryResult, retryOfDeliveryId);
         var reliability = reliability(deliveryResult);
 
         var result = new LinkedHashMap<String, Object>();
@@ -224,6 +229,16 @@ public class AlertNotificationService {
             }
             throw ex;
         }
+    }
+
+    private WebhookDeliveryResult sanitizeDeliveryResult(WebhookDeliveryResult result, Map<String, Object> channel) {
+        var endpointUrl = stringOrNull(channel.get("endpoint_url"));
+        return new WebhookDeliveryResult(
+            result.status(),
+            result.responseCode(),
+            SECRET_SANITIZER.redactText(result.responseBody(), endpointUrl),
+            SECRET_SANITIZER.redactText(result.message(), endpointUrl)
+        );
     }
 
     private Reliability reliability(WebhookDeliveryResult result) {

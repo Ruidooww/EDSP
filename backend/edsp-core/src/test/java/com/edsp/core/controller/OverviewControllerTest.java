@@ -110,8 +110,20 @@ class OverviewControllerTest {
         insertLifecycleEvent(openAlertId, "assigned", "open", "open", "ops", "lisi", "assign", today.plusHours(4));
         insertLifecycleEvent(acknowledgedAlertId, "acknowledged", "open", "acknowledged", "ops", null, "ack", today.plusHours(5));
 
-        var webhookChannelId = insertChannel("Webhook", "webhook", true, "ready");
-        var feishuChannelId = insertChannel("Feishu", "feishu", false, "disabled");
+        var webhookChannelId = insertChannel(
+            "Webhook",
+            "webhook",
+            true,
+            "ready",
+            "https://hook.example.test/webhook?token=OVERVIEWSECRET123456"
+        );
+        var feishuChannelId = insertChannel(
+            "Feishu",
+            "feishu",
+            false,
+            "disabled",
+            "https://open.feishu.cn/open-apis/bot/v2/hook/FEISHUTOKEN1234567890"
+        );
 
         insertDelivery(webhookChannelId, openAlertId, "Timeout 1", "failed", 504, "body", "timeout", "Timed out", true, 1, null, today.plusHours(6));
         var firstFailureId = insertDelivery(webhookChannelId, openAlertId, "Timeout 2", "failed", 504, "body", "timeout", "Timed out", false, 0, null, today.plusHours(7));
@@ -120,8 +132,22 @@ class OverviewControllerTest {
         insertDelivery(feishuChannelId, acknowledgedAlertId, "HTTP 2", "failed", 500, "body", "http_500", "Server error", false, 0, null, today.plusHours(9));
         insertDelivery(feishuChannelId, acknowledgedAlertId, "DNS", "failed", null, "body", "dns", "DNS error", false, 0, null, today.plusHours(10));
         insertDelivery(feishuChannelId, acknowledgedAlertId, "Auth", "failed", 401, "body", "auth", "Unauthorized", false, 0, null, today.plusHours(11));
-        insertDelivery(feishuChannelId, acknowledgedAlertId, "SSL", "failed", 495, "body", "ssl", "SSL error", false, 0, null, today.plusHours(12));
-        insertDelivery(feishuChannelId, acknowledgedAlertId, "Rate", "failed", 429, "body", "rate_limited", "Rate limited", false, 0, null, today.plusHours(13));
+        insertDelivery(feishuChannelId, acknowledgedAlertId, "SSL", "failed", 495, "body", "ssl",
+            "SSL error FEISHUTOKEN1234567890", false, 0, null, today.plusHours(12));
+        insertDelivery(
+            webhookChannelId,
+            acknowledgedAlertId,
+            "Rate",
+            "failed",
+            429,
+            "body",
+            "rate_limited",
+            "Rate limited OVERVIEWSECRET123456 Authorization: Bearer OVERVIEWBEARER123456",
+            false,
+            0,
+            null,
+            today.plusHours(13)
+        );
         insertDelivery(feishuChannelId, acknowledgedAlertId, "Unknown", "failed", null, "body", null, "Unknown", false, 0, null, today.plusHours(14));
         insertDelivery(webhookChannelId, openAlertId, "Success", "success", 200, "ok", null, null, false, 0, null, today.plusHours(15));
 
@@ -166,6 +192,12 @@ class OverviewControllerTest {
         ), recentFailed.get(0).keySet());
         assertFalse(recentFailed.get(0).containsKey("payload_json"));
         assertFalse(recentFailed.get(0).containsKey("response_body"));
+        assertTrue(recentFailed.stream()
+            .noneMatch(row -> String.valueOf(row.get("failure_reason")).contains("OVERVIEWSECRET123456")));
+        assertTrue(recentFailed.stream()
+            .noneMatch(row -> String.valueOf(row.get("failure_reason")).contains("OVERVIEWBEARER123456")));
+        assertTrue(recentFailed.stream()
+            .noneMatch(row -> String.valueOf(row.get("failure_reason")).contains("FEISHUTOKEN1234567890")));
 
         var recentLifecycleEvents = objectList(data.get("recentLifecycleEvents"));
         assertEquals(2, recentLifecycleEvents.size());
@@ -225,10 +257,14 @@ class OverviewControllerTest {
     }
 
     private Long insertChannel(String name, String channelType, boolean enabled, String status) {
+        return insertChannel(name, channelType, enabled, status, "https://example.test/hook");
+    }
+
+    private Long insertChannel(String name, String channelType, boolean enabled, String status, String endpointUrl) {
         return insertAndReturnId("""
             insert into notification_channels(name, channel_type, endpoint_url, config_json, enabled, status)
-            values (?, ?, 'https://example.test/hook', cast('{}' as jsonb), ?, ?)
-            """, name, channelType, enabled, status);
+            values (?, ?, ?, cast('{}' as jsonb), ?, ?)
+            """, name, channelType, endpointUrl, enabled, status);
     }
 
     private Long insertDelivery(

@@ -1,14 +1,19 @@
 package com.edsp.core.controller;
 
 import com.edsp.common.api.ApiResponse;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,6 +22,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/core")
 public class OverviewController {
+    private static final int MIN_PATH_SECRET_LENGTH = 16;
+    private static final Pattern BEARER_PATTERN = Pattern.compile("(?i)\\bBearer\\s+([A-Za-z0-9._~+/=-]{8,})");
+    private static final Pattern SECRET_ASSIGNMENT_PATTERN = Pattern.compile(
+        "(?i)\\b(key|token|access_token|accessToken|secret|sign|signature|api_key|apikey|password|passwd|auth|authorization|bearer)\\s*[:=]\\s*([^\\s&\"'{}<>]+)"
+    );
+
     private final JdbcTemplate jdbcTemplate;
 
     public OverviewController(JdbcTemplate jdbcTemplate) {
@@ -272,14 +283,22 @@ public class OverviewController {
                    d.response_code, d.failure_type, d.failure_reason,
                    coalesce(d.retryable, false) as retryable,
                    coalesce(d.retry_count, 0) as retry_count,
-                   d.retry_of_delivery_id, d.created_at
+                   d.retry_of_delivery_id, d.created_at, c.endpoint_url
             from notification_deliveries d
             left join notification_channels c on c.id = d.channel_id
             left join alerts a on a.id = d.alert_id
             where lower(d.status) = 'failed'
             order by d.created_at desc, d.id desc
             limit 5
-            """);
+            """).stream().map(this::presentFailedDelivery).toList();
+    }
+
+    private Map<String, Object> presentFailedDelivery(Map<String, Object> row) {
+        var result = new LinkedHashMap<>(row);
+        var endpointUrl = stringOrBlank(row.get("endpoint_url"));
+        result.put("failure_reason", redactText(row.get("failure_reason"), endpointUrl));
+        result.remove("endpoint_url");
+        return result;
     }
 
     private List<Map<String, Object>> recentLifecycleEvents() {
@@ -340,6 +359,103 @@ public class OverviewController {
             return number.longValue();
         }
         return 0;
+    }
+
+    private String redactText(Object value, String endpointUrl) {
+        if (value == null) {
+            return null;
+        }
+        var result = String.valueOf(value);
+        for (var secret : endpointSensitiveValues(endpointUrl)) {
+            result = result.replace(secret, "[redacted]");
+        }
+        result = BEARER_PATTERN.matcher(result).replaceAll("Bearer [redacted]");
+        result = SECRET_ASSIGNMENT_PATTERN.matcher(result).replaceAll("$1=[redacted]");
+        return result;
+    }
+
+    private List<String> endpointSensitiveValues(String endpointUrl) {
+        var values = new LinkedHashSet<String>();
+        if (endpointUrl == null || endpointUrl.isBlank()) {
+            return List.of();
+        }
+        addSensitiveValue(values, endpointUrl.trim(), false);
+        try {
+            var uri = URI.create(endpointUrl.trim());
+            if (uri.getUserInfo() != null && !uri.getUserInfo().isBlank()) {
+                addSensitiveValue(values, uri.getUserInfo(), false);
+            }
+            var rawPath = uri.getRawPath();
+            if (rawPath != null && !rawPath.isBlank()) {
+                if ("open.feishu.cn".equalsIgnoreCase(uri.getHost() == null ? "" : uri.getHost())
+                    && rawPath.startsWith("/open-apis/bot/v2/hook/")) {
+                    addSensitiveValue(values, rawPath.substring("/open-apis/bot/v2/hook/".length()), false);
+                }
+                for (var part : rawPath.split("/")) {
+                    var decoded = decodeOrOriginal(part);
+                    if (isTokenLikePathSegment(decoded)) {
+                        addSensitiveValue(values, part, false);
+                    }
+                }
+            }
+            var rawQuery = uri.getRawQuery();
+            if (rawQuery != null && !rawQuery.isBlank()) {
+                addSensitiveValue(values, rawQuery, false);
+                for (var part : rawQuery.split("&")) {
+                    var equalsIndex = part.indexOf('=');
+                    if (equalsIndex >= 0 && equalsIndex < part.length() - 1) {
+                        addSensitiveValue(values, part.substring(equalsIndex + 1), false);
+                    }
+                }
+            }
+        } catch (IllegalArgumentException ex) {
+            // Keep redaction best-effort for malformed endpoints.
+        }
+        var result = new ArrayList<>(values);
+        result.removeIf(secret -> secret == null || secret.isBlank());
+        result.sort((left, right) -> Integer.compare(right.length(), left.length()));
+        return result;
+    }
+
+    private boolean isTokenLikePathSegment(String value) {
+        if (value == null || value.length() < MIN_PATH_SECRET_LENGTH) {
+            return false;
+        }
+        var alphaNumeric = value.chars()
+            .filter(Character::isLetterOrDigit)
+            .count();
+        var hasDigit = value.chars().anyMatch(Character::isDigit);
+        return hasDigit && alphaNumeric >= MIN_PATH_SECRET_LENGTH && value.matches("[A-Za-z0-9._~+=-]+");
+    }
+
+    private String decodeOrOriginal(String value) {
+        try {
+            return URLDecoder.decode(value, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            return value;
+        }
+    }
+
+    private void addSensitiveValue(LinkedHashSet<String> values, String value, boolean requireLongValue) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        if (requireLongValue && value.length() < MIN_PATH_SECRET_LENGTH) {
+            return;
+        }
+        values.add(value);
+        try {
+            var decoded = URLDecoder.decode(value, StandardCharsets.UTF_8);
+            if (!decoded.equals(value)) {
+                values.add(decoded);
+            }
+        } catch (IllegalArgumentException ex) {
+            // Keep the raw value; malformed escape sequences should not hide diagnostics.
+        }
+    }
+
+    private String stringOrBlank(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private String weekdayLabel(LocalDate day) {

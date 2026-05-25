@@ -6,93 +6,149 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`GitHub Actions CI MVP`
-- 最新 feature merge commit：`0cd67f1 merge: github actions ci mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for github actions ci mvp`
-- 本轮阶段分支：`codex/github-actions-ci-mvp`
-- 本轮结果：已完成 GitHub Actions CI MVP 收口；新增 GitHub Actions workflow，在 push / pull request 后自动执行后端测试、前端构建和 Docker Compose 构建校验。
+- 当前阶段：`Notification Delivery Reliability MVP`
+- 最新 feature merge commit：`4bf8f9c merge: notification delivery reliability mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for notification delivery reliability mvp`
+- 本轮阶段分支：`codex/notification-delivery-reliability-mvp`
+- 本轮结果：已完成通知投递可靠性增强，支持结构化失败诊断和基于失败 delivery 的手动 retry。
 
 ## 已完成能力
 
-- 新增 `.github/workflows/ci.yml`。
-- CI 触发条件：
-  - push 到 `master`
-  - push 到 `codex/**`
-  - pull request 到 `master`
-  - 手动 `workflow_dispatch`
-- 后端 CI job：
-  - 使用 Ubuntu runner。
-  - 使用 Temurin JDK 21。
-  - 启用 Maven cache。
-  - 执行 `mvn -B -pl edsp-alert -am test`。
-  - 执行 `mvn -B -pl edsp-core -am test`。
-- 前端 CI job：
-  - 使用 Ubuntu runner。
-  - 使用 Node.js 22。
-  - 启用 npm cache。
-  - 执行 `npm ci`。
-  - 执行 `npm run build`。
-- Docker Compose CI job：
-  - 依赖后端测试和前端构建通过。
-  - 执行 `docker compose config`。
-  - 执行 `docker compose build`。
-- CI 权限保持最小化：`permissions: contents: read`。
-- CI 未使用 GitHub Secrets，未配置部署，未 push Docker image，未上传 artifact。
+- 新增 migration：`V15__notification_delivery_reliability.sql`。
+- `notification_deliveries` 新增字段：
+  - `failure_type`
+  - `failure_reason`
+  - `retryable`
+  - `retry_of_delivery_id`
+  - `retry_count`
+- 新增索引：
+  - `idx_notification_deliveries_failure_type`
+  - `idx_notification_deliveries_status_retryable`
+  - `idx_notification_deliveries_retry_of`
+- 通知发送结果写入结构化失败信息：
+  - success delivery 保持 `failure_type = null`、`failure_reason = null`、`retryable = false`
+  - failed delivery 写入固定 `failure_type`、脱敏后的 `failure_reason` 和固定规则计算出的 `retryable`
+- 固定失败类型范围：
+  - `timeout`
+  - `connection_error`
+  - `http_408`
+  - `http_429`
+  - `http_5xx`
+  - `http_4xx`
+  - `provider_business_error`
+  - `malformed_response`
+  - `invalid_endpoint`
+  - `unsupported_channel`
+  - `unknown_error`
+- 固定 retryable 规则：
+  - 可重试：`timeout`、`connection_error`、`http_408`、`http_429`、`http_5xx`
+  - 不可重试：`http_4xx`、`provider_business_error`、`malformed_response`、`invalid_endpoint`、`unsupported_channel`、`unknown_error`
+- 新增手动 retry API：
+  - `POST /api/notifications/deliveries/{id}/retry`
+- retry API 边界：
+  - 不接受业务 body
+  - 不允许传入 `alertId`、`channelId`、`title`、`message`、`severity`、`payload`
+  - 只能读取原 delivery 的 `alert_id + channel_id`
+  - 重新走现有 alert-based sending path
+  - 不复用旧 `payload_json` 直接发送
+- retry 允许条件：
+  - 原 delivery 必须存在
+  - `status = failed`
+  - `retryable = true`
+  - 原 delivery 必须有关联 `alert_id` 和 `channel_id`
+  - alert 必须存在且 `status = open`
+  - channel 必须存在且 enabled
+  - channel type 必须被现有 adapter registry 支持
+- retry 写入规则：
+  - 实际 retry 后一定新增一条 `notification_deliveries`
+  - 新 delivery 写入 `retry_of_delivery_id`
+  - 新 delivery 的 `retry_count = 0`
+  - 原 delivery 只递增 `retry_count`
+  - 原 delivery 不修改 `status`、`response_body`、`payload_json`、`failure_type`、`failure_reason`、`retryable`、`retry_of_delivery_id`
+- retry 服务加 `@Transactional`，保证新增 retry delivery 和原 delivery retry count 更新在同一事务内。
+- `GET /api/notifications/deliveries` 返回新增 reliability 字段。
+- 前端 `NotificationsPage` 投递记录区域展示：
+  - 失败类型
+  - 失败原因
+  - 是否可重试
+  - 重试次数
+  - `Retry Of`
+- 前端仅对 `status = failed && retryable = true` 的投递记录显示“重试一次”按钮。
 
 ## 明确未做 / 禁止误解
 
-- 未修改业务代码。
-- 未修改后端代码。
-- 未修改前端代码。
-- 未修改 Dockerfile。
-- 未修改 `docker-compose.yml`。
+- 未做自动重试。
+- 未做定时重试。
+- 未做失败队列。
+- 未做后台 retry worker。
+- 未做批量 retry。
+- 未做通知升级。
+- 未做通知编排。
+- 未新增通知通道 adapter。
+- 未接外部数据库。
+- 未接旧预警平台库。
+- 未做外部 schema discovery。
+- 未修改 alert lifecycle。
+- 未写入 `alert_lifecycle_events`。
+- 未修改 alert status。
+- 未修改 `alerts / alert_decisions / standard_events` 语义。
+- 未修改 `POST /api/notifications/alerts/send` 的 `alertId + channelId` 边界。
 - 未修改 `AGENTS.md`。
-- 未新增或修改 migration。
-- 未新增 release / tag / package publish。
-- 未配置部署。
-- 未 push Docker image。
-- 未上传 artifact。
-- 未连接生产数据库。
-- 未连接外部数据库。
-- 未写入任何真实 token / password / key。
-- 未改变当前开发流程和 merge 规则。
+- 未引入 Kafka / Redis / ClickHouse / AI。
 
 ## 当前关键边界
 
-- GitHub Actions CI 只负责验证，不负责部署。
-- Workflow 内不得出现 secret 名称、真实数据库密码、企业微信 key、飞书 token、webhook token。
-- Workflow 不得打印环境变量，不得执行 `cat .env`、`printenv`、`env` 等可能泄露环境的命令。
-- 后续阶段仍必须遵守 staged MVP 流程：阶段分支、验证、review、明确批准后 merge、post-merge HANDOFF。
-- Notification delivery 仍只允许从已有 `alerts` 出发。
-- 手动通知入口仍为 `POST /api/notifications/alerts/send`，请求体仍只允许 `alertId + channelId`。
+- Notification delivery 仍只能从已有 `alerts` 出发。
+- 正常通知发送入口仍是 `POST /api/notifications/alerts/send`。
+- 正常通知发送请求体仍只允许 `alertId + channelId`。
+- retry 只能从原 delivery 的 `alert_id + channel_id` 重新进入 alert-based sending path。
+- retry 不得复用旧 `payload_json` 直接发送。
+- retry 校验失败不得写新 delivery，不得递增原 delivery 的 `retry_count`，不得修改原 delivery。
 - Notification code 不得修改 alert lifecycle state。
 - Alert lifecycle code 不得写 `notification_deliveries` 或调用 notification delivery services。
+- Rule evaluation 不得直接创建 alerts 或发送 notifications。
+- Alert generation 只能从 matched `alert_decisions` 创建 alerts。
 
 ## 测试结果
 
-- YAML 格式：`npx --yes js-yaml .github/workflows/ci.yml` 通过。
-- 安全扫描：workflow 未命中 `secrets.*`、真实 token/password/key、部署、artifact、镜像 push、环境打印等禁止内容。
-- Git 检查：阶段分支 `git diff --check` 通过，无 whitespace error。
-- Git 状态：阶段分支已提交并 push 到 `origin/codex/github-actions-ci-mvp`。
-- 本轮按计划未在本地执行完整 Maven / npm / Docker build；这些校验由 GitHub Actions 在 push / pull request 后执行。
-- Post-merge Git 检查：docs 提交后执行并记录在最终回复。
+- 阶段分支验证：
+  - `mvn -pl edsp-alert -am test` 通过，`Tests run: 54, Failures: 0, Errors: 0`
+  - `mvn -pl edsp-core -am test` 通过，`Tests run: 112, Failures: 0, Errors: 0`
+  - `npm.cmd run build` 通过，仅有 Vite chunk size warning
+  - `git diff --check` 通过，仅有 CRLF warning，无 whitespace error
+- Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
 
-- 首次 GitHub Actions 实际运行可能暴露 runner 环境、Docker Compose build 或 action major version 兼容问题，需要根据 GitHub CI 结果跟进。
-- 当前 CI 不上传测试报告或构建 artifact；如后续需要，可单独规划 CI Reporting / Artifact MVP。
-- 当前 CI 不做 PostgreSQL runtime smoke test；真实 PostgreSQL runtime 验证仍按 `docs/postgresql-runtime-verification.md` 文档流程执行。
+- GitHub Actions branch run 需要在远端完成后观察结果；本地未安装 `gh`，无法直接查询 Actions run。
+- 当前 `failure_type` 由服务层固定写入，数据库层暂未加 check constraint；如后续需要更强约束，可单独规划 migration hardening。
+- 当前 retry 仅支持手动单条 retry；自动 retry、批量 retry 和升级编排仍需保持禁用，除非后续单独立项。
+- 前端投递记录列宽已扩展；如后续数据较多，可单独做投递记录详情页或筛选增强。
 
 ## 下一轮建议
 
-下一阶段建议回到业务主线，进入 `Notification Delivery Reliability MVP`。
+建议下一阶段先不要扩展自动化通知，优先做 `Notification Delivery Observability MVP` 或回到业务主线做告警处置视图增强。
 
-建议范围：
+可选方向：
 
-- 继续保持手动通知入口和 `alertId + channelId` 边界。
-- 在明确 migration 和状态模型后，为 `notification_deliveries` 增加结构化失败原因、可重放标记或最小重试记录。
-- 不做自动通知，不做全量群发，不做告警升级，不做通知编排，不接入 AI / Kafka / Redis / ClickHouse。
+- `Notification Delivery Observability MVP`
+  - 增加投递记录筛选体验
+  - 增加失败类型统计
+  - 增加按 alert / channel 的投递历史查看
+  - 不做自动 retry，不做升级编排
+- 告警处置视图增强
+  - 提升 alerts 列表和详情页可读性
+  - 展示关联通知投递记录
+  - 仍保持通知只手动触发
 
-备选方向：
+下一阶段仍必须遵守：
 
-- 如果优先完善工程质量，可先观察 GitHub Actions 首轮运行结果，并做最小 CI 兼容修复；仍不得扩大到部署、镜像发布或生产环境连接。
+```text
+One stage.
+One branch.
+One scope.
+One full verification.
+One merge.
+One post-merge HANDOFF update.
+Clean master before continuing.
+```

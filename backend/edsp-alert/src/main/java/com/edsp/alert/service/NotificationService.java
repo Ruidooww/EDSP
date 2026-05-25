@@ -5,6 +5,7 @@ import com.edsp.alert.dto.NotificationSendRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -43,23 +44,40 @@ public class NotificationService {
     }
 
     public List<Map<String, Object>> listDeliveries(int limit, Long alertId) {
+        return listDeliveries(limit, alertId, null, null, null);
+    }
+
+    public List<Map<String, Object>> listDeliveries(
+        int limit,
+        Long alertId,
+        String status,
+        String channelType,
+        Long channelId
+    ) {
         var safeLimit = Math.max(1, Math.min(limit, 200));
+        var normalizedStatus = normalizeDeliveryStatus(status);
+        var normalizedChannelType = normalizeOptionalChannelType(channelType);
+        var filters = new ArrayList<String>();
+        var args = new ArrayList<Object>();
+
         if (alertId != null) {
-            return jdbcTemplate.queryForList("""
-                select d.id, d.channel_id, c.name as channel_name, c.channel_type,
-                       d.alert_id, a.title as alert_title,
-                       d.title, d.severity, d.status, d.response_code, d.response_body,
-                       cast(d.payload_json as varchar) as payload_json,
-                       d.created_at
-                from notification_deliveries d
-                left join notification_channels c on c.id = d.channel_id
-                left join alerts a on a.id = d.alert_id
-                where d.alert_id = ?
-                order by d.created_at desc
-                limit ?
-                """, alertId, safeLimit);
+            filters.add("d.alert_id = ?");
+            args.add(alertId);
         }
-        return jdbcTemplate.queryForList("""
+        if (normalizedStatus != null) {
+            filters.add("d.status = ?");
+            args.add(normalizedStatus);
+        }
+        if (normalizedChannelType != null) {
+            filters.add("c.channel_type = ?");
+            args.add(normalizedChannelType);
+        }
+        if (channelId != null) {
+            filters.add("d.channel_id = ?");
+            args.add(channelId);
+        }
+
+        var sql = new StringBuilder("""
             select d.id, d.channel_id, c.name as channel_name, c.channel_type,
                    d.alert_id, a.title as alert_title,
                    d.title, d.severity, d.status, d.response_code, d.response_body,
@@ -68,9 +86,16 @@ public class NotificationService {
             from notification_deliveries d
             left join notification_channels c on c.id = d.channel_id
             left join alerts a on a.id = d.alert_id
+            """);
+        if (!filters.isEmpty()) {
+            sql.append("where ").append(String.join(" and ", filters)).append("\n");
+        }
+        sql.append("""
             order by d.created_at desc
             limit ?
-            """, safeLimit);
+            """);
+        args.add(safeLimit);
+        return jdbcTemplate.queryForList(sql.toString(), args.toArray());
     }
 
     public Map<String, Object> createChannel(NotificationChannelRequest request) {
@@ -173,6 +198,24 @@ public class NotificationService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
         }
         return type;
+    }
+
+    private String normalizeOptionalChannelType(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return normalizeType(value);
+    }
+
+    private String normalizeDeliveryStatus(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        var status = value.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("success", "failed").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_delivery_status");
+        }
+        return status;
     }
 
     private String normalizeEndpoint(String channelType, String value) {

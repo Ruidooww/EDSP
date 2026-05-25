@@ -110,6 +110,20 @@ function responseText(value?: string) {
   return value?.trim() || '-';
 }
 
+function nullableText(value?: string | number | null) {
+  return value === null || value === undefined || value === '' ? '-' : String(value);
+}
+
+function retryableTag(value?: boolean) {
+  if (value === true) {
+    return <Tag color="processing">可重试</Tag>;
+  }
+  if (value === false) {
+    return <Tag>不重试</Tag>;
+  }
+  return '-';
+}
+
 export default function NotificationsPage() {
   const [rows, setRows] = useState<NotificationChannelRow[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
@@ -120,6 +134,7 @@ export default function NotificationsPage() {
   const [deliveryChannelType, setDeliveryChannelType] = useState('');
   const [deliveryChannelId, setDeliveryChannelId] = useState<number | null>(null);
   const [activeDelivery, setActiveDelivery] = useState<NotificationDeliveryRow | null>(null);
+  const [retryLoadingId, setRetryLoadingId] = useState<number | null>(null);
   const [form] = Form.useForm<NotificationChannelFormValues>();
 
   function currentDeliveryFilters(): DeliveryFilters {
@@ -194,6 +209,20 @@ export default function NotificationsPage() {
     setOpen(false);
     form.resetFields();
     await load();
+  }
+
+  async function retryDelivery(row: NotificationDeliveryRow) {
+    setRetryLoadingId(row.id);
+    try {
+      await apiPost(`/api/notifications/deliveries/${row.id}/retry`, {});
+      message.success(`投递记录 #${row.id} 已提交重试`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      message.error(`投递记录 #${row.id} 重试失败：${errorMessage}`);
+    } finally {
+      await load();
+      setRetryLoadingId(null);
+    }
   }
 
   function openCreate() {
@@ -305,6 +334,42 @@ export default function NotificationsPage() {
       render: (value?: number) => value ?? '-',
     },
     {
+      title: '失败类型',
+      dataIndex: 'failure_type',
+      width: 130,
+      ellipsis: true,
+      render: (value?: string | null) => nullableText(value),
+    },
+    {
+      title: '失败原因',
+      dataIndex: 'failure_reason',
+      width: 220,
+      ellipsis: true,
+      render: (value?: string | null) => (
+        <Typography.Text ellipsis={{ tooltip: nullableText(value) }}>
+          {nullableText(value)}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: '是否可重试',
+      dataIndex: 'retryable',
+      width: 120,
+      render: retryableTag,
+    },
+    {
+      title: '重试次数',
+      dataIndex: 'retry_count',
+      width: 100,
+      render: (value?: number) => nullableText(value),
+    },
+    {
+      title: 'Retry Of',
+      dataIndex: 'retry_of_delivery_id',
+      width: 110,
+      render: (value?: number | null) => nullableText(value),
+    },
+    {
       title: '响应',
       dataIndex: 'response_body',
       ellipsis: true,
@@ -323,11 +388,18 @@ export default function NotificationsPage() {
     {
       title: '操作',
       align: 'right',
-      width: 100,
+      width: 180,
       render: (_, row) => (
-        <Button size="small" icon={<EyeOutlined />} onClick={() => setActiveDelivery(row)}>
-          详情
-        </Button>
+        <Space>
+          {row.status === 'failed' && row.retryable === true ? (
+            <Button size="small" icon={<ReloadOutlined />} loading={retryLoadingId === row.id} onClick={() => retryDelivery(row)}>
+              重试一次
+            </Button>
+          ) : null}
+          <Button size="small" icon={<EyeOutlined />} onClick={() => setActiveDelivery(row)}>
+            详情
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -406,7 +478,7 @@ export default function NotificationsPage() {
         loading={loading}
         dataSource={deliveries}
         columns={deliveryColumns}
-        scroll={{ x: 1080 }}
+        scroll={{ x: 1760 }}
         locale={{ emptyText: '告警手动触发通知后会在这里显示' }}
       />
 
@@ -454,6 +526,11 @@ export default function NotificationsPage() {
                 {activeDelivery.alert_title || '-'} {activeDelivery.alert_id ? `/#${activeDelivery.alert_id}` : ''}
               </Descriptions.Item>
               <Descriptions.Item label="HTTP 状态">{activeDelivery.response_code ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="失败类型">{nullableText(activeDelivery.failure_type)}</Descriptions.Item>
+              <Descriptions.Item label="失败原因">{nullableText(activeDelivery.failure_reason)}</Descriptions.Item>
+              <Descriptions.Item label="是否可重试">{retryableTag(activeDelivery.retryable)}</Descriptions.Item>
+              <Descriptions.Item label="重试次数">{nullableText(activeDelivery.retry_count)}</Descriptions.Item>
+              <Descriptions.Item label="Retry Of">{nullableText(activeDelivery.retry_of_delivery_id)}</Descriptions.Item>
               <Descriptions.Item label="发送时间">{formatTime(activeDelivery.created_at)}</Descriptions.Item>
             </Descriptions>
             <div>

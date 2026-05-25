@@ -82,6 +82,8 @@ public class NotificationService {
                    d.alert_id, a.title as alert_title,
                    d.title, d.severity, d.status, d.response_code, d.response_body,
                    cast(d.payload_json as varchar) as payload_json,
+                   d.failure_type, d.failure_reason, d.retryable,
+                   d.retry_of_delivery_id, d.retry_count,
                    d.created_at
             from notification_deliveries d
             left join notification_channels c on c.id = d.channel_id

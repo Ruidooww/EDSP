@@ -11,10 +11,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AlertNotificationService {
+    private static final int MAX_SAVED_TEXT_LENGTH = 1000;
+
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final NotificationChannelAdapterRegistry adapterRegistry;
@@ -30,6 +33,40 @@ public class AlertNotificationService {
     }
 
     public Map<String, Object> send(long alertId, long channelId) {
+        return sendInternal(alertId, channelId, null);
+    }
+
+    @Transactional
+    public Map<String, Object> retryDelivery(long deliveryId) {
+        var delivery = fetchDelivery(deliveryId);
+        if (delivery == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "delivery_not_found");
+        }
+        if (!"failed".equals(delivery.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "delivery_not_failed");
+        }
+        if (!Boolean.TRUE.equals(delivery.get("retryable"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "delivery_not_retryable");
+        }
+        var alertId = numberOrNull(delivery.get("alert_id"));
+        if (alertId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "delivery_missing_alert");
+        }
+        var channelId = numberOrNull(delivery.get("channel_id"));
+        if (channelId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "delivery_missing_channel");
+        }
+
+        var result = sendInternal(alertId, channelId, deliveryId);
+        jdbcTemplate.update(
+            "update notification_deliveries set retry_count = retry_count + 1 where id = ?",
+            deliveryId
+        );
+        result.put("retryOfDeliveryId", deliveryId);
+        return result;
+    }
+
+    private Map<String, Object> sendInternal(long alertId, long channelId, Long retryOfDeliveryId) {
         var alert = fetchAlert(alertId);
         if (alert == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "alert_not_found");
@@ -53,8 +90,9 @@ public class AlertNotificationService {
 
         var payload = payload(alert, channelId);
         var payloadJson = toJson(payload);
-        var deliveryResult = adapter.send(alert, channel, payloadJson);
-        var deliveryId = saveDelivery(channelId, alert, payloadJson, deliveryResult);
+        var deliveryResult = sendWithAdapter(adapter, alert, channel, payloadJson);
+        var deliveryId = saveDelivery(channelId, alert, payloadJson, deliveryResult, retryOfDeliveryId);
+        var reliability = reliability(deliveryResult);
 
         var result = new LinkedHashMap<String, Object>();
         result.put("deliveryId", deliveryId);
@@ -64,6 +102,9 @@ public class AlertNotificationService {
         result.put("responseCode", deliveryResult.responseCode());
         result.put("responseBody", deliveryResult.responseBody());
         result.put("message", deliveryResult.message());
+        result.put("failureType", reliability.failureType());
+        result.put("failureReason", reliability.failureReason());
+        result.put("retryable", reliability.retryable());
         return result;
     }
 
@@ -77,6 +118,16 @@ public class AlertNotificationService {
             where id = ?
             limit 1
             """, alertId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private Map<String, Object> fetchDelivery(long deliveryId) {
+        var rows = jdbcTemplate.queryForList("""
+            select id, channel_id, alert_id, status, retryable, retry_count
+            from notification_deliveries
+            where id = ?
+            limit 1
+            """, deliveryId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -119,15 +170,18 @@ public class AlertNotificationService {
         long channelId,
         Map<String, Object> alert,
         String payloadJson,
-        WebhookDeliveryResult result
+        WebhookDeliveryResult result,
+        Long retryOfDeliveryId
     ) {
+        var reliability = reliability(result);
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             var statement = connection.prepareStatement("""
                 insert into notification_deliveries(
-                    channel_id, alert_id, title, severity, status, response_code, response_body, payload_json
+                    channel_id, alert_id, title, severity, status, response_code, response_body,
+                    payload_json, failure_type, failure_reason, retryable, retry_of_delivery_id, retry_count
                 )
-                values (?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))
+                values (?, ?, ?, ?, ?, ?, ?, cast(? as jsonb), ?, ?, ?, ?, 0)
                 """, new String[] {"id"});
             statement.setLong(1, channelId);
             statement.setLong(2, ((Number) alert.get("id")).longValue());
@@ -141,10 +195,103 @@ public class AlertNotificationService {
             }
             statement.setString(7, result.responseBody());
             statement.setString(8, payloadJson);
+            statement.setString(9, reliability.failureType());
+            statement.setString(10, reliability.failureReason());
+            statement.setBoolean(11, reliability.retryable());
+            if (retryOfDeliveryId == null) {
+                statement.setObject(12, null);
+            } else {
+                statement.setLong(12, retryOfDeliveryId);
+            }
             return statement;
         }, keyHolder);
         var key = keyHolder.getKey();
         return key == null ? 0L : key.longValue();
+    }
+
+    private WebhookDeliveryResult sendWithAdapter(
+        NotificationChannelAdapter adapter,
+        Map<String, Object> alert,
+        Map<String, Object> channel,
+        String payloadJson
+    ) {
+        try {
+            return adapter.send(alert, channel, payloadJson);
+        } catch (ResponseStatusException ex) {
+            var reason = ex.getReason() == null ? "unknown_error" : ex.getReason();
+            if (reason.startsWith("invalid_") && reason.endsWith("_webhook_url")) {
+                return new WebhookDeliveryResult("failed", null, "", reason);
+            }
+            throw ex;
+        }
+    }
+
+    private Reliability reliability(WebhookDeliveryResult result) {
+        if ("success".equals(result.status())) {
+            return new Reliability(null, null, false);
+        }
+        var failureType = failureType(result);
+        return new Reliability(failureType, savedReason(result, failureType), retryable(failureType));
+    }
+
+    private String failureType(WebhookDeliveryResult result) {
+        var message = result.message() == null ? "" : result.message();
+        var responseBody = result.responseBody() == null ? "" : result.responseBody();
+        var evidence = message + " " + responseBody;
+        if (message.startsWith("invalid_") && message.endsWith("_webhook_url")) {
+            return "invalid_endpoint";
+        }
+        if ("unsupported_channel".equals(message)) {
+            return "unsupported_channel";
+        }
+        if (evidence.contains("timeout")) {
+            return "timeout";
+        }
+        if (evidence.contains("connection_failed") || evidence.contains("ConnectException")) {
+            return "connection_error";
+        }
+        if (result.responseCode() != null) {
+            var code = result.responseCode();
+            if (code == 408) {
+                return "http_408";
+            }
+            if (code == 429) {
+                return "http_429";
+            }
+            if (code >= 500 && code <= 599) {
+                return "http_5xx";
+            }
+            if (code >= 400 && code <= 499) {
+                return "http_4xx";
+            }
+        }
+        if (message.contains("malformed_response")) {
+            return "malformed_response";
+        }
+        if (message.startsWith("wecom_errcode_")
+            || message.startsWith("feishu_code_")
+            || message.startsWith("feishu_status_code_")) {
+            return "provider_business_error";
+        }
+        return "unknown_error";
+    }
+
+    private String savedReason(WebhookDeliveryResult result, String failureType) {
+        var reason = result.message();
+        if (reason == null || reason.isBlank()) {
+            reason = result.responseBody();
+        }
+        if (reason == null || reason.isBlank()) {
+            reason = failureType;
+        }
+        return truncate(reason);
+    }
+
+    private boolean retryable(String failureType) {
+        return switch (failureType) {
+            case "timeout", "connection_error", "http_408", "http_429", "http_5xx" -> true;
+            default -> false;
+        };
     }
 
     private Map<String, Object> parseJson(Object value) {
@@ -181,5 +328,16 @@ public class AlertNotificationService {
 
     private boolean isBlank(Object value) {
         return value == null || String.valueOf(value).trim().isBlank();
+    }
+
+    private Long numberOrNull(Object value) {
+        return value instanceof Number number ? number.longValue() : null;
+    }
+
+    private String truncate(String value) {
+        return value.length() > MAX_SAVED_TEXT_LENGTH ? value.substring(0, MAX_SAVED_TEXT_LENGTH) : value;
+    }
+
+    private record Reliability(String failureType, String failureReason, boolean retryable) {
     }
 }

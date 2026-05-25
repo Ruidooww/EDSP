@@ -76,6 +76,11 @@ class NotificationServiceTest {
                 response_code integer,
                 response_body text,
                 payload_json jsonb not null default '{}',
+                failure_type varchar(80),
+                failure_reason text,
+                retryable boolean not null default false,
+                retry_of_delivery_id bigint,
+                retry_count integer not null default 0,
                 created_at timestamptz not null default now()
             )
             """);
@@ -96,6 +101,58 @@ class NotificationServiceTest {
         assertEquals(2, all.size());
         assertEquals(1, filtered.size());
         assertEquals(firstAlertId, ((Number) filtered.get(0).get("alert_id")).longValue());
+    }
+
+    @Test
+    void listDeliveriesReturnsReliabilityFieldsWithSafeDefaultsForOldRows() {
+        var alertId = insertAlert("reliability fields alert");
+        var channelId = insertChannel("webhook");
+        insertDelivery(channelId, alertId, "old delivery", "success");
+        var retrySourceId = insertDelivery(
+            channelId,
+            alertId,
+            "retry source",
+            "failed",
+            "http_5xx",
+            "server failed",
+            true,
+            null,
+            2
+        );
+        insertDelivery(
+            channelId,
+            alertId,
+            "retry child",
+            "failed",
+            "timeout",
+            "webhook_timeout",
+            true,
+            retrySourceId,
+            0
+        );
+
+        var deliveries = service.listDeliveries(50, alertId);
+
+        assertEquals(3, deliveries.size());
+        var retryChild = deliveries.stream()
+            .filter(row -> "retry child".equals(row.get("title")))
+            .findFirst()
+            .orElseThrow();
+        var oldDelivery = deliveries.stream()
+            .filter(row -> "old delivery".equals(row.get("title")))
+            .findFirst()
+            .orElseThrow();
+
+        assertEquals("timeout", retryChild.get("failure_type"));
+        assertEquals("webhook_timeout", retryChild.get("failure_reason"));
+        assertEquals(true, retryChild.get("retryable"));
+        assertEquals(retrySourceId, ((Number) retryChild.get("retry_of_delivery_id")).longValue());
+        assertEquals(0, ((Number) retryChild.get("retry_count")).intValue());
+        assertEquals(null, oldDelivery.get("failure_type"));
+        assertEquals(null, oldDelivery.get("failure_reason"));
+        assertEquals(false, oldDelivery.get("retryable"));
+        assertEquals(null, oldDelivery.get("retry_of_delivery_id"));
+        assertEquals(0, ((Number) oldDelivery.get("retry_count")).intValue());
     }
 
     @Test
@@ -402,6 +459,27 @@ class NotificationServiceTest {
             )
             values (?, ?, ?, 'high', ?, 200, 'ok', cast('{}' as jsonb))
             """, channelId, alertId, title, status);
+    }
+
+    private Long insertDelivery(
+        Long channelId,
+        Long alertId,
+        String title,
+        String status,
+        String failureType,
+        String failureReason,
+        boolean retryable,
+        Long retryOfDeliveryId,
+        int retryCount
+    ) {
+        return insertAndReturnId("""
+            insert into notification_deliveries(
+                channel_id, alert_id, title, severity, status, response_code, response_body,
+                payload_json, failure_type, failure_reason, retryable, retry_of_delivery_id, retry_count
+            )
+            values (?, ?, ?, 'high', ?, 500, 'failed', cast('{}' as jsonb), ?, ?, ?, ?, ?)
+            """,
+            channelId, alertId, title, status, failureType, failureReason, retryable, retryOfDeliveryId, retryCount);
     }
 
     private Long insertAndReturnId(String sql, Object... args) {

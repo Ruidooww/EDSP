@@ -253,6 +253,11 @@ export interface NotificationDeliveryRow {
   response_code?: number;
   response_body?: string;
   payload_json?: Record<string, unknown> | string;
+  failure_type?: string | null;
+  failure_reason?: string | null;
+  retryable?: boolean;
+  retry_of_delivery_id?: number | null;
+  retry_count?: number;
   created_at: string;
 }
 

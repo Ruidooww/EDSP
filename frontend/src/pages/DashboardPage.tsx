@@ -3,17 +3,27 @@ import {
   CheckCircleFilled,
   ClockCircleOutlined,
   DatabaseOutlined,
-  FileDoneOutlined,
-  LineChartOutlined,
+  LinkOutlined,
+  NotificationOutlined,
   ReloadOutlined,
-  SearchOutlined,
   WarningFilled,
 } from '@ant-design/icons';
-import { Badge, Button, Card, Input, Progress, Select, Space, Table, Tag, Typography } from 'antd';
+import { Button, Card, Progress, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiGet } from '../api';
-import type { OverviewAlertRow, OverviewData, OverviewDataSourceRow, OverviewTrendPoint } from '../types';
+import type {
+  OverviewAlertRow,
+  OverviewData,
+  OverviewLifecycleEventRow,
+  OverviewNotificationDeliveryRow,
+} from '../types';
+
+type DashboardNavigationKey = 'alerts' | 'notifications' | 'sources';
+
+interface DashboardPageProps {
+  onNavigate?: (page: DashboardNavigationKey) => void;
+}
 
 const emptyOverview: OverviewData = {
   requestTime: '',
@@ -58,7 +68,75 @@ const emptyOverview: OverviewData = {
     byStatus: {},
   },
   recentDataSources: [],
+  securityOperations: {
+    totalAlerts: 0,
+    openAlerts: 0,
+    acknowledgedAlerts: 0,
+    closedAlerts: 0,
+    highRiskAlerts: 0,
+    todayAlerts: 0,
+  },
+  notificationDelivery: {
+    todayTotal: 0,
+    todaySuccess: 0,
+    todayFailed: 0,
+    todaySuccessRate: 0,
+    retryableFailed: 0,
+    byFailureType: {},
+    recentFailed: [],
+  },
+  notificationChannels: {
+    total: 0,
+    enabled: 0,
+    disabled: 0,
+    byType: {},
+  },
+  recentLifecycleEvents: [],
 };
+
+function normalizeOverview(payload?: Partial<OverviewData> | null): OverviewData {
+  const data = payload ?? {};
+  return {
+    ...emptyOverview,
+    ...data,
+    dataSources: { ...emptyOverview.dataSources, ...data.dataSources },
+    schema: { ...emptyOverview.schema, ...data.schema },
+    rules: { ...emptyOverview.rules, ...data.rules },
+    alerts: {
+      ...emptyOverview.alerts,
+      ...data.alerts,
+      bySeverity: { ...emptyOverview.alerts.bySeverity, ...data.alerts?.bySeverity },
+      byStatus: { ...emptyOverview.alerts.byStatus, ...data.alerts?.byStatus },
+      trend: data.alerts?.trend ?? emptyOverview.alerts.trend,
+      recent: data.alerts?.recent ?? emptyOverview.alerts.recent,
+    },
+    reports: {
+      ...emptyOverview.reports,
+      ...data.reports,
+      byStatus: { ...emptyOverview.reports.byStatus, ...data.reports?.byStatus },
+    },
+    recentDataSources: data.recentDataSources ?? emptyOverview.recentDataSources,
+    securityOperations: {
+      ...emptyOverview.securityOperations,
+      ...data.securityOperations,
+    },
+    notificationDelivery: {
+      ...emptyOverview.notificationDelivery,
+      ...data.notificationDelivery,
+      byFailureType: {
+        ...emptyOverview.notificationDelivery.byFailureType,
+        ...data.notificationDelivery?.byFailureType,
+      },
+      recentFailed: data.notificationDelivery?.recentFailed ?? emptyOverview.notificationDelivery.recentFailed,
+    },
+    notificationChannels: {
+      ...emptyOverview.notificationChannels,
+      ...data.notificationChannels,
+      byType: { ...emptyOverview.notificationChannels.byType, ...data.notificationChannels?.byType },
+    },
+    recentLifecycleEvents: data.recentLifecycleEvents ?? emptyOverview.recentLifecycleEvents,
+  };
+}
 
 function countFrom(source: Record<string, number> | undefined, keys: string[]) {
   const normalized = new Map<string, number>();
@@ -66,21 +144,20 @@ function countFrom(source: Record<string, number> | undefined, keys: string[]) {
   return keys.reduce((sum, key) => sum + (normalized.get(key.toLowerCase()) ?? 0), 0);
 }
 
-function conicGradient(parts: Array<{ value: number; color: string }>) {
-  const total = parts.reduce((sum, part) => sum + Math.max(0, part.value), 0);
-  if (total <= 0) {
-    return 'conic-gradient(#e7edf6 0 100%)';
+function numberFrom(source: Record<string, unknown>, keys: string[], fallback = 0) {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
   }
-
-  let cursor = 0;
-  const segments = parts
-    .filter((part) => part.value > 0)
-    .map((part) => {
-      const start = cursor;
-      cursor += (part.value / total) * 100;
-      return `${part.color} ${start}% ${cursor}%`;
-    });
-  return `conic-gradient(${segments.join(', ')})`;
+  return fallback;
 }
 
 function toDate(value?: string | number) {
@@ -125,32 +202,7 @@ function formatTime(value?: string | number) {
   });
 }
 
-function sourceStatusGroup(status: string) {
-  const normalized = status?.toLowerCase();
-  if (['active', 'healthy', 'connected', 'ok', 'ready', 'configured'].includes(normalized)) {
-    return 'healthy';
-  }
-  if (['error', 'failed', 'offline', 'abnormal'].includes(normalized)) {
-    return 'abnormal';
-  }
-  return 'unchecked';
-}
-
-function sourceStatusMeta(status: string) {
-  if (status?.toLowerCase() === 'configured') {
-    return { label: '已配置', badge: 'processing' as const, color: 'processing' };
-  }
-  const group = sourceStatusGroup(status);
-  if (group === 'healthy') {
-    return { label: '健康', badge: 'success' as const, color: 'success' };
-  }
-  if (group === 'abnormal') {
-    return { label: '异常', badge: 'error' as const, color: 'error' };
-  }
-  return { label: '未检测', badge: 'default' as const, color: 'default' };
-}
-
-function severityLabel(severity: string) {
+function severityLabel(severity?: string) {
   switch (severity?.toLowerCase()) {
     case 'critical':
     case 'high':
@@ -167,7 +219,7 @@ function severityLabel(severity: string) {
   }
 }
 
-function severityColor(severity: string) {
+function severityColor(severity?: string) {
   switch (severityLabel(severity)) {
     case '高危':
       return 'red';
@@ -182,79 +234,87 @@ function severityColor(severity: string) {
   }
 }
 
-function statusLabel(status: string) {
+function alertStatusLabel(status?: string) {
   switch (status?.toLowerCase()) {
     case 'open':
     case 'pending':
       return '未处理';
-    case 'processing':
-    case 'running':
-      return '处理中';
+    case 'acknowledged':
+      return '已确认';
     case 'closed':
     case 'resolved':
     case 'done':
-      return '已确认';
+      return '已关闭';
+    case 'processing':
+    case 'running':
+      return '处理中';
     default:
       return status || '-';
   }
 }
 
-function MiniLineChart({ points }: { points: OverviewTrendPoint[] }) {
-  const values = points.length ? points.map((point) => point.value) : [0, 0, 0, 0, 0, 0, 0];
-  const width = 260;
-  const height = 120;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const line = values
-    .map((value, index) => {
-      const x = 12 + (index / Math.max(1, values.length - 1)) * (width - 24);
-      const y = height - 18 - ((value - min) / range) * (height - 38);
-      return `${x},${y}`;
-    })
-    .join(' ');
-
-  return (
-    <svg className="ops-line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="近 7 天告警趋势">
-      <line x1="12" y1="24" x2="248" y2="24" />
-      <line x1="12" y1="62" x2="248" y2="62" />
-      <line x1="12" y1="100" x2="248" y2="100" />
-      <polyline points={line} />
-      {line.split(' ').map((point) => {
-        const [x, y] = point.split(',');
-        return <circle key={point} cx={x} cy={y} r="3" />;
-      })}
-    </svg>
-  );
+function alertStatusColor(status?: string) {
+  switch (status?.toLowerCase()) {
+    case 'open':
+    case 'pending':
+      return 'error';
+    case 'acknowledged':
+      return 'success';
+    case 'closed':
+    case 'resolved':
+    case 'done':
+      return 'default';
+    case 'processing':
+    case 'running':
+      return 'processing';
+    default:
+      return 'default';
+  }
 }
 
-const sourceColumns: ColumnsType<OverviewDataSourceRow> = [
-  {
-    title: '数据源名称',
-    dataIndex: 'name',
-    render: (name: string, row) => (
-      <Space>
-        <span className="table-source-icon">
-          <DatabaseOutlined />
-        </span>
-        <div>
-          <strong>{name}</strong>
-          <span className="table-subtext">{row.source_type}</span>
-        </div>
-      </Space>
-    ),
-  },
-  { title: '类型', dataIndex: 'connection_kind' },
-  {
-    title: '健康状态',
-    dataIndex: 'status',
-    render: (status: string) => {
-      const meta = sourceStatusMeta(status);
-      return <Badge status={meta.badge} text={meta.label} />;
-    },
-  },
-  { title: '最后检测时间', dataIndex: 'updated_at', align: 'right', render: formatTime },
-];
+function channelTypeLabel(value?: string) {
+  return {
+    webhook: 'Webhook',
+    wecom: '企业微信',
+    feishu: '飞书',
+  }[value || ''] ?? (value || '-');
+}
+
+function lifecycleActionLabel(value?: string) {
+  switch (value?.toLowerCase()) {
+    case 'acknowledged':
+    case 'acknowledge':
+      return '确认';
+    case 'assigned':
+    case 'assign':
+      return '指派';
+    case 'closed':
+    case 'close':
+      return '关闭';
+    default:
+      return value || '-';
+  }
+}
+
+function lifecycleAlertTitle(row: OverviewLifecycleEventRow) {
+  return row.alertTitle ?? row.alert_title ?? `告警 #${row.alertId ?? row.alert_id ?? '-'}`;
+}
+
+function lifecycleOperator(row: OverviewLifecycleEventRow) {
+  return row.operatorName ?? row.operator_name ?? '-';
+}
+
+function lifecycleCreatedAt(row: OverviewLifecycleEventRow) {
+  return row.createdAt ?? row.created_at;
+}
+
+function deliveryCreatedAt(row: OverviewNotificationDeliveryRow) {
+  return row.created_at;
+}
+
+function deliveryFailureTypeLabel(value?: string | null) {
+  return value || '-';
+}
 
 const alertColumns: ColumnsType<OverviewAlertRow> = [
   {
@@ -268,24 +328,139 @@ const alertColumns: ColumnsType<OverviewAlertRow> = [
     ),
   },
   {
-    title: '告警等级',
+    title: '等级',
     dataIndex: 'severity',
+    width: 90,
     render: (level: string) => <Tag color={severityColor(level)}>{severityLabel(level)}</Tag>,
   },
-  { title: '发生时间', dataIndex: 'created_at', align: 'right', render: formatTime },
-  { title: '状态', dataIndex: 'status', render: (status: string) => <Tag>{statusLabel(status)}</Tag> },
+  {
+    title: '状态',
+    dataIndex: 'status',
+    width: 100,
+    render: (status: string) => <Tag color={alertStatusColor(status)}>{alertStatusLabel(status)}</Tag>,
+  },
+  { title: '发生时间', dataIndex: 'created_at', width: 140, align: 'right', render: formatTime },
 ];
 
-export function DashboardPage() {
+const lifecycleColumns: ColumnsType<OverviewLifecycleEventRow> = [
+  {
+    title: '告警',
+    render: (_, row) => (
+      <div>
+        <strong>{lifecycleAlertTitle(row)}</strong>
+        <span className="table-subtext">#{row.alertId ?? row.alert_id ?? '-'}</span>
+      </div>
+    ),
+  },
+  {
+    title: '动作',
+    width: 90,
+    render: (_, row) => <Tag>{lifecycleActionLabel(row.eventType ?? row.event_type)}</Tag>,
+  },
+  {
+    title: '操作者',
+    width: 110,
+    render: (_, row) => lifecycleOperator(row),
+  },
+  {
+    title: '时间',
+    width: 140,
+    align: 'right',
+    render: (_, row) => formatTime(lifecycleCreatedAt(row)),
+  },
+];
+
+const failedDeliveryColumns: ColumnsType<OverviewNotificationDeliveryRow> = [
+  {
+    title: '失败通知',
+    dataIndex: 'title',
+    render: (title: string, row) => (
+      <div>
+        <strong>{title}</strong>
+        <span className="table-subtext">{row.alert_title || row.channel_name || `Delivery #${row.id}`}</span>
+      </div>
+    ),
+  },
+  {
+    title: '通道',
+    width: 110,
+    render: (_, row) => channelTypeLabel(row.channel_type),
+  },
+  {
+    title: '失败类型',
+    dataIndex: 'failure_type',
+    width: 130,
+    render: (value: string | null) => <Tag color={value ? 'error' : 'default'}>{deliveryFailureTypeLabel(value)}</Tag>,
+  },
+  {
+    title: '原因',
+    dataIndex: 'failure_reason',
+    ellipsis: true,
+    render: (value: string | null) => value || '-',
+  },
+  {
+    title: '可重试',
+    dataIndex: 'retryable',
+    width: 90,
+    render: (value: boolean) => <Tag color={value ? 'warning' : 'default'}>{value ? '可重试' : '不重试'}</Tag>,
+  },
+  {
+    title: '次数',
+    dataIndex: 'retry_count',
+    width: 76,
+    align: 'right',
+  },
+  {
+    title: '时间',
+    width: 130,
+    align: 'right',
+    render: (_, row) => formatTime(deliveryCreatedAt(row)),
+  },
+];
+
+function FailureTypeSummary({ data }: { data: Record<string, number> }) {
+  const rows = Object.entries(data).slice(0, 5);
+  if (rows.length === 0) {
+    return <Typography.Text type="secondary">暂无失败类型</Typography.Text>;
+  }
+  return (
+    <div className="stat-list">
+      {rows.map(([type, count]) => (
+        <span key={type}>
+          <i className="dot orange" />
+          {type}
+          <b>{count}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ChannelTypeSummary({ data }: { data: Record<string, number> }) {
+  const rows = Object.entries(data);
+  if (rows.length === 0) {
+    return <Typography.Text type="secondary">暂无通道</Typography.Text>;
+  }
+  return (
+    <Space size={[8, 8]} wrap>
+      {rows.map(([type, count]) => (
+        <Tag key={type} color="processing">
+          {channelTypeLabel(type)} {count}
+        </Tag>
+      ))}
+    </Space>
+  );
+}
+
+export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const [overview, setOverview] = useState<OverviewData>(emptyOverview);
   const [loading, setLoading] = useState(false);
-  const [sourceSearch, setSourceSearch] = useState('');
-  const [sourceStatus, setSourceStatus] = useState('all');
 
   const loadOverview = async () => {
     setLoading(true);
     try {
-      setOverview(await apiGet<OverviewData>('/api/core/overview'));
+      const data = await apiGet<Partial<OverviewData>>('/api/core/overview');
+      setOverview(normalizeOverview(data));
     } finally {
       setLoading(false);
     }
@@ -298,133 +473,131 @@ export function DashboardPage() {
   const highRisks = countFrom(overview.alerts.bySeverity, ['critical', 'high', '高危']);
   const mediumRisks = countFrom(overview.alerts.bySeverity, ['medium', '中危']);
   const lowRisks = countFrom(overview.alerts.bySeverity, ['low', '低危']);
-  const infoRisks = countFrom(overview.alerts.bySeverity, ['info', 'tip', '提示']);
-  const riskTotal = highRisks + mediumRisks + lowRisks + infoRisks || overview.alerts.open;
-  const handledAlerts = countFrom(overview.alerts.byStatus, ['closed', 'resolved', 'done', '已确认', '已恢复']);
-  const processingAlerts = countFrom(overview.alerts.byStatus, ['processing', 'running', '处理中']);
-  const openAlerts = countFrom(overview.alerts.byStatus, ['open', 'pending', '未处理']) || overview.alerts.open;
-  const statusTotal = openAlerts + processingAlerts + handledAlerts;
-  const handledRate = statusTotal > 0 ? Math.round((handledAlerts / statusTotal) * 100) : 0;
+  const securityOps = overview.securityOperations as unknown as Record<string, unknown>;
+  const deliveryStats = overview.notificationDelivery as unknown as Record<string, unknown>;
+  const channelStats = overview.notificationChannels as unknown as Record<string, unknown>;
+  const acknowledgedAlerts =
+    numberFrom(securityOps, ['acknowledgedAlerts', 'acknowledged', 'acknowledged_alerts']) ||
+    countFrom(overview.alerts.byStatus, ['acknowledged', '已确认']);
+  const closedAlerts =
+    numberFrom(securityOps, ['closedAlerts', 'closed', 'closed_alerts']) ||
+    countFrom(overview.alerts.byStatus, ['closed', 'resolved', 'done', '已关闭', '已恢复']);
+  const openAlerts =
+    numberFrom(securityOps, ['openAlerts', 'open', 'open_alerts']) ||
+    countFrom(overview.alerts.byStatus, ['open', 'pending', '未处理']) ||
+    overview.alerts.open;
+  const handledAlerts = acknowledgedAlerts + closedAlerts;
+  const statusTotal =
+    numberFrom(securityOps, ['totalAlerts', 'total', 'total_alerts']) ||
+    openAlerts + handledAlerts ||
+    overview.alerts.open + overview.alerts.today;
+  const handlingRate = statusTotal > 0 ? Math.round((handledAlerts / statusTotal) * 100) : 0;
+  const highRiskAlerts = numberFrom(securityOps, ['highRiskAlerts', 'high_risk_alerts']) || highRisks;
+  const todayAlerts = numberFrom(securityOps, ['todayAlerts', 'today_alerts']) || overview.alerts.today;
 
-  const filteredSources = useMemo(() => {
-    const keyword = sourceSearch.trim().toLowerCase();
-    return overview.recentDataSources.filter((source) => {
-      const matchedKeyword =
-        !keyword ||
-        source.name.toLowerCase().includes(keyword) ||
-        source.source_type.toLowerCase().includes(keyword) ||
-        source.connection_kind.toLowerCase().includes(keyword);
-      const matchedStatus = sourceStatus === 'all' || sourceStatusGroup(source.status) === sourceStatus;
-      return matchedKeyword && matchedStatus;
-    });
-  }, [overview.recentDataSources, sourceSearch, sourceStatus]);
+  const deliveryTotal = numberFrom(deliveryStats, ['todayTotal', 'today_total']);
+  const deliverySuccess = numberFrom(deliveryStats, ['todaySuccess', 'today_success']);
+  const deliveryFailed = numberFrom(deliveryStats, ['todayFailed', 'today_failed']);
+  const deliverySuccessRate = numberFrom(deliveryStats, ['todaySuccessRate', 'today_success_rate']);
+  const retryableFailed = numberFrom(deliveryStats, ['retryableFailed', 'retryableFailedCount', 'retryable_failed']);
+  const deliveryFailures = overview.notificationDelivery.recentFailed;
+  const failureTypes = overview.notificationDelivery.byFailureType;
+
+  const channels = overview.notificationChannels;
+  const channelEnabled = numberFrom(channelStats, ['enabled', 'enabledCount', 'enabled_count']);
+  const channelDisabled = numberFrom(channelStats, ['disabled', 'disabledCount', 'disabled_count']);
+  const channelTotal =
+    numberFrom(channelStats, ['total', 'totalCount', 'total_count']) ||
+    channelEnabled + channelDisabled;
+  const channelEnabledRate = channelTotal > 0 ? Math.round((channelEnabled / channelTotal) * 100) : 0;
 
   return (
     <div className="ops-dashboard">
       <div className="ops-heading">
         <div>
-          <Typography.Title level={3}>总览</Typography.Title>
-          <Typography.Text type="secondary">平台运行总览与关键指标</Typography.Text>
+          <Typography.Title level={3}>安全运营看板</Typography.Title>
+          <Typography.Text type="secondary">告警、处置和通知投递的只读运行概览</Typography.Text>
           <div className="ops-updated">更新时间：{formatDateTime(overview.requestTime)}</div>
         </div>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={loadOverview} loading={loading}>
-            刷新
-          </Button>
-          <Button>自定义</Button>
-        </Space>
+        <Button icon={<ReloadOutlined />} onClick={loadOverview} loading={loading}>
+          刷新
+        </Button>
       </div>
 
       <section className="ops-metric-grid">
         <Card className="ops-card metric-card">
           <div className="card-title">
-            <span>风险态势</span>
-            <WarningFilled />
-          </div>
-          <div className="donut-row">
-            <div
-              className="ops-donut"
-              style={{
-                background: conicGradient([
-                  { value: highRisks, color: '#ef4444' },
-                  { value: mediumRisks, color: '#fb7c11' },
-                  { value: lowRisks, color: '#f6bd16' },
-                  { value: infoRisks, color: '#10a89e' },
-                ]),
-              }}
-            >
-              <div>
-                <span>风险总数</span>
-                <strong>{riskTotal}</strong>
-              </div>
-            </div>
-            <div className="legend-list">
-              <span><i className="dot red" />高危 <b>{highRisks}</b></span>
-              <span><i className="dot orange" />中危 <b>{mediumRisks}</b></span>
-              <span><i className="dot yellow" />低危 <b>{lowRisks}</b></span>
-              <span><i className="dot teal" />提示 <b>{infoRisks}</b></span>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="ops-card metric-card">
-          <div className="card-title">
-            <span>数据源健康</span>
-            <DatabaseOutlined />
-          </div>
-          <div className="donut-row compact">
-            <div
-              className="ops-donut small"
-              style={{
-                background: conicGradient([
-                  { value: overview.dataSources.healthy, color: '#17b77a' },
-                  { value: overview.dataSources.abnormal, color: '#ef4444' },
-                  { value: overview.dataSources.unchecked, color: '#d8e0ea' },
-                ]),
-              }}
-            >
-              <div>
-                <strong>{overview.dataSources.healthRate}%</strong>
-                <span>健康度</span>
-              </div>
-            </div>
-            <div className="stat-list">
-              <span>总数 <b>{overview.dataSources.total}</b></span>
-              <span>健康 <b>{overview.dataSources.healthy}</b></span>
-              <span>异常 <b className="danger">{overview.dataSources.abnormal}</b></span>
-              <span>未检测 <b>{overview.dataSources.unchecked}</b></span>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="ops-card metric-card">
-          <div className="card-title">
-            <span>开放告警</span>
+            <span>告警总览</span>
             <BellOutlined />
           </div>
           <div className="number-split">
             <div>
-              <strong>{overview.alerts.open}</strong>
-              <span>较昨日 {overview.alerts.delta >= 0 ? '+' : ''}{overview.alerts.delta}</span>
+              <strong>{openAlerts}</strong>
+              <span>开放告警</span>
             </div>
             <div className="mini-legend">
-              <span><i className="dot red" />高危 {highRisks}</span>
+              <span><i className="dot red" />高危 {highRiskAlerts}</span>
               <span><i className="dot orange" />中危 {mediumRisks}</span>
               <span><i className="dot yellow" />低危 {lowRisks}</span>
-              <span><i className="dot teal" />提示 {infoRisks}</span>
+              <span>今日新增 {todayAlerts}</span>
             </div>
           </div>
         </Card>
 
         <Card className="ops-card metric-card">
           <div className="card-title">
-            <span>规则启用率</span>
-            <LineChartOutlined />
+            <span>处置概览</span>
+            <CheckCircleFilled />
           </div>
-          <div className="rule-card">
-            <strong>{overview.rules.enabledRate}%</strong>
-            <span>启用规则 {overview.rules.enabled} / {overview.rules.total}</span>
-            <MiniLineChart points={overview.alerts.trend} />
+          <div className="operation-panel">
+            <div>
+              <strong>{handlingRate}%</strong>
+              <span>已处理 {handledAlerts} / {statusTotal}</span>
+            </div>
+            <Progress percent={handlingRate} showInfo={false} strokeColor="#0f9f9a" />
+            <div className="operation-status-list">
+              <span>已确认 <b>{acknowledgedAlerts}</b></span>
+              <span>已关闭 <b>{closedAlerts}</b></span>
+              <span>开放 <b>{openAlerts}</b></span>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="ops-card metric-card">
+          <div className="card-title">
+            <span>通知投递概览</span>
+            <NotificationOutlined />
+          </div>
+          <div className="operation-panel">
+            <div>
+              <strong>{deliverySuccessRate}%</strong>
+              <span>成功 {deliverySuccess} / {deliveryTotal}</span>
+            </div>
+            <Progress percent={deliverySuccessRate} showInfo={false} strokeColor="#17b77a" />
+            <div className="operation-status-list">
+              <span>失败 <b>{deliveryFailed}</b></span>
+              <span>可重试失败 <b>{retryableFailed}</b></span>
+              <span>今日总数 <b>{deliveryTotal}</b></span>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="ops-card metric-card">
+          <div className="card-title">
+            <span>通道状态</span>
+            <LinkOutlined />
+          </div>
+          <div className="operation-panel">
+            <div>
+              <strong>{channelEnabledRate}%</strong>
+              <span>启用 {channelEnabled} / {channelTotal}</span>
+            </div>
+            <Progress percent={channelEnabledRate} showInfo={false} strokeColor="#0f9f9a" />
+            <div className="operation-status-list">
+              <span>停用 <b>{channelDisabled}</b></span>
+              <span>Webhook <b>{channels.byType.webhook ?? 0}</b></span>
+              <span>飞书 <b>{channels.byType.feishu ?? 0}</b></span>
+            </div>
           </div>
         </Card>
       </section>
@@ -432,41 +605,9 @@ export function DashboardPage() {
       <section className="ops-table-grid">
         <Card
           className="ops-card"
-          title="数据源健康"
-          extra={
-            <Space>
-              <Select
-                value={sourceStatus}
-                onChange={setSourceStatus}
-                options={[
-                  { value: 'all', label: '全部分组' },
-                  { value: 'healthy', label: '健康' },
-                  { value: 'abnormal', label: '异常' },
-                  { value: 'unchecked', label: '未检测' },
-                ]}
-              />
-              <Input
-                prefix={<SearchOutlined />}
-                placeholder="搜索数据源名称"
-                value={sourceSearch}
-                onChange={(event) => setSourceSearch(event.target.value)}
-                allowClear
-              />
-            </Space>
-          }
+          title="最近告警"
+          extra={<Button type="link" onClick={() => onNavigate?.('alerts')}>进入告警中心</Button>}
         >
-          <Table
-            rowKey="id"
-            columns={sourceColumns}
-            dataSource={filteredSources}
-            size="small"
-            loading={loading}
-            pagination={{ pageSize: 6 }}
-            locale={{ emptyText: '暂无数据源' }}
-          />
-        </Card>
-
-        <Card className="ops-card" title="开放告警" extra={<Button type="link">全部告警</Button>}>
           <Table
             rowKey="id"
             columns={alertColumns}
@@ -474,45 +615,74 @@ export function DashboardPage() {
             size="small"
             loading={loading}
             pagination={false}
-            locale={{ emptyText: '暂无开放告警' }}
+            locale={{ emptyText: '暂无告警' }}
+          />
+        </Card>
+
+        <Card className="ops-card" title="最近处置动态">
+          <Table
+            rowKey={(row, index) => String(row.id ?? `${row.alertId ?? row.alert_id ?? 'alert'}-${index}`)}
+            columns={lifecycleColumns}
+            dataSource={overview.recentLifecycleEvents}
+            size="small"
+            loading={loading}
+            pagination={false}
+            locale={{ emptyText: '暂无生命周期事件' }}
           />
         </Card>
       </section>
 
       <section className="ops-bottom-grid">
-        <Card className="ops-card" title="告警处置率">
+        <Card className="ops-card" title="数据源健康">
           <div className="operation-panel">
             <div>
-              <strong>{handledRate}%</strong>
-              <span>已确认 {handledAlerts} / {statusTotal}</span>
+              <strong>{overview.dataSources.healthRate}%</strong>
+              <span>健康 {overview.dataSources.healthy} / {overview.dataSources.total}</span>
             </div>
-            <Progress percent={handledRate} showInfo={false} strokeColor="#0f9f9a" />
+            <Progress percent={overview.dataSources.healthRate} showInfo={false} strokeColor="#17b77a" />
             <div className="operation-status-list">
-              <span><i className="dot red" />未处理 <b>{openAlerts}</b></span>
-              <span><i className="dot orange" />处理中 <b>{processingAlerts}</b></span>
-              <span><i className="dot teal" />已确认 <b>{handledAlerts}</b></span>
+              <span>异常 <b>{overview.dataSources.abnormal}</b></span>
+              <span>未检测 <b>{overview.dataSources.unchecked}</b></span>
+              <span>停用 <b>{overview.dataSources.disabled}</b></span>
             </div>
           </div>
         </Card>
 
-        <Card className="ops-card" title="告警趋势（近 7 天）">
-          <MiniLineChart points={overview.alerts.trend} />
+        <Card
+          className="ops-card"
+          title="最近失败通知"
+          extra={<Button type="link" onClick={() => onNavigate?.('notifications')}>进入通知中心</Button>}
+        >
+          <Table
+            rowKey="id"
+            columns={failedDeliveryColumns}
+            dataSource={deliveryFailures}
+            size="small"
+            loading={loading}
+            pagination={false}
+            locale={{ emptyText: '暂无失败通知' }}
+          />
         </Card>
 
-        <Card className="ops-card" title="报表任务概况">
-          <div className="report-panel">
-            <div className="ops-donut small report">
-              <div>
-                <span>总任务数</span>
-                <strong>{overview.reports.total}</strong>
-              </div>
-            </div>
+        <Card className="ops-card" title="快捷入口">
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <ChannelTypeSummary data={channels.byType} />
+            <FailureTypeSummary data={failureTypes} />
+            <Button block icon={<BellOutlined />} onClick={() => onNavigate?.('alerts')}>
+              告警中心
+            </Button>
+            <Button block icon={<NotificationOutlined />} onClick={() => onNavigate?.('notifications')}>
+              通知中心
+            </Button>
+            <Button block icon={<DatabaseOutlined />} onClick={() => onNavigate?.('sources')}>
+              数据源管理
+            </Button>
             <div className="stat-list">
-              <span><CheckCircleFilled /> 成功 <b>{overview.reports.completed}</b></span>
-              <span><ClockCircleOutlined /> 运行中 <b>{overview.reports.running + overview.reports.pending}</b></span>
-              <span><WarningFilled /> 失败 <b>{overview.reports.failed}</b></span>
+              <span><WarningFilled /> 待处置 <b>{openAlerts}</b></span>
+              <span><ClockCircleOutlined /> 投递失败 <b>{deliveryFailed}</b></span>
+              <span><DatabaseOutlined /> 数据源异常 <b>{overview.dataSources.abnormal}</b></span>
             </div>
-          </div>
+          </Space>
         </Card>
       </section>
     </div>

@@ -31,8 +31,12 @@ public class OverviewController {
         data.put("schema", schemaSummary());
         data.put("rules", ruleSummary());
         data.put("alerts", alertSummary());
+        data.put("securityOperations", securityOperationsSummary());
+        data.put("notificationDelivery", notificationDeliverySummary());
+        data.put("notificationChannels", notificationChannelSummary());
         data.put("reports", reportSummary());
         data.put("recentDataSources", recentDataSources());
+        data.put("recentLifecycleEvents", recentLifecycleEvents());
         return ApiResponse.ok(data);
     }
 
@@ -124,6 +128,83 @@ public class OverviewController {
         return summary;
     }
 
+    private Map<String, Object> securityOperationsSummary() {
+        var today = LocalDate.now(ZoneId.systemDefault()).atStartOfDay();
+        var tomorrow = today.plusDays(1);
+
+        long total = count("select count(*) from alerts");
+        long open = count("select count(*) from alerts where lower(status) = 'open'");
+        long acknowledged = count("select count(*) from alerts where lower(status) = 'acknowledged'");
+        long closed = count("select count(*) from alerts where lower(status) = 'closed'");
+        long highRisk = count("select count(*) from alerts where lower(severity) in ('critical', 'high')");
+        long todayCount = count("select count(*) from alerts where created_at >= ? and created_at < ?",
+            Timestamp.valueOf(today), Timestamp.valueOf(tomorrow));
+
+        var summary = new LinkedHashMap<String, Object>();
+        summary.put("totalAlerts", total);
+        summary.put("openAlerts", open);
+        summary.put("acknowledgedAlerts", acknowledged);
+        summary.put("closedAlerts", closed);
+        summary.put("highRiskAlerts", highRisk);
+        summary.put("todayAlerts", todayCount);
+        return summary;
+    }
+
+    private Map<String, Object> notificationDeliverySummary() {
+        var today = LocalDate.now(ZoneId.systemDefault()).atStartOfDay();
+        var tomorrow = today.plusDays(1);
+
+        long todayTotal = count("""
+            select count(*) from notification_deliveries
+            where created_at >= ? and created_at < ?
+            """, Timestamp.valueOf(today), Timestamp.valueOf(tomorrow));
+        long todaySuccess = count("""
+            select count(*) from notification_deliveries
+            where lower(status) = 'success' and created_at >= ? and created_at < ?
+            """, Timestamp.valueOf(today), Timestamp.valueOf(tomorrow));
+        long todayFailed = count("""
+            select count(*) from notification_deliveries
+            where lower(status) = 'failed' and created_at >= ? and created_at < ?
+            """, Timestamp.valueOf(today), Timestamp.valueOf(tomorrow));
+
+        var summary = new LinkedHashMap<String, Object>();
+        summary.put("todayTotal", todayTotal);
+        summary.put("todaySuccess", todaySuccess);
+        summary.put("todayFailed", todayFailed);
+        summary.put("todaySuccessRate", rate(todaySuccess, todayTotal));
+        summary.put("retryableFailed", count("""
+            select count(*) from notification_deliveries
+            where lower(status) = 'failed' and retryable = true
+            """));
+        summary.put("byFailureType", countBy("""
+            select lower(failure_type) as bucket, count(*) as total
+            from notification_deliveries
+            where lower(status) = 'failed' and failure_type is not null
+            group by lower(failure_type)
+            order by total desc, bucket
+            limit 5
+            """));
+        summary.put("recentFailed", recentFailedDeliveries());
+        return summary;
+    }
+
+    private Map<String, Object> notificationChannelSummary() {
+        long total = count("select count(*) from notification_channels");
+        long enabled = count("select count(*) from notification_channels where enabled = true");
+
+        var summary = new LinkedHashMap<String, Object>();
+        summary.put("total", total);
+        summary.put("enabled", enabled);
+        summary.put("disabled", Math.max(0, total - enabled));
+        summary.put("byType", countBy("""
+            select lower(channel_type) as bucket, count(*) as total
+            from notification_channels
+            group by lower(channel_type)
+            order by total desc, bucket
+            """));
+        return summary;
+    }
+
     private Map<String, Object> reportSummary() {
         long total = count("select count(*) from report_jobs");
 
@@ -181,6 +262,34 @@ public class OverviewController {
             from alerts
             order by created_at desc
             limit 5
+            """);
+    }
+
+    private List<Map<String, Object>> recentFailedDeliveries() {
+        return jdbcTemplate.queryForList("""
+            select d.id, d.channel_id, c.name as channel_name, c.channel_type,
+                   d.alert_id, a.title as alert_title, d.title, d.status,
+                   d.response_code, d.failure_type, d.failure_reason,
+                   coalesce(d.retryable, false) as retryable,
+                   coalesce(d.retry_count, 0) as retry_count,
+                   d.retry_of_delivery_id, d.created_at
+            from notification_deliveries d
+            left join notification_channels c on c.id = d.channel_id
+            left join alerts a on a.id = d.alert_id
+            where lower(d.status) = 'failed'
+            order by d.created_at desc, d.id desc
+            limit 5
+            """);
+    }
+
+    private List<Map<String, Object>> recentLifecycleEvents() {
+        return jdbcTemplate.queryForList("""
+            select e.id, e.alert_id, a.title as alert_title, e.event_type,
+                   e.operator_name, e.assignee, e.created_at
+            from alert_lifecycle_events e
+            left join alerts a on a.id = e.alert_id
+            order by e.created_at desc, e.id desc
+            limit 6
             """);
     }
 

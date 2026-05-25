@@ -1,6 +1,7 @@
 package com.edsp.alert.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,10 +17,15 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.web.server.ResponseStatusException;
 
 class AlertNotificationServiceTest {
+    private static final String TEST_MASTER_KEY =
+        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+
     private JdbcTemplate jdbcTemplate;
     private StubWebhookClient webhookClient;
     private StubNotificationChannelAdapter feishuAdapter;
     private AlertNotificationService service;
+    private ObjectMapper objectMapper;
+    private NotificationChannelAdapterRegistry adapterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -64,7 +70,14 @@ class AlertNotificationServiceTest {
                 name varchar(160) not null,
                 channel_type varchar(40) not null default 'webhook',
                 endpoint_url text,
-                enabled boolean not null default true
+                endpoint_secret_ciphertext text,
+                endpoint_secret_key_version varchar(64),
+                endpoint_masked text,
+                secret_storage_status varchar(32) not null default 'legacy_plaintext',
+                description text,
+                config_json jsonb not null default '{}',
+                enabled boolean not null default true,
+                status varchar(40) not null default 'ready'
             )
             """);
         jdbcTemplate.execute("""
@@ -100,11 +113,16 @@ class AlertNotificationServiceTest {
 
         webhookClient = new StubWebhookClient();
         var webhookAdapter = new WebhookNotificationAdapter(webhookClient);
-        var objectMapper = new ObjectMapper();
+        objectMapper = new ObjectMapper();
         var weComAdapter = new WeComNotificationAdapter(webhookClient, objectMapper);
         feishuAdapter = new StubNotificationChannelAdapter("feishu");
-        var adapterRegistry = new NotificationChannelAdapterRegistry(List.of(webhookAdapter, weComAdapter, feishuAdapter));
-        service = new AlertNotificationService(jdbcTemplate, objectMapper, adapterRegistry);
+        adapterRegistry = new NotificationChannelAdapterRegistry(List.of(webhookAdapter, weComAdapter, feishuAdapter));
+        service = new AlertNotificationService(
+            jdbcTemplate,
+            objectMapper,
+            adapterRegistry,
+            new NotificationSecretStore(TEST_MASTER_KEY)
+        );
     }
 
     @Test
@@ -166,6 +184,112 @@ class AlertNotificationServiceTest {
         assertEquals(3, webhookClient.calls);
         assertEquals("http://example.test/webhook?token=secret", webhookClient.lastEndpointUrl);
         assertEquals(true, webhookClient.lastPayloadJson.contains("\"alertId\""));
+    }
+
+    @Test
+    void sendsEncryptedChannelByResolvingSecretWithoutPersistingPlaintextEndpoint() {
+        var alertId = insertAlert("encrypted send", "open");
+        var endpoint = "https://example.test/webhook?token=WEBHOOKTOKEN123456";
+        var notificationService = new NotificationService(
+            jdbcTemplate,
+            objectMapper,
+            new NotificationSecretStore(TEST_MASTER_KEY)
+        );
+        var created = notificationService.createChannel(new com.edsp.alert.dto.NotificationChannelRequest(
+            "encrypted webhook",
+            "webhook",
+            endpoint,
+            null,
+            true,
+            Map.of()
+        ));
+        var channelId = ((Number) created.get("id")).longValue();
+
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 204, "accepted", "webhook_delivered");
+        var result = service.send(alertId, channelId);
+        var channel = channelRow(channelId);
+        var delivery = deliveryRow(((Number) result.get("deliveryId")).longValue());
+
+        assertEquals("success", result.get("status"));
+        assertEquals(endpoint, webhookClient.lastEndpointUrl);
+        assertEquals(null, channel.get("endpoint_url"));
+        assertEquals("encrypted", channel.get("secret_storage_status"));
+        assertFalse(String.valueOf(channel.get("endpoint_secret_ciphertext")).contains("WEBHOOKTOKEN123456"));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(delivery.get("payload_json"))));
+    }
+
+    @Test
+    void encryptedChannelResolveFailureDoesNotCallAdapterWriteDeliveryOrMutateRetrySource() {
+        var alertId = insertAlert("encrypted unavailable", "open");
+        var endpoint = "https://example.test/webhook?token=WEBHOOKTOKEN123456";
+        var notificationService = new NotificationService(
+            jdbcTemplate,
+            objectMapper,
+            new NotificationSecretStore(TEST_MASTER_KEY)
+        );
+        var created = notificationService.createChannel(new com.edsp.alert.dto.NotificationChannelRequest(
+            "encrypted webhook",
+            "webhook",
+            endpoint,
+            null,
+            true,
+            Map.of()
+        ));
+        var channelId = ((Number) created.get("id")).longValue();
+        jdbcTemplate.update(
+            "update notification_channels set endpoint_secret_ciphertext = ? where id = ?",
+            "v1:invalid:invalid",
+            channelId
+        );
+        var originalDeliveryId = insertDelivery(channelId, alertId, "failed", true);
+        var originalBefore = deliveryRow(originalDeliveryId);
+        var beforeCount = countDeliveries();
+
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.send(alertId, channelId));
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.retryDelivery(originalDeliveryId));
+
+        assertEquals(0, webhookClient.calls);
+        assertEquals(beforeCount, countDeliveries());
+        assertEquals(0, ((Number) deliveryRow(originalDeliveryId).get("retry_count")).intValue());
+        assertOriginalDeliveryUnchangedExceptRetryCount(originalBefore, deliveryRow(originalDeliveryId));
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
+    }
+
+    @Test
+    void missingChannelResolveFailureDoesNotCallAdapterWriteDeliveryOrIncrementRetryCount() {
+        var alertId = insertAlert("missing secret", "open");
+        var channelId = insertMissingChannel("webhook", true);
+        var originalDeliveryId = insertDelivery(channelId, alertId, "failed", true);
+        var originalBefore = deliveryRow(originalDeliveryId);
+        var beforeCount = countDeliveries();
+
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.send(alertId, channelId));
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.retryDelivery(originalDeliveryId));
+
+        assertEquals(0, webhookClient.calls);
+        assertEquals(beforeCount, countDeliveries());
+        assertEquals(0, ((Number) deliveryRow(originalDeliveryId).get("retry_count")).intValue());
+        assertOriginalDeliveryUnchangedExceptRetryCount(originalBefore, deliveryRow(originalDeliveryId));
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
+    }
+
+    @Test
+    void legacyPlaintextChannelWithoutEndpointIsTreatedAsSecretUnavailable() {
+        var alertId = insertAlert("legacy blank secret", "open");
+        var channelId = insertChannel("webhook", null, true);
+        var originalDeliveryId = insertDelivery(channelId, alertId, "failed", true);
+        var beforeCount = countDeliveries();
+
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.send(alertId, channelId));
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.retryDelivery(originalDeliveryId));
+
+        assertEquals(0, webhookClient.calls);
+        assertEquals(beforeCount, countDeliveries());
+        assertEquals(0, ((Number) deliveryRow(originalDeliveryId).get("retry_count")).intValue());
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
     }
 
     @Test
@@ -525,6 +649,15 @@ class AlertNotificationServiceTest {
             """, type, endpointUrl, enabled);
     }
 
+    private Long insertMissingChannel(String type, boolean enabled) {
+        return insertAndReturnId("""
+            insert into notification_channels(
+                name, channel_type, endpoint_url, endpoint_masked, secret_storage_status, enabled
+            )
+            values ('missing channel', ?, null, 'demo://not-configured', 'missing', ?)
+            """, type, enabled);
+    }
+
     private Long insertAndReturnId(String sql, Object... args) {
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
@@ -587,6 +720,10 @@ class AlertNotificationServiceTest {
 
     private Map<String, Object> deliveryRow(Long deliveryId) {
         return jdbcTemplate.queryForMap("select * from notification_deliveries where id = ?", deliveryId);
+    }
+
+    private Map<String, Object> channelRow(Long channelId) {
+        return jdbcTemplate.queryForMap("select * from notification_channels where id = ?", channelId);
     }
 
     private void assertOriginalDeliveryUnchangedExceptRetryCount(

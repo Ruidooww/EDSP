@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -25,15 +26,27 @@ public class NotificationService {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final NotificationSecretStore secretStore;
 
     public NotificationService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+        this(jdbcTemplate, objectMapper, new NotificationSecretStore(""));
+    }
+
+    @Autowired
+    public NotificationService(
+        JdbcTemplate jdbcTemplate,
+        ObjectMapper objectMapper,
+        NotificationSecretStore secretStore
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+        this.secretStore = secretStore;
     }
 
     public List<Map<String, Object>> listChannels() {
         return jdbcTemplate.queryForList("""
-            select id, name, channel_type, endpoint_url, description, enabled, status,
+            select id, name, channel_type, endpoint_url, endpoint_masked, secret_storage_status,
+                   description, enabled, status,
                    last_test_status, last_test_message, last_test_at, created_at, updated_at
             from notification_channels
             order by updated_at desc
@@ -106,21 +119,27 @@ public class NotificationService {
     public Map<String, Object> createChannel(NotificationChannelRequest request) {
         var channelType = normalizeType(request.channelType());
         var endpointUrl = normalizeEndpoint(channelType, request.webhookUrl());
+        var storedEndpoint = secretStore.storeEndpoint(endpointUrl, SECRET_SANITIZER.maskEndpoint(endpointUrl));
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             var statement = connection.prepareStatement("""
                 insert into notification_channels(
-                    name, channel_type, endpoint_url, description, config_json, enabled, status
+                    name, channel_type, endpoint_url, endpoint_secret_ciphertext,
+                    endpoint_secret_key_version, endpoint_masked, secret_storage_status,
+                    description, config_json, enabled, status
                 )
-                values (?, ?, ?, ?, cast(? as jsonb), ?, ?)
+                values (?, ?, null, ?, ?, ?, ?, ?, cast(? as jsonb), ?, ?)
                 """, new String[] {"id"});
             statement.setString(1, request.name());
             statement.setString(2, channelType);
-            statement.setString(3, endpointUrl);
-            statement.setString(4, request.description());
-            statement.setString(5, configJson(request));
-            statement.setBoolean(6, request.enabled());
-            statement.setString(7, request.enabled() ? "ready" : "disabled");
+            statement.setString(3, storedEndpoint.ciphertext());
+            statement.setString(4, storedEndpoint.keyVersion());
+            statement.setString(5, storedEndpoint.endpointMasked());
+            statement.setString(6, storedEndpoint.status());
+            statement.setString(7, request.description());
+            statement.setString(8, configJson(request));
+            statement.setBoolean(9, request.enabled());
+            statement.setString(10, request.enabled() ? "ready" : "disabled");
             return statement;
         }, keyHolder);
         var idValue = keyHolder.getKey();
@@ -131,15 +150,18 @@ public class NotificationService {
     public Map<String, Object> updateChannel(long id, NotificationChannelRequest request) {
         var channelType = normalizeType(request.channelType());
         var endpointUrl = normalizeEndpoint(channelType, request.webhookUrl());
+        var storedEndpoint = secretStore.storeEndpoint(endpointUrl, SECRET_SANITIZER.maskEndpoint(endpointUrl));
         jdbcTemplate.update("""
             update notification_channels
-            set name = ?, channel_type = ?, endpoint_url = ?, description = ?,
+            set name = ?, channel_type = ?, endpoint_url = null,
+                endpoint_secret_ciphertext = ?, endpoint_secret_key_version = ?,
+                endpoint_masked = ?, secret_storage_status = ?, description = ?,
                 config_json = cast(? as jsonb), enabled = ?, status = ?, updated_at = now()
             where id = ?
             """,
-            request.name(), channelType, endpointUrl,
-            request.description(), configJson(request), request.enabled(),
-            request.enabled() ? "ready" : "disabled", id);
+            request.name(), channelType, storedEndpoint.ciphertext(), storedEndpoint.keyVersion(),
+            storedEndpoint.endpointMasked(), storedEndpoint.status(), request.description(),
+            configJson(request), request.enabled(), request.enabled() ? "ready" : "disabled", id);
         return Map.of("id", id);
     }
 
@@ -158,8 +180,10 @@ public class NotificationService {
 
     private Map<String, Object> presentChannel(Map<String, Object> row) {
         var result = new LinkedHashMap<>(row);
-        result.put("endpoint_masked", SECRET_SANITIZER.maskEndpoint(row.get("endpoint_url")));
+        result.put("endpoint_masked", endpointMasked(row));
         result.remove("endpoint_url");
+        result.remove("endpoint_secret_ciphertext");
+        result.remove("endpoint_secret_key_version");
         return result;
     }
 
@@ -183,6 +207,20 @@ public class NotificationService {
 
     private String configJson(NotificationChannelRequest request) {
         return toJson(SECRET_SANITIZER.sanitizeConfig(request.config(), request.webhookUrl()));
+    }
+
+    private String endpointMasked(Map<String, Object> row) {
+        var status = stringOrBlank(row.get("secret_storage_status"));
+        var persisted = stringOrBlank(row.get("endpoint_masked"));
+        if ("missing".equals(status)) {
+            return persisted.isBlank()
+                ? "demo://not-configured"
+                : SECRET_SANITIZER.sanitizeEndpointDisplay(persisted);
+        }
+        if (!persisted.isBlank()) {
+            return SECRET_SANITIZER.sanitizeEndpointDisplay(persisted);
+        }
+        return SECRET_SANITIZER.maskEndpoint(row.get("endpoint_url"));
     }
 
     private String toJson(Object value) {

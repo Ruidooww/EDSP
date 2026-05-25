@@ -6,104 +6,67 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Notification Delivery Reliability MVP`
-- 最新 feature merge commit：`4bf8f9c merge: notification delivery reliability mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for notification delivery reliability mvp`
-- 本轮阶段分支：`codex/notification-delivery-reliability-mvp`
-- 本轮结果：已完成通知投递可靠性增强，支持结构化失败诊断和基于失败 delivery 的手动 retry。
+- 当前阶段：`Security Operations Dashboard MVP`
+- 最新 feature merge commit：`ce30e59 merge: security operations dashboard mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for security operations dashboard mvp`
+- 本轮阶段分支：`codex/security-operations-dashboard-mvp`
+- 本轮结果：已完成只读安全运营总览能力，前端 Dashboard 可通过唯一 overview 入口展示告警、处置、通知、数据源、规则和报表概览。
 
 ## 已完成能力
 
-- 新增 migration：`V15__notification_delivery_reliability.sql`。
-- `notification_deliveries` 新增字段：
-  - `failure_type`
-  - `failure_reason`
-  - `retryable`
-  - `retry_of_delivery_id`
-  - `retry_count`
-- 新增索引：
-  - `idx_notification_deliveries_failure_type`
-  - `idx_notification_deliveries_status_retryable`
-  - `idx_notification_deliveries_retry_of`
-- 通知发送结果写入结构化失败信息：
-  - success delivery 保持 `failure_type = null`、`failure_reason = null`、`retryable = false`
-  - failed delivery 写入固定 `failure_type`、脱敏后的 `failure_reason` 和固定规则计算出的 `retryable`
-- 固定失败类型范围：
-  - `timeout`
-  - `connection_error`
-  - `http_408`
-  - `http_429`
-  - `http_5xx`
-  - `http_4xx`
-  - `provider_business_error`
-  - `malformed_response`
-  - `invalid_endpoint`
-  - `unsupported_channel`
-  - `unknown_error`
-- 固定 retryable 规则：
-  - 可重试：`timeout`、`connection_error`、`http_408`、`http_429`、`http_5xx`
-  - 不可重试：`http_4xx`、`provider_business_error`、`malformed_response`、`invalid_endpoint`、`unsupported_channel`、`unknown_error`
-- 新增手动 retry API：
-  - `POST /api/notifications/deliveries/{id}/retry`
-- retry API 边界：
-  - 不接受业务 body
-  - 不允许传入 `alertId`、`channelId`、`title`、`message`、`severity`、`payload`
-  - 只能读取原 delivery 的 `alert_id + channel_id`
-  - 重新走现有 alert-based sending path
-  - 不复用旧 `payload_json` 直接发送
-- retry 允许条件：
-  - 原 delivery 必须存在
-  - `status = failed`
-  - `retryable = true`
-  - 原 delivery 必须有关联 `alert_id` 和 `channel_id`
-  - alert 必须存在且 `status = open`
-  - channel 必须存在且 enabled
-  - channel type 必须被现有 adapter registry 支持
-- retry 写入规则：
-  - 实际 retry 后一定新增一条 `notification_deliveries`
-  - 新 delivery 写入 `retry_of_delivery_id`
-  - 新 delivery 的 `retry_count = 0`
-  - 原 delivery 只递增 `retry_count`
-  - 原 delivery 不修改 `status`、`response_body`、`payload_json`、`failure_type`、`failure_reason`、`retryable`、`retry_of_delivery_id`
-- retry 服务加 `@Transactional`，保证新增 retry delivery 和原 delivery retry count 更新在同一事务内。
-- `GET /api/notifications/deliveries` 返回新增 reliability 字段。
-- 前端 `NotificationsPage` 投递记录区域展示：
-  - 失败类型
-  - 失败原因
-  - 是否可重试
-  - 重试次数
-  - `Retry Of`
-- 前端仅对 `status = failed && retryable = true` 的投递记录显示“重试一次”按钮。
+- 新增核心只读 overview 入口：
+  - `GET /api/core/overview`
+- `OverviewController` 聚合只读查询：
+  - `alerts`
+  - `alert_lifecycle_events`
+  - `notification_channels`
+  - `notification_deliveries`
+  - `data_sources`
+  - `schema_scan_runs`
+  - `ingestion_plans`
+  - `rules`
+  - `reports`
+- Dashboard 增加安全运营视图：
+  - 风险与告警概览
+  - 告警生命周期概览
+  - 通知投递概览
+  - 通知通道健康概览
+  - 数据源 / Schema / 接入方案概览
+  - 规则与报表概览
+  - 最近数据源与最近处置事件摘要
+- `frontend/src/types.ts` 增加 overview 数据结构，支撑 Dashboard 类型检查。
+- `frontend/src/App.tsx` 接入 Dashboard 页面路由。
+- `OverviewControllerTest` 覆盖：
+  - overview 返回安全运营与通知投递摘要
+  - 空表场景返回安全默认值
+  - overview 查询不修改 operational tables 和 alert status
 
 ## 明确未做 / 禁止误解
 
-- 未做自动重试。
-- 未做定时重试。
-- 未做失败队列。
-- 未做后台 retry worker。
-- 未做批量 retry。
-- 未做通知升级。
-- 未做通知编排。
-- 未新增通知通道 adapter。
-- 未接外部数据库。
-- 未接旧预警平台库。
-- 未做外部 schema discovery。
-- 未修改 alert lifecycle。
+- 未新增 migration。
+- 未写入 `notification_deliveries`。
 - 未写入 `alert_lifecycle_events`。
-- 未修改 alert status。
-- 未修改 `alerts / alert_decisions / standard_events` 语义。
-- 未修改 `POST /api/notifications/alerts/send` 的 `alertId + channelId` 边界。
+- 未修改 `alerts.status`。
+- 未调用 notification send service。
+- 未调用 notification retry service。
+- 未调用 alert lifecycle mutation service。
+- Dashboard 未提供“重试一次”按钮。
+- Dashboard 未展示完整 `payload_json`。
+- Dashboard 未展示完整 `response_body`。
+- 未修改 notification sending 语义。
+- 未修改 alert lifecycle 语义。
+- 未修改 sync-once / scheduled sync / rule evaluation / alert generation 语义。
 - 未修改 `AGENTS.md`。
 - 未引入 Kafka / Redis / ClickHouse / AI。
 
 ## 当前关键边界
 
+- `GET /api/core/overview` 是当前唯一 overview 入口。
+- Security Operations Dashboard 只做只读聚合，不承载 mutation 操作。
+- Dashboard 不得绕过 Alerts / Notifications / Lifecycle 现有页面和 API 执行业务动作。
 - Notification delivery 仍只能从已有 `alerts` 出发。
 - 正常通知发送入口仍是 `POST /api/notifications/alerts/send`。
-- 正常通知发送请求体仍只允许 `alertId + channelId`。
-- retry 只能从原 delivery 的 `alert_id + channel_id` 重新进入 alert-based sending path。
-- retry 不得复用旧 `payload_json` 直接发送。
-- retry 校验失败不得写新 delivery，不得递增原 delivery 的 `retry_count`，不得修改原 delivery。
+- retry 入口仍只能是 `POST /api/notifications/deliveries/{id}/retry`，Dashboard 不提供 retry 操作。
 - Notification code 不得修改 alert lifecycle state。
 - Alert lifecycle code 不得写 `notification_deliveries` 或调用 notification delivery services。
 - Rule evaluation 不得直接创建 alerts 或发送 notifications。
@@ -112,34 +75,35 @@
 ## 测试结果
 
 - 阶段分支验证：
+  - `mvn -pl edsp-core -am -Dtest=OverviewControllerTest "-Dsurefire.failIfNoSpecifiedTests=false" test` 通过，`Tests run: 3, Failures: 0, Errors: 0`
+  - `mvn -pl edsp-core -am test` 通过，`Tests run: 115, Failures: 0, Errors: 0`
   - `mvn -pl edsp-alert -am test` 通过，`Tests run: 54, Failures: 0, Errors: 0`
-  - `mvn -pl edsp-core -am test` 通过，`Tests run: 112, Failures: 0, Errors: 0`
   - `npm.cmd run build` 通过，仅有 Vite chunk size warning
-  - `git diff --check` 通过，仅有 CRLF warning，无 whitespace error
+  - `git diff --check` 通过，无 whitespace error
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
 
+- 本轮未做浏览器交互 smoke test；如后续需要，可单独启动前端验证 Dashboard 实际渲染与导航。
+- Dashboard 当前是总览层，仍建议保持只读；具体处置、通知发送、retry 等动作继续留在各自业务页面。
+- 如后续运营数据增多，可单独规划 Dashboard drill-down、时间范围筛选、趋势图或权限视图，但不得混入通知发送或生命周期 mutation。
 - GitHub Actions branch run 需要在远端完成后观察结果；本地未安装 `gh`，无法直接查询 Actions run。
-- 当前 `failure_type` 由服务层固定写入，数据库层暂未加 check constraint；如后续需要更强约束，可单独规划 migration hardening。
-- 当前 retry 仅支持手动单条 retry；自动 retry、批量 retry 和升级编排仍需保持禁用，除非后续单独立项。
-- 前端投递记录列宽已扩展；如后续数据较多，可单独做投递记录详情页或筛选增强。
 
 ## 下一轮建议
 
-建议下一阶段先不要扩展自动化通知，优先做 `Notification Delivery Observability MVP` 或回到业务主线做告警处置视图增强。
+建议下一阶段优先做 `Security Operations Dashboard Hardening MVP` 或 `Alert Operations Drill-down MVP`，继续保持 Dashboard 只读边界。
 
 可选方向：
 
-- `Notification Delivery Observability MVP`
-  - 增加投递记录筛选体验
-  - 增加失败类型统计
-  - 增加按 alert / channel 的投递历史查看
-  - 不做自动 retry，不做升级编排
-- 告警处置视图增强
+- `Security Operations Dashboard Hardening MVP`
+  - 增加时间范围筛选
+  - 增加风险趋势和通知失败趋势
+  - 增加 dashboard browser smoke test / visual check
+  - 不做 retry、不做通知发送、不做 lifecycle mutation
+- `Alert Operations Drill-down MVP`
+  - 从告警处置视图进入关联通知投递记录
   - 提升 alerts 列表和详情页可读性
-  - 展示关联通知投递记录
-  - 仍保持通知只手动触发
+  - 仍保持通知只手动触发，retry 只在 NotificationsPage 中执行
 
 下一阶段仍必须遵守：
 

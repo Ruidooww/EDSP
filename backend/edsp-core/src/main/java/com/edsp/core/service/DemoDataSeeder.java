@@ -186,9 +186,9 @@ public class DemoDataSeeder implements ApplicationRunner {
     private void seedNotifications() {
         seedChannel("安全运营 Webhook", "webhook", "https://demo.mizuumi.top/mock/security-webhook",
             "统一推送到安全运营工作台，用于演示标准 Webhook 投递。", "{\"mode\":\"demo\",\"owner\":\"SOC\"}", true, "ready", "success", "演示通道测试成功");
-        seedChannel("企业微信值班群", "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=demo",
+        seedChannel("企业微信值班群", "wecom", null,
             "高危告警推送到企业微信安全值班群。", "{\"robot\":\"security-duty\",\"mention\":\"@all\"}", false, "disabled", "unsupported", "后续扩展");
-        seedChannel("飞书安全群", "feishu", "https://open.feishu.cn/open-apis/bot/v2/hook/demo",
+        seedChannel("飞书安全群", "feishu", null,
             "中高危告警推送到飞书安全群。", "{\"robot\":\"security-alert\"}", false, "disabled", "unsupported", "后续扩展");
         seedChannel("短信告警", "sms", "https://sms.demo.local/send",
             "严重风险通过短信通知值班负责人。", "{\"provider\":\"demo-sms\",\"template\":\"risk-alert\"}", false, "disabled", "unsupported", "后续扩展");
@@ -454,18 +454,30 @@ public class DemoDataSeeder implements ApplicationRunner {
         if (exists("select count(*) from notification_channels where name = ?", name)) {
             jdbcTemplate.update("""
                 update notification_channels
-                set channel_type = ?, endpoint_url = ?, description = ?, config_json = cast(? as jsonb),
+                set channel_type = ?, endpoint_url = ?, endpoint_masked = ?, secret_storage_status = ?,
+                    description = ?, config_json = cast(? as jsonb),
                     enabled = ?, status = ?, last_test_status = ?, last_test_message = ?, last_test_at = now(),
                     updated_at = now()
                 where name = ?
-                """, type, endpoint, description, config, enabled, status, testStatus, testMessage, name);
+                """, type, endpoint, endpointMasked(endpoint), secretStorageStatus(endpoint),
+                description, config, enabled, status, testStatus, testMessage, name);
             return;
         }
         jdbcTemplate.update("""
-            insert into notification_channels(name, channel_type, endpoint_url, description, config_json,
+            insert into notification_channels(name, channel_type, endpoint_url, endpoint_masked,
+                                              secret_storage_status, description, config_json,
                                               enabled, status, last_test_status, last_test_message, last_test_at)
-            values (?, ?, ?, ?, cast(? as jsonb), ?, ?, ?, ?, now())
-            """, name, type, endpoint, description, config, enabled, status, testStatus, testMessage);
+            values (?, ?, ?, ?, ?, ?, cast(? as jsonb), ?, ?, ?, ?, now())
+            """, name, type, endpoint, endpointMasked(endpoint), secretStorageStatus(endpoint),
+            description, config, enabled, status, testStatus, testMessage);
+    }
+
+    private String endpointMasked(String endpoint) {
+        return endpoint == null || endpoint.isBlank() ? "demo://not-configured" : endpoint;
+    }
+
+    private String secretStorageStatus(String endpoint) {
+        return endpoint == null || endpoint.isBlank() ? "missing" : "legacy_plaintext";
     }
 
     private void seedReport(String title, String type, String status, String filePath, String paramsJson) {

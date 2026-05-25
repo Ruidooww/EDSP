@@ -9,6 +9,7 @@ import com.edsp.alert.dto.NotificationChannelRequest;
 import com.edsp.alert.dto.NotificationSendRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Statement;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,8 @@ class NotificationServiceTest {
     private static final String FEISHU_TOKEN = "FEISHUTOKEN123456";
     private static final String FEISHU_URL =
         "https://open.feishu.cn/open-apis/bot/v2/hook/" + FEISHU_TOKEN;
+    private static final String TEST_MASTER_KEY =
+        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 
     private JdbcTemplate jdbcTemplate;
     private NotificationService service;
@@ -56,6 +59,10 @@ class NotificationServiceTest {
                 name varchar(160) not null,
                 channel_type varchar(40) not null default 'webhook',
                 endpoint_url text,
+                endpoint_secret_ciphertext text,
+                endpoint_secret_key_version varchar(64),
+                endpoint_masked text,
+                secret_storage_status varchar(32) not null default 'legacy_plaintext',
                 description text,
                 config_json jsonb not null default '{}',
                 enabled boolean not null default true,
@@ -86,7 +93,11 @@ class NotificationServiceTest {
                 created_at timestamptz not null default now()
             )
             """);
-        service = new NotificationService(jdbcTemplate, new ObjectMapper());
+        service = new NotificationService(
+            jdbcTemplate,
+            new ObjectMapper(),
+            new NotificationSecretStore(TEST_MASTER_KEY)
+        );
     }
 
     @Test
@@ -308,10 +319,22 @@ class NotificationServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, invalidUrl.getStatusCode());
         assertEquals("invalid_webhook_url", invalidUrl.getReason());
         assertEquals("webhook", channel.get("channel_type"));
+        assertEquals("encrypted", channel.get("secret_storage_status"));
+        assertFalse(channel.containsKey("endpoint_url"));
+        assertFalse(channel.containsKey("endpoint_secret_ciphertext"));
+        assertFalse(channel.containsKey("endpoint_secret_key_version"));
         assertEquals(
             "https://hook.example.test/robot/[redacted]/send?Access_Token=[redacted]&SIGNATURE=[redacted]",
             channel.get("endpoint_masked")
         );
+        var storedChannel = channelRow(id);
+        var ciphertext = String.valueOf(storedChannel.get("endpoint_secret_ciphertext"));
+        assertEquals(null, storedChannel.get("endpoint_url"));
+        assertEquals("local-v1", storedChannel.get("endpoint_secret_key_version"));
+        assertCiphertextFormat(ciphertext);
+        assertFalse(ciphertext.contains(webhookUrl));
+        assertFalse(ciphertext.contains("PATHSECRET123456"));
+        assertFalse(ciphertext.contains("QUERYSECRET123456"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("PATHSECRET123456"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("QUERYSECRET123456"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("SIGNATUREQUERY123456"));
@@ -365,7 +388,14 @@ class NotificationServiceTest {
             String.class,
             id
         );
+        var storedChannel = channelRow(id);
+        var ciphertext = String.valueOf(storedChannel.get("endpoint_secret_ciphertext"));
 
+        assertEquals(null, storedChannel.get("endpoint_url"));
+        assertEquals("encrypted", storedChannel.get("secret_storage_status"));
+        assertCiphertextFormat(ciphertext);
+        assertFalse(ciphertext.contains(updatedUrl));
+        assertFalse(ciphertext.contains("UPDATEDSECRET123456"));
         assertFalse(storedConfig.contains(updatedUrl));
         assertFalse(storedConfig.contains("UPDATEDSECRET123456"));
         assertFalse(storedConfig.contains("AUTHSECRET123456"));
@@ -458,7 +488,15 @@ class NotificationServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, missingKey.getStatusCode());
         assertEquals("invalid_wecom_webhook_url", missingKey.getReason());
         assertEquals("wecom", channel.get("channel_type"));
+        assertEquals("encrypted", channel.get("secret_storage_status"));
         assertEquals("https://qyapi.weixin.qq.com/...", channel.get("endpoint_masked"));
+        var storedChannel = channelRow(id);
+        var ciphertext = String.valueOf(storedChannel.get("endpoint_secret_ciphertext"));
+        assertEquals(null, storedChannel.get("endpoint_url"));
+        assertEquals("local-v1", storedChannel.get("endpoint_secret_key_version"));
+        assertCiphertextFormat(ciphertext);
+        assertFalse(ciphertext.contains("WESECRET123456"));
+        assertFalse(ciphertext.contains("qyapi.weixin.qq.com"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("WESECRET123456"));
         assertFalse(storedConfig.contains("WESECRET123456"));
         assertFalse(storedConfig.contains("qyapi.weixin.qq.com"));
@@ -543,13 +581,87 @@ class NotificationServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, extraPathSegment.getStatusCode());
         assertEquals("invalid_feishu_webhook_url", extraPathSegment.getReason());
         assertEquals("feishu", channel.get("channel_type"));
+        assertEquals("encrypted", channel.get("secret_storage_status"));
         assertEquals("https://open.feishu.cn/open-apis/bot/v2/hook/...", channel.get("endpoint_masked"));
+        var storedChannel = channelRow(id);
+        var ciphertext = String.valueOf(storedChannel.get("endpoint_secret_ciphertext"));
+        assertEquals(null, storedChannel.get("endpoint_url"));
+        assertEquals("local-v1", storedChannel.get("endpoint_secret_key_version"));
+        assertCiphertextFormat(ciphertext);
+        assertFalse(ciphertext.contains(FEISHU_TOKEN));
+        assertFalse(ciphertext.contains(FEISHU_URL));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains(FEISHU_TOKEN));
         assertFalse(storedConfig.contains(FEISHU_TOKEN));
         assertFalse(storedConfig.contains(FEISHU_URL));
         assertFalse(storedConfig.contains("webhookUrl"));
         assertFalse(storedConfig.contains("endpointUrl"));
         assertEquals(true, storedConfig.contains("secops"));
+    }
+
+    @Test
+    void createAndUpdateRejectEncryptedChannelWhenMasterKeyIsMissingOrInvalid() {
+        var missingKeyService = new NotificationService(
+            jdbcTemplate,
+            new ObjectMapper(),
+            new NotificationSecretStore("")
+        );
+        var invalidKeyService = new NotificationService(
+            jdbcTemplate,
+            new ObjectMapper(),
+            new NotificationSecretStore("not-base64")
+        );
+
+        var missing = assertThrows(ResponseStatusException.class, () -> missingKeyService.createChannel(
+            new NotificationChannelRequest(
+                "missing key",
+                "webhook",
+                "https://hook.example.test/send?token=WEBHOOKTOKEN123456",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+        var invalid = assertThrows(ResponseStatusException.class, () -> invalidKeyService.createChannel(
+            new NotificationChannelRequest(
+                "invalid key",
+                "webhook",
+                "https://hook.example.test/send?token=WEBHOOKTOKEN123456",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+
+        assertEquals(HttpStatus.BAD_REQUEST, missing.getStatusCode());
+        assertEquals("notification_secret_key_missing", missing.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, invalid.getStatusCode());
+        assertEquals("notification_secret_key_invalid", invalid.getReason());
+        assertEquals(0L, jdbcTemplate.queryForObject("select count(*) from notification_channels", Long.class));
+
+        var created = service.createChannel(new NotificationChannelRequest(
+            "valid",
+            "webhook",
+            "https://hook.example.test/send?token=WEBHOOKTOKEN123456",
+            null,
+            true,
+            Map.of()
+        ));
+        var id = ((Number) created.get("id")).longValue();
+
+        var updateMissing = assertThrows(ResponseStatusException.class, () -> missingKeyService.updateChannel(
+            id,
+            new NotificationChannelRequest(
+                "missing update",
+                "webhook",
+                "https://hook.example.test/send?token=UPDATEDTOKEN123456",
+                null,
+                true,
+                Map.of()
+            )
+        ));
+
+        assertEquals(HttpStatus.BAD_REQUEST, updateMissing.getStatusCode());
+        assertEquals("notification_secret_key_missing", updateMissing.getReason());
     }
 
     private Long insertAlert(String title) {
@@ -571,6 +683,18 @@ class NotificationServiceTest {
             channelType,
             endpointUrl
         );
+    }
+
+    private Map<String, Object> channelRow(long id) {
+        return jdbcTemplate.queryForMap("select * from notification_channels where id = ?", id);
+    }
+
+    private void assertCiphertextFormat(String ciphertext) {
+        var parts = ciphertext.split(":", 3);
+        assertEquals(3, parts.length);
+        assertEquals("v1", parts[0]);
+        assertEquals(12, Base64.getDecoder().decode(parts[1]).length);
+        assertTrue(Base64.getDecoder().decode(parts[2]).length > 0);
     }
 
     private void insertDelivery(Long channelId, Long alertId, String title) {

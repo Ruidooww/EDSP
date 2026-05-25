@@ -88,6 +88,17 @@ public class NotificationSecretSanitizer {
         }
     }
 
+    public String sanitizeEndpointDisplay(Object endpoint) {
+        if (endpoint == null || String.valueOf(endpoint).isBlank()) {
+            return "-";
+        }
+        var value = String.valueOf(endpoint).trim();
+        if (value.contains(REDACTED) || value.endsWith("/...") || "demo://not-configured".equals(value)) {
+            return redactText(value, List.of());
+        }
+        return maskEndpoint(value);
+    }
+
     public String redactText(String value, String endpointUrl) {
         return redactText(value, sensitiveValues(endpointUrl));
     }

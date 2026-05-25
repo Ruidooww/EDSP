@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -22,15 +23,27 @@ public class AlertNotificationService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final NotificationChannelAdapterRegistry adapterRegistry;
+    private final NotificationSecretStore secretStore;
 
     public AlertNotificationService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
         NotificationChannelAdapterRegistry adapterRegistry
     ) {
+        this(jdbcTemplate, objectMapper, adapterRegistry, new NotificationSecretStore(""));
+    }
+
+    @Autowired
+    public AlertNotificationService(
+        JdbcTemplate jdbcTemplate,
+        ObjectMapper objectMapper,
+        NotificationChannelAdapterRegistry adapterRegistry,
+        NotificationSecretStore secretStore
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.adapterRegistry = adapterRegistry;
+        this.secretStore = secretStore;
     }
 
     public Map<String, Object> send(long alertId, long channelId) {
@@ -85,6 +98,8 @@ public class AlertNotificationService {
         }
         var adapter = adapterRegistry.find(String.valueOf(channel.get("channel_type")))
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel"));
+        var endpointUrl = secretStore.resolveEndpoint(channel);
+        channel.put("endpoint_url", endpointUrl);
         if ("webhook".equalsIgnoreCase(adapter.channelType()) && isBlank(channel.get("endpoint_url"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
         }
@@ -138,7 +153,8 @@ public class AlertNotificationService {
 
     private Map<String, Object> fetchChannel(long channelId) {
         var rows = jdbcTemplate.queryForList("""
-            select id, name, channel_type, endpoint_url, enabled
+            select id, name, channel_type, endpoint_url, endpoint_secret_ciphertext,
+                   endpoint_secret_key_version, endpoint_masked, secret_storage_status, enabled
             from notification_channels
             where id = ?
             limit 1

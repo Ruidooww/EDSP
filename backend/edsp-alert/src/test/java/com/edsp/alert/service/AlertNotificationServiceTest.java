@@ -78,6 +78,11 @@ class AlertNotificationServiceTest {
                 response_code integer,
                 response_body text,
                 payload_json jsonb not null default '{}',
+                failure_type varchar(80),
+                failure_reason text,
+                retryable boolean not null default false,
+                retry_of_delivery_id bigint,
+                retry_count integer not null default 0,
                 created_at timestamptz not null default now()
             )
             """);
@@ -161,6 +166,94 @@ class AlertNotificationServiceTest {
         assertEquals(3, webhookClient.calls);
         assertEquals("http://example.test/webhook?token=secret", webhookClient.lastEndpointUrl);
         assertEquals(true, webhookClient.lastPayloadJson.contains("\"alertId\""));
+    }
+
+    @Test
+    void recordsStructuredReliabilityFieldsForSuccessAndRetryableFailures() {
+        var channelId = insertChannel("webhook", "http://example.test/webhook?token=secret", true);
+
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 204, "accepted", "webhook_delivered");
+        var successAlertId = insertAlert("success reliability", "open");
+        service.send(successAlertId, channelId);
+        assertReliability(successAlertId, null, null, false);
+
+        var retryableCases = List.of(
+            new FailureCase("timeout", null, "webhook_timeout"),
+            new FailureCase("connection_error", null, "webhook_connection_failed: ConnectException"),
+            new FailureCase("http_408", 408, "webhook_http_408"),
+            new FailureCase("http_429", 429, "webhook_http_429"),
+            new FailureCase("http_5xx", 503, "webhook_http_503")
+        );
+        for (var testCase : retryableCases) {
+            var alertId = insertAlert("retryable " + testCase.expectedType(), "open");
+            webhookClient.nextResult = new WebhookDeliveryResult(
+                "failed",
+                testCase.responseCode(),
+                "failure " + testCase.expectedType(),
+                testCase.message()
+            );
+
+            service.send(alertId, channelId);
+
+            assertReliability(alertId, testCase.expectedType(), testCase.message(), true);
+        }
+    }
+
+    @Test
+    void recordsStructuredReliabilityFieldsForNonRetryableFailures() {
+        var webhookChannelId = insertChannel("webhook", "http://example.test/webhook?token=secret", true);
+
+        var cases = List.of(
+            new FailureCase("http_4xx", 400, "webhook_http_400"),
+            new FailureCase("unknown_error", null, "unexpected_failure")
+        );
+        for (var testCase : cases) {
+            var alertId = insertAlert("non retryable " + testCase.expectedType(), "open");
+            webhookClient.nextResult = new WebhookDeliveryResult(
+                "failed",
+                testCase.responseCode(),
+                "failure " + testCase.expectedType(),
+                testCase.message()
+            );
+
+            service.send(alertId, webhookChannelId);
+
+            assertReliability(alertId, testCase.expectedType(), testCase.message(), false);
+        }
+
+        var unsupportedAlertId = insertAlert("unsupported adapter result", "open");
+        var feishuChannelId = insertChannel(
+            "feishu",
+            "https://open.feishu.cn/open-apis/bot/v2/hook/FEISHUTOKEN123456",
+            true
+        );
+        feishuAdapter.nextResult = new WebhookDeliveryResult("failed", null, "unsupported", "unsupported_channel");
+        service.send(unsupportedAlertId, feishuChannelId);
+        assertReliability(unsupportedAlertId, "unsupported_channel", "unsupported_channel", false);
+
+        var providerAlertId = insertAlert("provider business failure", "open");
+        feishuAdapter.nextResult = new WebhookDeliveryResult("failed", 200, "{\"code\":9499}", "feishu_code_9499");
+        service.send(providerAlertId, feishuChannelId);
+        assertReliability(providerAlertId, "provider_business_error", "feishu_code_9499", false);
+
+        var weComChannelId = insertChannel(
+            "wecom",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+            true
+        );
+        var malformedAlertId = insertAlert("malformed wecom failure", "open");
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 200, "not-json", "ok");
+        service.send(malformedAlertId, weComChannelId);
+        assertReliability(malformedAlertId, "malformed_response", "wecom_malformed_response", false);
+
+        var invalidEndpointAlertId = insertAlert("invalid endpoint failure", "open");
+        var invalidWeComChannelId = insertChannel(
+            "wecom",
+            "http://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456",
+            true
+        );
+        service.send(invalidEndpointAlertId, invalidWeComChannelId);
+        assertReliability(invalidEndpointAlertId, "invalid_endpoint", "invalid_wecom_webhook_url", false);
     }
 
     @Test
@@ -265,7 +358,7 @@ class AlertNotificationServiceTest {
     }
 
     @Test
-    void rejectsInvalidWeComUrlBeforeWritingDelivery() {
+    void recordsInvalidWeComUrlAsNonRetryableFailedDelivery() {
         var alertId = insertAlert("wecom invalid", "open");
         var channelId = insertChannel(
             "wecom",
@@ -273,9 +366,86 @@ class AlertNotificationServiceTest {
             true
         );
 
-        assertStatus(HttpStatus.BAD_REQUEST, "invalid_wecom_webhook_url", () -> service.send(alertId, channelId));
-        assertEquals(0L, countDeliveries());
+        var result = service.send(alertId, channelId);
+
+        assertEquals("failed", result.get("status"));
+        assertEquals("invalid_wecom_webhook_url", result.get("message"));
+        assertReliability(alertId, "invalid_endpoint", "invalid_wecom_webhook_url", false);
         assertEquals(0, webhookClient.calls);
+    }
+
+    @Test
+    void retryCreatesNewDeliveryThroughAlertBasedPathAndOnlyIncrementsOriginalRetryCount() {
+        var alertId = insertAlert("retry source", "open");
+        var channelId = insertChannel("webhook", "http://example.test/webhook?token=secret", true);
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", 503, "server down", "webhook_http_503");
+        var original = service.send(alertId, channelId);
+        var originalDeliveryId = ((Number) original.get("deliveryId")).longValue();
+        var originalBefore = deliveryRow(originalDeliveryId);
+
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", 500, "still down", "webhook_http_500");
+        var firstRetry = service.retryDelivery(originalDeliveryId);
+        var firstRetryDeliveryId = ((Number) firstRetry.get("deliveryId")).longValue();
+
+        assertEquals(2L, countDeliveries());
+        assertEquals(1, ((Number) deliveryRow(originalDeliveryId).get("retry_count")).intValue());
+        assertEquals(0, ((Number) deliveryRow(firstRetryDeliveryId).get("retry_count")).intValue());
+        assertEquals(originalDeliveryId, ((Number) deliveryRow(firstRetryDeliveryId).get("retry_of_delivery_id")).longValue());
+        assertOriginalDeliveryUnchangedExceptRetryCount(originalBefore, deliveryRow(originalDeliveryId));
+        assertEquals("failed", firstRetry.get("status"));
+
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 204, "accepted", "webhook_delivered");
+        var secondRetry = service.retryDelivery(firstRetryDeliveryId);
+        var secondRetryDeliveryId = ((Number) secondRetry.get("deliveryId")).longValue();
+
+        assertEquals(3L, countDeliveries());
+        assertEquals(1, ((Number) deliveryRow(firstRetryDeliveryId).get("retry_count")).intValue());
+        assertEquals(firstRetryDeliveryId, ((Number) deliveryRow(secondRetryDeliveryId).get("retry_of_delivery_id")).longValue());
+        assertEquals(0, ((Number) deliveryRow(secondRetryDeliveryId).get("retry_count")).intValue());
+        assertEquals("success", secondRetry.get("status"));
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
+    }
+
+    @Test
+    void retryRejectsInvalidSourcesWithoutWritingOrMutatingDeliveries() {
+        var openAlertId = insertAlert("open retry reject", "open");
+        var closedAlertId = insertAlert("closed retry reject", "closed");
+        var enabledChannelId = insertChannel("webhook", "http://example.test/webhook", true);
+        var disabledChannelId = insertChannel("webhook", "http://example.test/disabled", false);
+        var unsupportedChannelId = insertChannel("email", "http://example.test/email", true);
+        var successDeliveryId = insertDelivery(enabledChannelId, openAlertId, "success", false);
+        var nonRetryableDeliveryId = insertDelivery(enabledChannelId, openAlertId, "failed", false);
+        var missingAlertDeliveryId = insertDelivery(enabledChannelId, 999999L, "failed", true);
+        var closedAlertDeliveryId = insertDelivery(enabledChannelId, closedAlertId, "failed", true);
+        var missingChannelDeliveryId = insertDelivery(999999L, openAlertId, "failed", true);
+        var disabledChannelDeliveryId = insertDelivery(disabledChannelId, openAlertId, "failed", true);
+        var unsupportedChannelDeliveryId = insertDelivery(unsupportedChannelId, openAlertId, "failed", true);
+        var beforeCount = countDeliveries();
+
+        assertStatus(HttpStatus.NOT_FOUND, "delivery_not_found", () -> service.retryDelivery(999999L));
+        assertStatus(HttpStatus.BAD_REQUEST, "delivery_not_failed", () -> service.retryDelivery(successDeliveryId));
+        assertStatus(HttpStatus.BAD_REQUEST, "delivery_not_retryable", () -> service.retryDelivery(nonRetryableDeliveryId));
+        assertStatus(HttpStatus.NOT_FOUND, "alert_not_found", () -> service.retryDelivery(missingAlertDeliveryId));
+        assertStatus(HttpStatus.BAD_REQUEST, "alert_not_open", () -> service.retryDelivery(closedAlertDeliveryId));
+        assertStatus(HttpStatus.NOT_FOUND, "channel_not_found", () -> service.retryDelivery(missingChannelDeliveryId));
+        assertStatus(HttpStatus.BAD_REQUEST, "channel_disabled", () -> service.retryDelivery(disabledChannelDeliveryId));
+        assertStatus(HttpStatus.BAD_REQUEST, "unsupported_channel", () -> service.retryDelivery(unsupportedChannelDeliveryId));
+
+        assertEquals(beforeCount, countDeliveries());
+        for (var deliveryId : List.of(
+            successDeliveryId,
+            nonRetryableDeliveryId,
+            missingAlertDeliveryId,
+            closedAlertDeliveryId,
+            missingChannelDeliveryId,
+            disabledChannelDeliveryId,
+            unsupportedChannelDeliveryId
+        )) {
+            assertEquals(0, ((Number) deliveryRow(deliveryId).get("retry_count")).intValue());
+        }
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(openAlertId));
     }
 
     private void assertStatus(HttpStatus status, Runnable action) {
@@ -337,6 +507,61 @@ class AlertNotificationServiceTest {
             Long.class,
             status
         );
+    }
+
+    private void assertReliability(Long alertId, String failureType, String failureReason, boolean retryable) {
+        var row = jdbcTemplate.queryForMap("""
+            select failure_type, failure_reason, retryable
+            from notification_deliveries
+            where alert_id = ?
+            order by id desc
+            limit 1
+            """, alertId);
+        assertEquals(failureType, row.get("failure_type"));
+        assertEquals(failureReason, row.get("failure_reason"));
+        assertEquals(retryable, row.get("retryable"));
+    }
+
+    private Long insertDelivery(Long channelId, Long alertId, String status, boolean retryable) {
+        return insertAndReturnId("""
+            insert into notification_deliveries(
+                channel_id, alert_id, title, severity, status, response_code, response_body,
+                payload_json, failure_type, failure_reason, retryable
+            )
+            values (?, ?, 'seed delivery', 'high', ?, 500, 'seed body',
+                cast('{}' as jsonb), ?, 'seed reason', ?)
+            """, channelId, alertId, status, retryable ? "http_5xx" : "http_4xx", retryable);
+    }
+
+    private Map<String, Object> deliveryRow(Long deliveryId) {
+        return jdbcTemplate.queryForMap("select * from notification_deliveries where id = ?", deliveryId);
+    }
+
+    private void assertOriginalDeliveryUnchangedExceptRetryCount(
+        Map<String, Object> before,
+        Map<String, Object> after
+    ) {
+        for (var key : List.of(
+            "status",
+            "response_body",
+            "payload_json",
+            "failure_type",
+            "failure_reason",
+            "retryable",
+            "retry_of_delivery_id"
+        )) {
+            assertEquals(normalizeDbValue(before.get(key)), normalizeDbValue(after.get(key)));
+        }
+    }
+
+    private Object normalizeDbValue(Object value) {
+        if (value instanceof byte[] bytes) {
+            return new String(bytes);
+        }
+        return value;
+    }
+
+    private record FailureCase(String expectedType, Integer responseCode, String message) {
     }
 
     private long countAlertLifecycleEvents() {

@@ -13,12 +13,14 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -35,6 +37,9 @@ class NotificationControllerTest {
 
         Method send = NotificationController.class.getMethod("sendAlert", AlertNotificationSendRequest.class);
         assertArrayEquals(new String[] {"/alerts/send"}, send.getAnnotation(PostMapping.class).value());
+
+        Method retry = NotificationController.class.getMethod("retryDelivery", long.class, Map.class);
+        assertArrayEquals(new String[] {"/deliveries/{id}/retry"}, retry.getAnnotation(PostMapping.class).value());
     }
 
     @Test
@@ -101,10 +106,13 @@ class NotificationControllerTest {
 
         var sent = controller.sendAlert(new AlertNotificationSendRequest(123L, 456L));
         var deliveries = controller.listDeliveries(75, 123L, "failed", "wecom", 456L);
+        var retried = controller.retryDelivery(77L, Map.of());
 
         assertEquals(123L, alertNotificationService.alertId);
         assertEquals(456L, alertNotificationService.channelId);
+        assertEquals(77L, alertNotificationService.retryDeliveryId);
         assertEquals("success", sent.data().get("status"));
+        assertEquals("failed", retried.data().get("status"));
         assertEquals(75, notificationService.limit);
         assertEquals(123L, notificationService.alertId);
         assertEquals("failed", notificationService.status);
@@ -167,6 +175,50 @@ class NotificationControllerTest {
             .andExpect(jsonPath("$.message").value("invalid_request_contract"));
 
         assertEquals(null, alertNotificationService.alertId);
+    }
+
+    @Test
+    void retryDeliveryHttpRejectsAnyBusinessRequestBody() throws Exception {
+        var alertNotificationService = new StubAlertNotificationService();
+        var mvc = mockMvc(new NotificationController(new StubNotificationService(), alertNotificationService));
+
+        for (var field : List.of("alertId", "channelId", "title", "message", "severity", "payload")) {
+            mvc.perform(post("/api/notifications/deliveries/77/retry")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"" + field + "\":\"must not be accepted\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("invalid_request_contract"));
+        }
+
+        assertEquals(null, alertNotificationService.retryDeliveryId);
+    }
+
+    @Test
+    void retryDeliveryHttpAllowsEmptyBodyAndDelegatesByDeliveryIdOnly() throws Exception {
+        var alertNotificationService = new StubAlertNotificationService();
+        var mvc = mockMvc(new NotificationController(new StubNotificationService(), alertNotificationService));
+
+        mvc.perform(post("/api/notifications/deliveries/77/retry")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true))
+            .andExpect(jsonPath("$.data.deliveryId").value(88));
+
+        assertEquals(77L, alertNotificationService.retryDeliveryId);
+    }
+
+    @Test
+    void retryDeliveryHttpPropagatesExplicitRetryErrors() throws Exception {
+        var alertNotificationService = new StubAlertNotificationService();
+        alertNotificationService.retryError = new ResponseStatusException(HttpStatus.BAD_REQUEST, "delivery_not_retryable");
+        var mvc = mockMvc(new NotificationController(new StubNotificationService(), alertNotificationService));
+
+        mvc.perform(post("/api/notifications/deliveries/77/retry"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("delivery_not_retryable"));
     }
 
     @Test
@@ -239,6 +291,8 @@ class NotificationControllerTest {
     private static class StubAlertNotificationService extends AlertNotificationService {
         private Long alertId;
         private Long channelId;
+        private Long retryDeliveryId;
+        private ResponseStatusException retryError;
 
         StubAlertNotificationService() {
             super(null, null, null);
@@ -249,6 +303,15 @@ class NotificationControllerTest {
             this.alertId = alertId;
             this.channelId = channelId;
             return Map.of("status", "success");
+        }
+
+        @Override
+        public Map<String, Object> retryDelivery(long deliveryId) {
+            if (retryError != null) {
+                throw retryError;
+            }
+            this.retryDeliveryId = deliveryId;
+            return Map.of("deliveryId", 88L, "status", "failed");
         }
     }
 }

@@ -91,6 +91,17 @@ public class NotificationController {
         return ApiResponse.ok(alertNotificationService.send(request.alertId(), request.channelId()));
     }
 
+    @PostMapping("/deliveries/{id}/retry")
+    public ApiResponse<Map<String, Object>> retryDelivery(
+        @PathVariable("id") long id,
+        @RequestBody(required = false) Map<String, Object> request
+    ) {
+        if (request != null && !request.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_request_contract");
+        }
+        return ApiResponse.ok(alertNotificationService.retryDelivery(id));
+    }
+
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentNotValidException.class})
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ApiResponse<Map<String, Object>> invalidRequestContract() {

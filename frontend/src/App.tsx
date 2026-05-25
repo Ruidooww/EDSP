@@ -78,7 +78,7 @@ const userMenuItems: MenuProps['items'] = [
   { key: 'logout', label: '退出登录' },
 ];
 
-function renderPage(page: PageKey) {
+function renderPage(page: PageKey, onNavigate: (page: PageKey) => void) {
   switch (page) {
     case 'sources':
       return <DataSourcesPage />;
@@ -99,7 +99,7 @@ function renderPage(page: PageKey) {
     case 'settings':
       return <SettingsPage />;
     default:
-      return <DashboardPage />;
+      return <DashboardPage onNavigate={onNavigate} />;
   }
 }
 
@@ -459,7 +459,7 @@ function App() {
             </Space>
           </Header>
 
-          <Content className="page-content">{renderPage(activePage)}</Content>
+          <Content className="page-content">{renderPage(activePage, setActivePage)}</Content>
         </Layout>
       </Layout>
 

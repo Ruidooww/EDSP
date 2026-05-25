@@ -304,6 +304,65 @@ export interface OverviewAlertRow extends AlertRow {
   updated_at?: string;
 }
 
+export interface OverviewSecurityOperations {
+  totalAlerts: number;
+  openAlerts: number;
+  acknowledgedAlerts: number;
+  closedAlerts: number;
+  highRiskAlerts: number;
+  todayAlerts: number;
+}
+
+export interface OverviewNotificationDelivery {
+  todayTotal: number;
+  todaySuccess: number;
+  todayFailed: number;
+  todaySuccessRate: number;
+  retryableFailed: number;
+  byFailureType: Record<string, number>;
+  recentFailed: OverviewNotificationDeliveryRow[];
+}
+
+export interface OverviewNotificationDeliveryRow {
+  id: number;
+  channel_id?: number;
+  channel_name?: string;
+  channel_type?: string;
+  alert_id?: number;
+  alert_title?: string;
+  title: string;
+  status: string;
+  response_code?: number;
+  failure_type?: string | null;
+  failure_reason?: string | null;
+  retryable: boolean;
+  retry_count: number;
+  retry_of_delivery_id?: number | null;
+  created_at: string | number;
+}
+
+export interface OverviewNotificationChannels {
+  total: number;
+  enabled: number;
+  disabled: number;
+  byType: Record<string, number>;
+}
+
+export interface OverviewLifecycleEventRow {
+  id: number;
+  alert_id: number;
+  alertId?: number;
+  alert_title: string;
+  alertTitle?: string;
+  event_type: string;
+  eventType?: string;
+  operator_name: string;
+  operatorName?: string;
+  assignee?: string;
+  created_at: string | number;
+  createdAt?: string | number;
+}
+
 export interface OverviewData {
   requestTime: string;
   dataSources: {
@@ -347,6 +406,10 @@ export interface OverviewData {
     byStatus: Record<string, number>;
   };
   recentDataSources: OverviewDataSourceRow[];
+  securityOperations: OverviewSecurityOperations;
+  notificationDelivery: OverviewNotificationDelivery;
+  notificationChannels: OverviewNotificationChannels;
+  recentLifecycleEvents: OverviewLifecycleEventRow[];
 }
 
 export interface CollectionTaskRow {

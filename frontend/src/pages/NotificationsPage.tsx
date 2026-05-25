@@ -20,10 +20,28 @@ interface NotificationChannelFormValues {
   enabled: boolean;
 }
 
+interface DeliveryFilters {
+  alertId: number | null;
+  status: string;
+  channelType: string;
+  channelId: number | null;
+}
+
 const CHANNEL_TYPE_OPTIONS = [
   { value: 'webhook', label: 'Webhook' },
   { value: 'wecom', label: '企业微信' },
   { value: 'feishu', label: '飞书' },
+];
+
+const DELIVERY_STATUS_OPTIONS = [
+  { value: '', label: '全部状态' },
+  { value: 'success', label: '成功' },
+  { value: 'failed', label: '失败' },
+];
+
+const DELIVERY_CHANNEL_TYPE_OPTIONS = [
+  { value: '', label: '全部通道类型' },
+  ...CHANNEL_TYPE_OPTIONS,
 ];
 
 function channelTypeLabel(value: string) {
@@ -31,8 +49,6 @@ function channelTypeLabel(value: string) {
     webhook: 'Webhook',
     wecom: '企业微信',
     feishu: '飞书',
-    sms: '短信',
-    email: '邮件',
   }[value] ?? value;
 }
 
@@ -90,25 +106,54 @@ function payloadText(value?: NotificationDeliveryRow['payload_json']) {
   return JSON.stringify(value, null, 2);
 }
 
+function responseText(value?: string) {
+  return value?.trim() || '-';
+}
+
 export default function NotificationsPage() {
   const [rows, setRows] = useState<NotificationChannelRow[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [deliveryAlertId, setDeliveryAlertId] = useState<number | null>(null);
+  const [deliveryStatus, setDeliveryStatus] = useState('');
+  const [deliveryChannelType, setDeliveryChannelType] = useState('');
+  const [deliveryChannelId, setDeliveryChannelId] = useState<number | null>(null);
   const [activeDelivery, setActiveDelivery] = useState<NotificationDeliveryRow | null>(null);
   const [form] = Form.useForm<NotificationChannelFormValues>();
 
-  function deliveriesPath(alertId = deliveryAlertId) {
-    return `/api/notifications/deliveries?limit=50${alertId ? `&alertId=${alertId}` : ''}`;
+  function currentDeliveryFilters(): DeliveryFilters {
+    return {
+      alertId: deliveryAlertId,
+      status: deliveryStatus,
+      channelType: deliveryChannelType,
+      channelId: deliveryChannelId,
+    };
   }
 
-  async function load(alertId = deliveryAlertId) {
+  function deliveriesPath(filters = currentDeliveryFilters()) {
+    const params = new URLSearchParams({ limit: '50' });
+    if (filters.alertId) {
+      params.set('alertId', String(filters.alertId));
+    }
+    if (filters.status) {
+      params.set('status', filters.status);
+    }
+    if (filters.channelType) {
+      params.set('channelType', filters.channelType);
+    }
+    if (filters.channelId) {
+      params.set('channelId', String(filters.channelId));
+    }
+    return `/api/notifications/deliveries?${params.toString()}`;
+  }
+
+  async function load(filters = currentDeliveryFilters()) {
     setLoading(true);
     try {
       const [channelRows, deliveryRows] = await Promise.all([
         apiGet<NotificationChannelRow[]>('/api/notifications/channels'),
-        apiGet<NotificationDeliveryRow[]>(deliveriesPath(alertId)),
+        apiGet<NotificationDeliveryRow[]>(deliveriesPath(filters)),
       ]);
       setRows(channelRows);
       setDeliveries(deliveryRows);
@@ -120,9 +165,22 @@ export default function NotificationsPage() {
     }
   }
 
-  async function applyDeliveryAlertFilter(value: number | null) {
-    setDeliveryAlertId(value);
-    await load(value);
+  async function applyDeliveryFilters() {
+    await load();
+  }
+
+  async function resetDeliveryFilters() {
+    const filters: DeliveryFilters = {
+      alertId: null,
+      status: '',
+      channelType: '',
+      channelId: null,
+    };
+    setDeliveryAlertId(filters.alertId);
+    setDeliveryStatus(filters.status);
+    setDeliveryChannelType(filters.channelType);
+    setDeliveryChannelId(filters.channelId);
+    await load(filters);
   }
 
   useEffect(() => {
@@ -250,7 +308,11 @@ export default function NotificationsPage() {
       title: '响应',
       dataIndex: 'response_body',
       ellipsis: true,
-      render: (value?: string) => value || '-',
+      render: (value?: string) => (
+        <Typography.Text code ellipsis>
+          {responseText(value)}
+        </Typography.Text>
+      ),
     },
     {
       title: '发送时间',
@@ -308,6 +370,25 @@ export default function NotificationsPage() {
         发送记录
       </Typography.Title>
       <Space className="form-hint" wrap>
+        <Select
+          style={{ width: 140 }}
+          value={deliveryStatus}
+          options={DELIVERY_STATUS_OPTIONS}
+          onChange={setDeliveryStatus}
+        />
+        <Select
+          style={{ width: 160 }}
+          value={deliveryChannelType}
+          options={DELIVERY_CHANNEL_TYPE_OPTIONS}
+          onChange={setDeliveryChannelType}
+        />
+        <InputNumber
+          min={1}
+          precision={0}
+          placeholder="Channel ID"
+          value={deliveryChannelId ?? undefined}
+          onChange={(value) => setDeliveryChannelId(typeof value === 'number' ? value : null)}
+        />
         <InputNumber
           min={1}
           precision={0}
@@ -315,10 +396,10 @@ export default function NotificationsPage() {
           value={deliveryAlertId ?? undefined}
           onChange={(value) => setDeliveryAlertId(typeof value === 'number' ? value : null)}
         />
-        <Button type="primary" onClick={() => applyDeliveryAlertFilter(deliveryAlertId)}>
-          按告警查询
+        <Button type="primary" onClick={applyDeliveryFilters}>
+          查询
         </Button>
-        <Button onClick={() => applyDeliveryAlertFilter(null)}>查看全部</Button>
+        <Button onClick={resetDeliveryFilters}>查看全部</Button>
       </Space>
       <Table<NotificationDeliveryRow>
         rowKey="id"
@@ -373,12 +454,20 @@ export default function NotificationsPage() {
                 {activeDelivery.alert_title || '-'} {activeDelivery.alert_id ? `/#${activeDelivery.alert_id}` : ''}
               </Descriptions.Item>
               <Descriptions.Item label="HTTP 状态">{activeDelivery.response_code ?? '-'}</Descriptions.Item>
-              <Descriptions.Item label="响应内容">{activeDelivery.response_body || '-'}</Descriptions.Item>
               <Descriptions.Item label="发送时间">{formatTime(activeDelivery.created_at)}</Descriptions.Item>
             </Descriptions>
-            <Typography.Paragraph className="json-preview">
-              <pre>{payloadText(activeDelivery.payload_json)}</pre>
-            </Typography.Paragraph>
+            <div>
+              <Typography.Text strong>已脱敏响应预览</Typography.Text>
+              <Typography.Paragraph className="json-preview">
+                <pre>{responseText(activeDelivery.response_body)}</pre>
+              </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text strong>已脱敏载荷预览</Typography.Text>
+              <Typography.Paragraph className="json-preview">
+                <pre>{payloadText(activeDelivery.payload_json)}</pre>
+              </Typography.Paragraph>
+            </div>
           </Space>
         )}
       </Drawer>

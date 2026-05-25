@@ -48,9 +48,12 @@ public class NotificationController {
     @GetMapping("/deliveries")
     public ApiResponse<List<Map<String, Object>>> listDeliveries(
         @RequestParam(value = "limit", defaultValue = "50") int limit,
-        @RequestParam(value = "alertId", required = false) Long alertId
+        @RequestParam(value = "alertId", required = false) Long alertId,
+        @RequestParam(value = "status", required = false) String status,
+        @RequestParam(value = "channelType", required = false) String channelType,
+        @RequestParam(value = "channelId", required = false) Long channelId
     ) {
-        return ApiResponse.ok(notificationService.listDeliveries(limit, alertId));
+        return ApiResponse.ok(notificationService.listDeliveries(limit, alertId, status, channelType, channelId));
     }
 
     @PostMapping("/channels")

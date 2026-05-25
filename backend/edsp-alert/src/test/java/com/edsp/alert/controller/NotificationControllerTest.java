@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,12 +39,25 @@ class NotificationControllerTest {
 
     @Test
     void deliveriesRouteAcceptsOptionalAlertIdFilter() throws Exception {
-        Method listDeliveries = NotificationController.class.getMethod("listDeliveries", int.class, Long.class);
+        Method listDeliveries = NotificationController.class.getMethod(
+            "listDeliveries",
+            int.class,
+            Long.class,
+            String.class,
+            String.class,
+            Long.class
+        );
 
         assertArrayEquals(new String[] {"/deliveries"}, listDeliveries.getAnnotation(GetMapping.class).value());
         assertEquals("50", listDeliveries.getParameters()[0].getAnnotation(RequestParam.class).defaultValue());
         assertEquals("alertId", listDeliveries.getParameters()[1].getAnnotation(RequestParam.class).value());
         assertEquals(false, listDeliveries.getParameters()[1].getAnnotation(RequestParam.class).required());
+        assertEquals("status", listDeliveries.getParameters()[2].getAnnotation(RequestParam.class).value());
+        assertEquals(false, listDeliveries.getParameters()[2].getAnnotation(RequestParam.class).required());
+        assertEquals("channelType", listDeliveries.getParameters()[3].getAnnotation(RequestParam.class).value());
+        assertEquals(false, listDeliveries.getParameters()[3].getAnnotation(RequestParam.class).required());
+        assertEquals("channelId", listDeliveries.getParameters()[4].getAnnotation(RequestParam.class).value());
+        assertEquals(false, listDeliveries.getParameters()[4].getAnnotation(RequestParam.class).required());
     }
 
     @Test
@@ -86,14 +100,37 @@ class NotificationControllerTest {
         var controller = new NotificationController(notificationService, alertNotificationService);
 
         var sent = controller.sendAlert(new AlertNotificationSendRequest(123L, 456L));
-        var deliveries = controller.listDeliveries(75, 123L);
+        var deliveries = controller.listDeliveries(75, 123L, "failed", "wecom", 456L);
 
         assertEquals(123L, alertNotificationService.alertId);
         assertEquals(456L, alertNotificationService.channelId);
         assertEquals("success", sent.data().get("status"));
         assertEquals(75, notificationService.limit);
         assertEquals(123L, notificationService.alertId);
+        assertEquals("failed", notificationService.status);
+        assertEquals("wecom", notificationService.channelType);
+        assertEquals(456L, notificationService.deliveryChannelId);
         assertEquals("delivery", deliveries.data().get(0).get("status"));
+    }
+
+    @Test
+    void deliveriesHttpRejectsInvalidStatusAndChannelTypeFilters() throws Exception {
+        var mvc = mockMvc(new NotificationController(
+            new NotificationService(null, null),
+            new StubAlertNotificationService()
+        ));
+
+        mvc.perform(get("/api/notifications/deliveries")
+                .param("status", "pending"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_delivery_status"));
+
+        mvc.perform(get("/api/notifications/deliveries")
+                .param("channelType", "email"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("unsupported_channel"));
     }
 
     @Test
@@ -174,15 +211,27 @@ class NotificationControllerTest {
     private static class StubNotificationService extends NotificationService {
         private int limit;
         private Long alertId;
+        private String status;
+        private String channelType;
+        private Long deliveryChannelId;
 
         StubNotificationService() {
             super(null, null);
         }
 
         @Override
-        public List<Map<String, Object>> listDeliveries(int limit, Long alertId) {
+        public List<Map<String, Object>> listDeliveries(
+            int limit,
+            Long alertId,
+            String status,
+            String channelType,
+            Long channelId
+        ) {
             this.limit = limit;
             this.alertId = alertId;
+            this.status = status;
+            this.channelType = channelType;
+            this.deliveryChannelId = channelId;
             return List.of(Map.of("status", "delivery"));
         }
     }

@@ -86,7 +86,7 @@ class NotificationServiceTest {
     void listDeliveriesCanFilterByAlertIdWithoutChangingDefaultLimitBehavior() {
         var firstAlertId = insertAlert("first alert");
         var secondAlertId = insertAlert("second alert");
-        var channelId = insertChannel();
+        var channelId = insertChannel("webhook");
         insertDelivery(channelId, firstAlertId, "first");
         insertDelivery(channelId, secondAlertId, "second");
 
@@ -96,6 +96,90 @@ class NotificationServiceTest {
         assertEquals(2, all.size());
         assertEquals(1, filtered.size());
         assertEquals(firstAlertId, ((Number) filtered.get(0).get("alert_id")).longValue());
+    }
+
+    @Test
+    void listDeliveriesCanFilterBySuccessAndFailedStatus() {
+        var alertId = insertAlert("status alert");
+        var channelId = insertChannel("webhook");
+        insertDelivery(channelId, alertId, "success delivery", "success");
+        insertDelivery(channelId, alertId, "failed delivery", "failed");
+
+        var success = service.listDeliveries(50, null, "success", null, null);
+        var failed = service.listDeliveries(50, null, "failed", null, null);
+
+        assertEquals(1, success.size());
+        assertEquals("success", success.get(0).get("status"));
+        assertEquals(1, failed.size());
+        assertEquals("failed", failed.get(0).get("status"));
+    }
+
+    @Test
+    void listDeliveriesCanFilterBySupportedChannelTypes() {
+        var alertId = insertAlert("channel type alert");
+        insertDelivery(insertChannel("webhook"), alertId, "webhook delivery");
+        insertDelivery(insertChannel("wecom"), alertId, "wecom delivery");
+        insertDelivery(insertChannel("feishu"), alertId, "feishu delivery");
+
+        for (var channelType : List.of("webhook", "wecom", "feishu")) {
+            var deliveries = service.listDeliveries(50, null, null, channelType, null);
+
+            assertEquals(1, deliveries.size());
+            assertEquals(channelType, deliveries.get(0).get("channel_type"));
+        }
+    }
+
+    @Test
+    void listDeliveriesCanFilterByChannelId() {
+        var alertId = insertAlert("channel id alert");
+        var firstChannelId = insertChannel("webhook");
+        var secondChannelId = insertChannel("webhook");
+        insertDelivery(firstChannelId, alertId, "first channel");
+        insertDelivery(secondChannelId, alertId, "second channel");
+
+        var deliveries = service.listDeliveries(50, null, null, null, firstChannelId);
+
+        assertEquals(1, deliveries.size());
+        assertEquals(firstChannelId, ((Number) deliveries.get(0).get("channel_id")).longValue());
+    }
+
+    @Test
+    void listDeliveriesCanCombineAlertStatusChannelTypeAndChannelIdFilters() {
+        var targetAlertId = insertAlert("target alert");
+        var otherAlertId = insertAlert("other alert");
+        var targetChannelId = insertChannel("wecom");
+        var otherChannelId = insertChannel("wecom");
+        insertDelivery(targetChannelId, targetAlertId, "target", "failed");
+        insertDelivery(targetChannelId, targetAlertId, "wrong status", "success");
+        insertDelivery(targetChannelId, otherAlertId, "wrong alert", "failed");
+        insertDelivery(otherChannelId, targetAlertId, "wrong channel", "failed");
+        insertDelivery(insertChannel("webhook"), targetAlertId, "wrong type", "failed");
+
+        var deliveries = service.listDeliveries(50, targetAlertId, "failed", "wecom", targetChannelId);
+
+        assertEquals(1, deliveries.size());
+        assertEquals("target", deliveries.get(0).get("title"));
+        assertEquals(targetAlertId, ((Number) deliveries.get(0).get("alert_id")).longValue());
+        assertEquals(targetChannelId, ((Number) deliveries.get(0).get("channel_id")).longValue());
+        assertEquals("failed", deliveries.get(0).get("status"));
+        assertEquals("wecom", deliveries.get(0).get("channel_type"));
+    }
+
+    @Test
+    void listDeliveriesRejectsUnsupportedStatusAndChannelTypeFilters() {
+        var invalidStatus = assertThrows(
+            ResponseStatusException.class,
+            () -> service.listDeliveries(50, null, "pending", null, null)
+        );
+        var invalidChannelType = assertThrows(
+            ResponseStatusException.class,
+            () -> service.listDeliveries(50, null, null, "email", null)
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, invalidStatus.getStatusCode());
+        assertEquals("invalid_delivery_status", invalidStatus.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, invalidChannelType.getStatusCode());
+        assertEquals("unsupported_channel", invalidChannelType.getReason());
     }
 
     @Test
@@ -299,17 +383,25 @@ class NotificationServiceTest {
         return insertAndReturnId("insert into alerts(title, severity, status) values (?, 'high', 'open')", title);
     }
 
-    private Long insertChannel() {
-        return insertAndReturnId("insert into notification_channels(name, channel_type) values ('webhook', 'webhook')");
+    private Long insertChannel(String channelType) {
+        return insertAndReturnId(
+            "insert into notification_channels(name, channel_type) values (?, ?)",
+            channelType,
+            channelType
+        );
     }
 
     private void insertDelivery(Long channelId, Long alertId, String title) {
+        insertDelivery(channelId, alertId, title, "success");
+    }
+
+    private void insertDelivery(Long channelId, Long alertId, String title, String status) {
         jdbcTemplate.update("""
             insert into notification_deliveries(
                 channel_id, alert_id, title, severity, status, response_code, response_body, payload_json
             )
-            values (?, ?, ?, 'high', 'success', 200, 'ok', cast('{}' as jsonb))
-            """, channelId, alertId, title);
+            values (?, ?, ?, 'high', ?, 200, 'ok', cast('{}' as jsonb))
+            """, channelId, alertId, title, status);
     }
 
     private Long insertAndReturnId(String sql, Object... args) {

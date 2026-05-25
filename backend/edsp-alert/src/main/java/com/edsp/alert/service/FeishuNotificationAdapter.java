@@ -15,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class FeishuNotificationAdapter implements NotificationChannelAdapter {
     private static final String FEISHU_HOST = "open.feishu.cn";
     private static final String FEISHU_PATH_PREFIX = "/open-apis/bot/v2/hook/";
+    private static final NotificationSecretSanitizer SECRET_SANITIZER = new NotificationSecretSanitizer();
 
     private final WebhookClient webhookClient;
     private final ObjectMapper objectMapper;
@@ -32,14 +33,14 @@ public class FeishuNotificationAdapter implements NotificationChannelAdapter {
     @Override
     public WebhookDeliveryResult send(Map<String, Object> alert, Map<String, Object> channel, String payloadJson) {
         var endpointUrl = channel.get("endpoint_url") == null ? "" : String.valueOf(channel.get("endpoint_url")).trim();
-        var token = validateEndpoint(endpointUrl);
+        validateEndpoint(endpointUrl);
 
         var rawResult = webhookClient.postJson(endpointUrl, toJson(feishuPayload(alert)));
         var result = new WebhookDeliveryResult(
             rawResult.status(),
             rawResult.responseCode(),
-            clean(rawResult.responseBody(), token),
-            clean(rawResult.message(), token)
+            clean(rawResult.responseBody(), endpointUrl),
+            clean(rawResult.message(), endpointUrl)
         );
         if (!"success".equals(result.status())) {
             var reason = result.responseCode() == null
@@ -57,7 +58,7 @@ public class FeishuNotificationAdapter implements NotificationChannelAdapter {
                 "failed",
                 result.responseCode(),
                 result.responseBody(),
-                clean("feishu_status_code_" + response.get("StatusCode"), token)
+                clean("feishu_status_code_" + response.get("StatusCode"), endpointUrl)
             );
         }
         if (response.containsKey("code")) {
@@ -65,7 +66,7 @@ public class FeishuNotificationAdapter implements NotificationChannelAdapter {
                 "failed",
                 result.responseCode(),
                 result.responseBody(),
-                clean("feishu_code_" + response.get("code"), token)
+                clean("feishu_code_" + response.get("code"), endpointUrl)
             );
         }
         return new WebhookDeliveryResult(
@@ -158,11 +159,8 @@ public class FeishuNotificationAdapter implements NotificationChannelAdapter {
         }
     }
 
-    private String clean(String value, String token) {
-        if (value == null || value.isBlank()) {
-            return "";
-        }
-        return token == null || token.isBlank() ? value : value.replace(token, "[redacted]");
+    private String clean(String value, String endpointUrl) {
+        return SECRET_SANITIZER.redactText(value, endpointUrl);
     }
 
     private String stringOrBlank(Object value) {

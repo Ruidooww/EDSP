@@ -200,6 +200,58 @@ class AlertNotificationServiceTest {
     }
 
     @Test
+    void finalRedactionGuardSanitizesDeliveryStorageAndSendResult() {
+        var alertId = insertAlert("secret guard alert", "open");
+        var endpoint = "http://example.test/webhook?token=WEBHOOKTOKEN123456";
+        var channelId = insertChannel("webhook", endpoint, true);
+        webhookClient.nextResult = new WebhookDeliveryResult(
+            "failed",
+            500,
+            "failed endpoint " + endpoint + " token=WEBHOOKTOKEN123456",
+            "webhook_http_500 Authorization: Bearer BEARERSECRET123456"
+        );
+
+        var result = service.send(alertId, channelId);
+        var deliveryId = ((Number) result.get("deliveryId")).longValue();
+        var row = deliveryRow(deliveryId);
+
+        assertNoSecretLeak(String.valueOf(result.get("responseBody")));
+        assertNoSecretLeak(String.valueOf(result.get("message")));
+        assertNoSecretLeak(String.valueOf(result.get("failureReason")));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(row.get("response_body"))));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(row.get("failure_reason"))));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(row.get("payload_json"))));
+    }
+
+    @Test
+    void finalRedactionGuardSanitizesRetryResultAndNewDelivery() {
+        var alertId = insertAlert("retry secret guard", "open");
+        var endpoint = "http://example.test/webhook?token=WEBHOOKTOKEN123456";
+        var channelId = insertChannel("webhook", endpoint, true);
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", 503, "server down", "webhook_http_503");
+        var original = service.send(alertId, channelId);
+        var originalDeliveryId = ((Number) original.get("deliveryId")).longValue();
+
+        webhookClient.nextResult = new WebhookDeliveryResult(
+            "failed",
+            500,
+            "retry failed " + endpoint,
+            "webhook_http_500 access_token=ACCESSSECRET123456"
+        );
+
+        var retry = service.retryDelivery(originalDeliveryId);
+        var retryDeliveryId = ((Number) retry.get("deliveryId")).longValue();
+        var row = deliveryRow(retryDeliveryId);
+
+        assertNoSecretLeak(String.valueOf(retry.get("responseBody")));
+        assertNoSecretLeak(String.valueOf(retry.get("message")));
+        assertNoSecretLeak(String.valueOf(retry.get("failureReason")));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(row.get("response_body"))));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(row.get("failure_reason"))));
+        assertNoSecretLeak(String.valueOf(normalizeDbValue(row.get("payload_json"))));
+    }
+
+    @Test
     void recordsStructuredReliabilityFieldsForNonRetryableFailures() {
         var webhookChannelId = insertChannel("webhook", "http://example.test/webhook?token=secret", true);
 
@@ -559,6 +611,13 @@ class AlertNotificationServiceTest {
             return new String(bytes);
         }
         return value;
+    }
+
+    private void assertNoSecretLeak(String value) {
+        assertEquals(false, value.contains("WEBHOOKTOKEN123456"));
+        assertEquals(false, value.contains("BEARERSECRET123456"));
+        assertEquals(false, value.contains("ACCESSSECRET123456"));
+        assertEquals(false, value.contains("http://example.test/webhook?token="));
     }
 
     private record FailureCase(String expectedType, Integer responseCode, String message) {

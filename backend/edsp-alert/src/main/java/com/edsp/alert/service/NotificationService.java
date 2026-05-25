@@ -21,6 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class NotificationService {
     private static final String FEISHU_HOST = "open.feishu.cn";
     private static final String FEISHU_PATH_PREFIX = "/open-apis/bot/v2/hook/";
+    private static final NotificationSecretSanitizer SECRET_SANITIZER = new NotificationSecretSanitizer();
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
@@ -79,7 +80,7 @@ public class NotificationService {
 
         var sql = new StringBuilder("""
             select d.id, d.channel_id, c.name as channel_name, c.channel_type,
-                   d.alert_id, a.title as alert_title,
+                   d.alert_id, a.title as alert_title, c.endpoint_url,
                    d.title, d.severity, d.status, d.response_code, d.response_body,
                    cast(d.payload_json as varchar) as payload_json,
                    d.failure_type, d.failure_reason, d.retryable,
@@ -97,7 +98,9 @@ public class NotificationService {
             limit ?
             """);
         args.add(safeLimit);
-        return jdbcTemplate.queryForList(sql.toString(), args.toArray());
+        return jdbcTemplate.queryForList(sql.toString(), args.toArray()).stream()
+            .map(this::presentDelivery)
+            .toList();
     }
 
     public Map<String, Object> createChannel(NotificationChannelRequest request) {
@@ -155,35 +158,31 @@ public class NotificationService {
 
     private Map<String, Object> presentChannel(Map<String, Object> row) {
         var result = new LinkedHashMap<>(row);
-        result.put("endpoint_masked", maskEndpoint(row.get("endpoint_url")));
+        result.put("endpoint_masked", SECRET_SANITIZER.maskEndpoint(row.get("endpoint_url")));
         result.remove("endpoint_url");
         return result;
     }
 
+    private Map<String, Object> presentDelivery(Map<String, Object> row) {
+        var result = new LinkedHashMap<>(row);
+        var endpointUrl = stringOrBlank(row.get("endpoint_url"));
+        result.put("response_body", redactNullable(row.get("response_body"), endpointUrl));
+        result.put("failure_reason", redactNullable(row.get("failure_reason"), endpointUrl));
+        result.put("payload_json", redactPayloadNullable(row.get("payload_json"), endpointUrl));
+        result.remove("endpoint_url");
+        return result;
+    }
+
+    private String redactNullable(Object value, String endpointUrl) {
+        return value == null ? null : SECRET_SANITIZER.redactText(String.valueOf(value), endpointUrl);
+    }
+
+    private String redactPayloadNullable(Object value, String endpointUrl) {
+        return value == null ? null : SECRET_SANITIZER.redactPayloadSecrets(String.valueOf(value), endpointUrl);
+    }
+
     private String configJson(NotificationChannelRequest request) {
-        var channelType = normalizeType(request.channelType());
-        var weComKey = "wecom".equals(channelType) ? extractQueryKey(request.webhookUrl()) : "";
-        var feishuToken = "feishu".equals(channelType) ? extractFeishuToken(request.webhookUrl()) : "";
-        var config = new LinkedHashMap<String, Object>();
-        if ("wecom".equals(channelType)) {
-            request.config().forEach((key, value) -> {
-                if (!isSensitiveWeComConfig(key, value, weComKey)) {
-                    config.put(key, value);
-                }
-            });
-        } else if ("feishu".equals(channelType)) {
-            request.config().forEach((key, value) -> {
-                if (!isSensitiveFeishuConfig(key, value, feishuToken)) {
-                    config.put(key, value);
-                }
-            });
-        } else {
-            config.putAll(request.config());
-        }
-        if ("webhook".equals(channelType) && request.webhookUrl() != null && !request.webhookUrl().isBlank()) {
-            config.put("webhookUrl", request.webhookUrl().trim());
-        }
-        return toJson(config);
+        return toJson(SECRET_SANITIZER.sanitizeConfig(request.config(), request.webhookUrl()));
     }
 
     private String toJson(Object value) {
@@ -275,17 +274,6 @@ public class NotificationService {
         return !extractQueryKeyFromQuery(query).isBlank();
     }
 
-    private String extractQueryKey(String endpointUrl) {
-        if (endpointUrl == null || endpointUrl.isBlank()) {
-            return "";
-        }
-        try {
-            return extractQueryKeyFromQuery(URI.create(endpointUrl.trim()).getQuery());
-        } catch (IllegalArgumentException ex) {
-            return "";
-        }
-    }
-
     private String extractQueryKeyFromQuery(String query) {
         if (query == null || query.isBlank()) {
             return "";
@@ -300,93 +288,13 @@ public class NotificationService {
         return "";
     }
 
-    private String extractFeishuToken(String endpointUrl) {
-        if (endpointUrl == null || endpointUrl.isBlank()) {
-            return "";
-        }
-        try {
-            var path = URI.create(endpointUrl.trim()).getPath();
-            if (path == null || !path.startsWith(FEISHU_PATH_PREFIX)) {
-                return "";
-            }
-            return path.substring(FEISHU_PATH_PREFIX.length()).trim();
-        } catch (IllegalArgumentException ex) {
-            return "";
-        }
-    }
-
     private boolean isSingleFeishuTokenPath(String path) {
         var token = path.substring(FEISHU_PATH_PREFIX.length()).trim();
         return !token.isBlank() && !token.contains("/");
     }
 
-    private String maskEndpoint(Object endpoint) {
-        if (endpoint == null || String.valueOf(endpoint).isBlank()) {
-            return "-";
-        }
-        try {
-            var uri = URI.create(String.valueOf(endpoint));
-            var host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
-            var rawPath = uri.getPath() == null ? "" : uri.getPath();
-            if (FEISHU_HOST.equals(host) && rawPath.startsWith(FEISHU_PATH_PREFIX)) {
-                return uri.getScheme() + "://" + FEISHU_HOST + FEISHU_PATH_PREFIX + "...";
-            }
-            var port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
-            var path = uri.getPath() == null || uri.getPath().isBlank() ? "" : "/...";
-            return uri.getScheme() + "://" + uri.getHost() + port + path;
-        } catch (IllegalArgumentException ex) {
-            return "地址格式异常";
-        }
-    }
-
-    private boolean isSensitiveWeComConfig(String key, Object value, String weComKey) {
-        var normalizedKey = key == null ? "" : key.trim().toLowerCase(Locale.ROOT);
-        if (Set.of("webhookurl", "webhook_url", "endpointurl", "endpoint_url", "url", "key").contains(normalizedKey)) {
-            return true;
-        }
-        if (value instanceof String text) {
-            var normalizedValue = text.toLowerCase(Locale.ROOT);
-            return normalizedValue.contains("qyapi.weixin.qq.com")
-                || normalizedValue.contains("key=")
-                || (!weComKey.isBlank() && text.contains(weComKey));
-        }
-        if (value instanceof Map<?, ?> map) {
-            return map.entrySet().stream()
-                .anyMatch(entry -> isSensitiveWeComConfig(String.valueOf(entry.getKey()), entry.getValue(), weComKey));
-        }
-        if (value instanceof Iterable<?> iterable) {
-            for (var item : iterable) {
-                if (isSensitiveWeComConfig("", item, weComKey)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean isSensitiveFeishuConfig(String key, Object value, String feishuToken) {
-        var normalizedKey = key == null ? "" : key.trim().toLowerCase(Locale.ROOT);
-        if (Set.of("webhookurl", "webhook_url", "endpointurl", "endpoint_url", "url", "token").contains(normalizedKey)) {
-            return true;
-        }
-        if (value instanceof String text) {
-            var normalizedValue = text.toLowerCase(Locale.ROOT);
-            return normalizedValue.contains(FEISHU_HOST)
-                || normalizedValue.contains(FEISHU_PATH_PREFIX)
-                || (!feishuToken.isBlank() && text.contains(feishuToken));
-        }
-        if (value instanceof Map<?, ?> map) {
-            return map.entrySet().stream()
-                .anyMatch(entry -> isSensitiveFeishuConfig(String.valueOf(entry.getKey()), entry.getValue(), feishuToken));
-        }
-        if (value instanceof Iterable<?> iterable) {
-            for (var item : iterable) {
-                if (isSensitiveFeishuConfig("", item, feishuToken)) {
-                    return true;
-                }
-            }
-        }
-        return false;
+    private String stringOrBlank(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
 }

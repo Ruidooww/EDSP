@@ -3,11 +3,13 @@ package com.edsp.alert.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.alert.dto.NotificationChannelRequest;
 import com.edsp.alert.dto.NotificationSendRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Statement;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.h2.jdbcx.JdbcDataSource;
@@ -260,6 +262,21 @@ class NotificationServiceTest {
 
     @Test
     void createChannelOnlyAcceptsWebhookWithValidHttpEndpoint() {
+        var webhookUrl = "https://hook.example.test/robot/PATHSECRET123456/send?Access_Token=QUERYSECRET123456&SIGNATURE=SIGNATUREQUERY123456";
+        var config = new LinkedHashMap<String, Object>();
+        config.put("team", "secops");
+        config.put("webhookUrl", webhookUrl);
+        config.put("endpointUrl", webhookUrl);
+        config.put("url", webhookUrl);
+        config.put("key", "KEYSECRET123456");
+        config.put("token", "QUERYSECRET123456");
+        config.put("secret", "SECRET123456");
+        config.put("access_token", "ACCESSSECRET123456");
+        config.put("signature", "SIGNATURESECRET123456");
+        config.put("authorization", "Bearer AUTHSECRET123456");
+        config.put("bearer", "BEARERSECRET123456");
+        config.put("nested", Map.of("safeNote", "keep", "token", "NESTEDTOKEN123456"));
+
         var unsupported = assertThrows(ResponseStatusException.class, () -> service.createChannel(
             new NotificationChannelRequest("email", "email", "https://mail.example.test/send", null, true, Map.of())
         ));
@@ -270,24 +287,123 @@ class NotificationServiceTest {
         var created = service.createChannel(new NotificationChannelRequest(
             "webhook",
             "webhook",
-            "https://hook.example.test/robot/PATHSECRET123456/send?token=QUERYSECRET123456",
+            webhookUrl,
             "webhook only",
             true,
-            Map.of()
+            config
         ));
+        var id = ((Number) created.get("id")).longValue();
         var channel = service.listChannels().stream()
-            .filter(row -> ((Number) row.get("id")).longValue() == ((Number) created.get("id")).longValue())
+            .filter(row -> ((Number) row.get("id")).longValue() == id)
             .findFirst()
             .orElseThrow();
+        var storedConfig = jdbcTemplate.queryForObject(
+            "select cast(config_json as varchar) from notification_channels where id = ?",
+            String.class,
+            id
+        );
 
         assertEquals(HttpStatus.BAD_REQUEST, unsupported.getStatusCode());
         assertEquals("unsupported_channel", unsupported.getReason());
         assertEquals(HttpStatus.BAD_REQUEST, invalidUrl.getStatusCode());
         assertEquals("invalid_webhook_url", invalidUrl.getReason());
         assertEquals("webhook", channel.get("channel_type"));
-        assertEquals("https://hook.example.test/...", channel.get("endpoint_masked"));
+        assertEquals(
+            "https://hook.example.test/robot/[redacted]/send?Access_Token=[redacted]&SIGNATURE=[redacted]",
+            channel.get("endpoint_masked")
+        );
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("PATHSECRET123456"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("QUERYSECRET123456"));
+        assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("SIGNATUREQUERY123456"));
+        assertFalse(storedConfig.contains(webhookUrl));
+        assertFalse(storedConfig.contains("PATHSECRET123456"));
+        assertFalse(storedConfig.contains("QUERYSECRET123456"));
+        assertFalse(storedConfig.contains("SIGNATUREQUERY123456"));
+        assertFalse(storedConfig.contains("KEYSECRET123456"));
+        assertFalse(storedConfig.contains("SECRET123456"));
+        assertFalse(storedConfig.contains("ACCESSSECRET123456"));
+        assertFalse(storedConfig.contains("SIGNATURESECRET123456"));
+        assertFalse(storedConfig.contains("AUTHSECRET123456"));
+        assertFalse(storedConfig.contains("BEARERSECRET123456"));
+        assertFalse(storedConfig.contains("NESTEDTOKEN123456"));
+        assertFalse(storedConfig.contains("webhookUrl"));
+        assertFalse(storedConfig.contains("endpointUrl"));
+        assertFalse(storedConfig.contains("access_token"));
+        assertEquals(true, storedConfig.contains("secops"));
+        assertEquals(true, storedConfig.contains("keep"));
+    }
+
+    @Test
+    void updateChannelAlsoSanitizesConfigJson() {
+        var created = service.createChannel(new NotificationChannelRequest(
+            "webhook",
+            "webhook",
+            "https://hook.example.test/first?token=FIRSTSECRET123456",
+            null,
+            true,
+            Map.of("team", "secops")
+        ));
+        var id = ((Number) created.get("id")).longValue();
+        var updatedUrl = "https://hook.example.test/second?access_token=UPDATEDSECRET123456";
+
+        service.updateChannel(id, new NotificationChannelRequest(
+            "webhook updated",
+            "webhook",
+            updatedUrl,
+            null,
+            true,
+            Map.of(
+                "team", "secops",
+                "endpoint_url", updatedUrl,
+                "Access_Token", "UPDATEDSECRET123456",
+                "nested", List.of(Map.of("Authorization", "Bearer AUTHSECRET123456"), "keep")
+            )
+        ));
+
+        var storedConfig = jdbcTemplate.queryForObject(
+            "select cast(config_json as varchar) from notification_channels where id = ?",
+            String.class,
+            id
+        );
+
+        assertFalse(storedConfig.contains(updatedUrl));
+        assertFalse(storedConfig.contains("UPDATEDSECRET123456"));
+        assertFalse(storedConfig.contains("AUTHSECRET123456"));
+        assertFalse(storedConfig.contains("endpoint_url"));
+        assertFalse(storedConfig.contains("Access_Token"));
+        assertEquals(true, storedConfig.contains("secops"));
+        assertEquals(true, storedConfig.contains("keep"));
+    }
+
+    @Test
+    void listDeliveriesRedactsStoredResponseFailureReasonAndPayloadPreview() {
+        var alertId = insertAlert("historical delivery alert");
+        var endpoint = "https://hook.example.test/webhook?token=DELIVERYSECRET123456&tenant=secops";
+        var channelId = insertChannel("webhook", endpoint);
+        jdbcTemplate.update("""
+            insert into notification_deliveries(
+                channel_id, alert_id, title, severity, status, response_code, response_body,
+                payload_json, failure_type, failure_reason
+            )
+            values (?, ?, 'historical leak', 'high', 'failed', 500, ?,
+                cast(? as jsonb), 'http_5xx', ?)
+            """,
+            channelId,
+            alertId,
+            "response echoed " + endpoint + " Authorization: Bearer BODYSECRET123456",
+            "{\"message\":\"payload token=DELIVERYSECRET123456\",\"tenant\":\"secops\",\"Authorization\":\"Bearer PAYLOADSECRET123456\"}",
+            "failure access_token=DELIVERYSECRET123456"
+        );
+
+        var delivery = service.listDeliveries(50, alertId).get(0);
+
+        assertFalse(String.valueOf(delivery.get("response_body")).contains("DELIVERYSECRET123456"));
+        assertFalse(String.valueOf(delivery.get("response_body")).contains("BODYSECRET123456"));
+        assertFalse(String.valueOf(delivery.get("failure_reason")).contains("DELIVERYSECRET123456"));
+        assertFalse(String.valueOf(delivery.get("payload_json")).contains("DELIVERYSECRET123456"));
+        assertTrue(String.valueOf(delivery.get("payload_json")).contains("PAYLOADSECRET123456"));
+        assertTrue(String.valueOf(delivery.get("payload_json")).contains("secops"));
+        assertFalse(delivery.containsKey("endpoint_url"));
     }
 
     @Test
@@ -445,6 +561,15 @@ class NotificationServiceTest {
             "insert into notification_channels(name, channel_type) values (?, ?)",
             channelType,
             channelType
+        );
+    }
+
+    private Long insertChannel(String channelType, String endpointUrl) {
+        return insertAndReturnId(
+            "insert into notification_channels(name, channel_type, endpoint_url) values (?, ?, ?)",
+            channelType,
+            channelType,
+            endpointUrl
         );
     }
 

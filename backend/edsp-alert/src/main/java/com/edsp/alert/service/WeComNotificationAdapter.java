@@ -13,6 +13,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Component
 public class WeComNotificationAdapter implements NotificationChannelAdapter {
+    private static final NotificationSecretSanitizer SECRET_SANITIZER = new NotificationSecretSanitizer();
+
     private final WebhookClient webhookClient;
     private final ObjectMapper objectMapper;
 
@@ -73,34 +75,7 @@ public class WeComNotificationAdapter implements NotificationChannelAdapter {
     }
 
     private String clean(String value, String endpointUrl) {
-        if (value == null || value.isBlank()) {
-            return "";
-        }
-        var result = value;
-        var key = weComKey(endpointUrl);
-        if (!key.isBlank()) {
-            result = result.replace(key, "[redacted]");
-        }
-        return result;
-    }
-
-    private String weComKey(String endpointUrl) {
-        try {
-            var uri = URI.create(endpointUrl);
-            var query = uri.getQuery();
-            if (query == null || query.isBlank()) {
-                return "";
-            }
-            for (var part : query.split("&")) {
-                var equalsIndex = part.indexOf('=');
-                if (equalsIndex > 0 && equalsIndex < part.length() - 1 && "key".equals(part.substring(0, equalsIndex))) {
-                    return part.substring(equalsIndex + 1);
-                }
-            }
-        } catch (IllegalArgumentException ex) {
-            return "";
-        }
-        return "";
+        return SECRET_SANITIZER.redactText(value, endpointUrl);
     }
 
     private boolean hasQueryKey(String query) {

@@ -276,6 +276,23 @@ class AlertNotificationServiceTest {
     }
 
     @Test
+    void legacyPlaintextChannelWithoutEndpointIsTreatedAsSecretUnavailable() {
+        var alertId = insertAlert("legacy blank secret", "open");
+        var channelId = insertChannel("webhook", null, true);
+        var originalDeliveryId = insertDelivery(channelId, alertId, "failed", true);
+        var beforeCount = countDeliveries();
+
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.send(alertId, channelId));
+        assertStatus(HttpStatus.BAD_REQUEST, "notification_secret_unavailable", () -> service.retryDelivery(originalDeliveryId));
+
+        assertEquals(0, webhookClient.calls);
+        assertEquals(beforeCount, countDeliveries());
+        assertEquals(0, ((Number) deliveryRow(originalDeliveryId).get("retry_count")).intValue());
+        assertEquals(0L, countAlertLifecycleEvents());
+        assertEquals("open", alertStatus(alertId));
+    }
+
+    @Test
     void recordsStructuredReliabilityFieldsForSuccessAndRetryableFailures() {
         var channelId = insertChannel("webhook", "http://example.test/webhook?token=secret", true);
 

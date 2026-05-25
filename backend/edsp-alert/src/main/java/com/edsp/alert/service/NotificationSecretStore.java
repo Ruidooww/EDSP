@@ -50,6 +50,9 @@ public class NotificationSecretStore {
                 throw unavailable();
             }
         }
+        if (endpointUrl.isBlank()) {
+            throw unavailable();
+        }
         return endpointUrl;
     }
 

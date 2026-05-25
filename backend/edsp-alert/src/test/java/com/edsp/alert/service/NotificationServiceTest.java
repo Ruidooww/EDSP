@@ -323,10 +323,7 @@ class NotificationServiceTest {
         assertFalse(channel.containsKey("endpoint_url"));
         assertFalse(channel.containsKey("endpoint_secret_ciphertext"));
         assertFalse(channel.containsKey("endpoint_secret_key_version"));
-        assertEquals(
-            "https://hook.example.test/robot/[redacted]/send?Access_Token=[redacted]&SIGNATURE=[redacted]",
-            channel.get("endpoint_masked")
-        );
+        assertEquals("https://hook.example.test/...", channel.get("endpoint_masked"));
         var storedChannel = channelRow(id);
         var ciphertext = String.valueOf(storedChannel.get("endpoint_secret_ciphertext"));
         assertEquals(null, storedChannel.get("endpoint_url"));
@@ -335,6 +332,7 @@ class NotificationServiceTest {
         assertFalse(ciphertext.contains(webhookUrl));
         assertFalse(ciphertext.contains("PATHSECRET123456"));
         assertFalse(ciphertext.contains("QUERYSECRET123456"));
+        assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("/robot/"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("PATHSECRET123456"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("QUERYSECRET123456"));
         assertFalse(String.valueOf(channel.get("endpoint_masked")).contains("SIGNATUREQUERY123456"));

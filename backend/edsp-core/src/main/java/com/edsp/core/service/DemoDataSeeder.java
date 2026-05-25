@@ -184,16 +184,16 @@ public class DemoDataSeeder implements ApplicationRunner {
     }
 
     private void seedNotifications() {
-        seedChannel("安全运营 Webhook", "webhook", "https://demo.mizuumi.top/mock/security-webhook",
-            "统一推送到安全运营工作台，用于演示标准 Webhook 投递。", "{\"mode\":\"demo\",\"owner\":\"SOC\"}", true, "ready", "success", "演示通道测试成功");
+        seedChannel("安全运营 Webhook", "webhook", null,
+            "统一推送到安全运营工作台，用于演示标准 Webhook 投递。", "{\"mode\":\"demo\",\"owner\":\"SOC\"}", false, "disabled", "missing", "演示环境未配置真实通知密钥");
         seedChannel("企业微信值班群", "wecom", null,
-            "高危告警推送到企业微信安全值班群。", "{\"robot\":\"security-duty\",\"mention\":\"@all\"}", false, "disabled", "unsupported", "后续扩展");
+            "高危告警推送到企业微信安全值班群。", "{\"robot\":\"security-duty\",\"mention\":\"@all\"}", false, "disabled", "missing", "演示环境未配置真实通知密钥");
         seedChannel("飞书安全群", "feishu", null,
-            "中高危告警推送到飞书安全群。", "{\"robot\":\"security-alert\"}", false, "disabled", "unsupported", "后续扩展");
-        seedChannel("短信告警", "sms", "https://sms.demo.local/send",
-            "严重风险通过短信通知值班负责人。", "{\"provider\":\"demo-sms\",\"template\":\"risk-alert\"}", false, "disabled", "unsupported", "后续扩展");
-        seedChannel("邮件审计归档", "email", "https://mail.demo.local/api/send",
-            "处置结果、日报和审计材料发送到安全邮箱。", "{\"mailbox\":\"security-archive@example.com\"}", false, "disabled", "unsupported", "后续扩展");
+            "中高危告警推送到飞书安全群。", "{\"robot\":\"security-alert\"}", false, "disabled", "missing", "演示环境未配置真实通知密钥");
+        seedChannel("短信告警", "sms", null,
+            "严重风险通过短信通知值班负责人。", "{\"provider\":\"demo-sms\",\"template\":\"risk-alert\"}", false, "disabled", "missing", "演示环境未配置真实通知密钥");
+        seedChannel("邮件审计归档", "email", null,
+            "处置结果、日报和审计材料发送到安全邮箱。", "{\"mailbox\":\"security-archive@example.com\"}", false, "disabled", "missing", "演示环境未配置真实通知密钥");
 
         seedNotificationDelivery("安全运营 Webhook", "terminal-security", "DEMO-ALERT-001", "疑似敏感文件外发", "high", "success", 200, "webhook accepted");
     }
@@ -455,6 +455,7 @@ public class DemoDataSeeder implements ApplicationRunner {
             jdbcTemplate.update("""
                 update notification_channels
                 set channel_type = ?, endpoint_url = ?, endpoint_masked = ?, secret_storage_status = ?,
+                    endpoint_secret_ciphertext = null, endpoint_secret_key_version = null,
                     description = ?, config_json = cast(? as jsonb),
                     enabled = ?, status = ?, last_test_status = ?, last_test_message = ?, last_test_at = now(),
                     updated_at = now()

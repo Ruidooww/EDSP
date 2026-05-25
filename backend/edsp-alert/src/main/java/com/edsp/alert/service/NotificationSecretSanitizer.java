@@ -79,10 +79,10 @@ public class NotificationSecretSanitizer {
                 return scheme + "://qyapi.weixin.qq.com/...";
             }
             var port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
-            var userInfo = uri.getRawUserInfo() == null || uri.getRawUserInfo().isBlank() ? "" : "[redacted]@";
-            var path = maskedPath(rawPath);
-            var query = maskedQuery(uri.getRawQuery());
-            return scheme + "://" + userInfo + uri.getHost() + port + path + query;
+            if (uri.getHost() == null || uri.getHost().isBlank()) {
+                return "invalid_endpoint";
+            }
+            return scheme + "://" + uri.getHost() + port + "/...";
         } catch (IllegalArgumentException ex) {
             return "invalid_endpoint";
         }
@@ -214,40 +214,6 @@ public class NotificationSecretSanitizer {
         }
         values.removeIf(value -> value == null || value.isBlank());
         return values;
-    }
-
-    private String maskedPath(String rawPath) {
-        if (rawPath == null || rawPath.isBlank()) {
-            return "";
-        }
-        var parts = rawPath.split("/", -1);
-        var masked = new ArrayList<String>();
-        for (var part : parts) {
-            if (part.isBlank()) {
-                masked.add(part);
-                continue;
-            }
-            var decoded = decodeOrOriginal(part);
-            masked.add(isTokenLikePathSegment(decoded) ? REDACTED : part);
-        }
-        return String.join("/", masked);
-    }
-
-    private String maskedQuery(String rawQuery) {
-        if (rawQuery == null || rawQuery.isBlank()) {
-            return "";
-        }
-        var parts = new ArrayList<String>();
-        for (var part : rawQuery.split("&", -1)) {
-            var equalsIndex = part.indexOf('=');
-            var key = equalsIndex >= 0 ? part.substring(0, equalsIndex) : part;
-            if (isSensitiveKey(key)) {
-                parts.add(equalsIndex >= 0 ? key + "=" + REDACTED : key);
-            } else {
-                parts.add(part);
-            }
-        }
-        return "?" + String.join("&", parts);
     }
 
     private boolean isTokenLikePathSegment(String value) {

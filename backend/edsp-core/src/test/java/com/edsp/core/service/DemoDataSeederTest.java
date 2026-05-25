@@ -41,19 +41,32 @@ class DemoDataSeederTest {
     }
 
     @Test
-    void seedsDemoNotificationChannelsWithoutWeComOrFeishuPlaintextSecrets() {
+    void seedsDemoNotificationChannelsWithoutPlaintextSecrets() {
+        jdbcTemplate.update("""
+            insert into notification_channels(
+                name, channel_type, endpoint_url, endpoint_secret_ciphertext,
+                endpoint_secret_key_version, endpoint_masked, secret_storage_status,
+                config_json, enabled, status
+            )
+            values ('安全运营 Webhook', 'webhook', 'https://old.example.test/hook',
+                    'v1:old-nonce:old-ciphertext', 'local-v1', 'https://old.example.test/...',
+                    'encrypted', cast('{}' as jsonb), true, 'ready')
+            """);
+
         new DemoDataSeeder(jdbcTemplate, true).run(null);
 
         var rows = jdbcTemplate.queryForList("""
-            select channel_type, endpoint_url, endpoint_masked, secret_storage_status, enabled, status
+            select channel_type, endpoint_url, endpoint_secret_ciphertext, endpoint_secret_key_version,
+                   endpoint_masked, secret_storage_status, enabled, status
             from notification_channels
-            where channel_type in ('wecom', 'feishu')
             order by channel_type
             """);
 
-        assertEquals(2, rows.size());
+        assertEquals(5, rows.size());
         for (var row : rows) {
             assertEquals(null, row.get("endpoint_url"));
+            assertEquals(null, row.get("endpoint_secret_ciphertext"));
+            assertEquals(null, row.get("endpoint_secret_key_version"));
             assertEquals("demo://not-configured", row.get("endpoint_masked"));
             assertEquals("missing", row.get("secret_storage_status"));
             assertEquals(false, row.get("enabled"));

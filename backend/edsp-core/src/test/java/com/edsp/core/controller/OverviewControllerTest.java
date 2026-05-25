@@ -176,6 +176,28 @@ class OverviewControllerTest {
         ), recentLifecycleEvents.get(0).keySet());
     }
 
+    @Test
+    void overviewIsReadOnlyAndDoesNotMutateOperationalTables() {
+        var now = LocalDate.now(ZoneId.systemDefault()).atStartOfDay().plusHours(1);
+        var alertId = insertAlert("Read only alert", "high", "open", null, now);
+        var channelId = insertChannel("Webhook", "webhook", true, "ready");
+        insertLifecycleEvent(alertId, "assigned", "open", "open", "ops", "lisi", "assign", now.plusMinutes(1));
+        insertDelivery(channelId, alertId, "Failed notification", "failed", 500, "server error",
+            "http_5xx", "Server error", true, 0, null, now.plusMinutes(2));
+
+        var alertCount = countRows("alerts");
+        var lifecycleCount = countRows("alert_lifecycle_events");
+        var deliveryCount = countRows("notification_deliveries");
+        var originalStatus = stringCell("select status from alerts where id = ?", alertId);
+
+        controller.overview();
+
+        assertEquals(alertCount, countRows("alerts"));
+        assertEquals(lifecycleCount, countRows("alert_lifecycle_events"));
+        assertEquals(deliveryCount, countRows("notification_deliveries"));
+        assertEquals(originalStatus, stringCell("select status from alerts where id = ?", alertId));
+    }
+
     private Long insertAlert(String title, String severity, String status, String assignedTo, LocalDateTime createdAt) {
         return insertAndReturnId("""
             insert into alerts(title, severity, status, assigned_to, detail_json, created_at, updated_at)
@@ -257,6 +279,14 @@ class OverviewControllerTest {
             throw new IllegalStateException("Insert did not return a generated id");
         }
         return key.longValue();
+    }
+
+    private Long countRows(String tableName) {
+        return jdbcTemplate.queryForObject("select count(*) from " + tableName, Long.class);
+    }
+
+    private String stringCell(String sql, Object... args) {
+        return jdbcTemplate.queryForObject(sql, String.class, args);
     }
 
     private Timestamp timestamp(LocalDateTime value) {

@@ -11,7 +11,7 @@ import { Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Mo
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../api';
-import type { NotificationChannelRow, NotificationDeliveryRow } from '../types';
+import type { NotificationChannelRow, NotificationDeliveryRow, NotificationSecretBackfillDryRunItem, NotificationSecretBackfillDryRunResult } from '../types';
 
 interface NotificationChannelFormValues {
   name: string;
@@ -31,6 +31,12 @@ interface DeliveryFilters {
 interface ChannelFilters {
   secretStorageStatus: string;
   enabled: string;
+}
+
+interface DryRunFilters {
+  enabled: string;
+  channelType: string;
+  limit: number | null;
 }
 
 const CHANNEL_TYPE_OPTIONS = [
@@ -107,6 +113,30 @@ function secretStorageStatusTag(status?: string) {
   return <Tag>{status || '-'}</Tag>;
 }
 
+function dryRunStatusTag(status?: string) {
+  if (status === 'migration_eligible') {
+    return <Tag color="success">理论可迁移</Tag>;
+  }
+  if (status === 'blocked') {
+    return <Tag color="error">阻塞</Tag>;
+  }
+  if (status === 'already_encrypted') {
+    return <Tag color="blue">已加密</Tag>;
+  }
+  if (status === 'missing') {
+    return <Tag>未配置</Tag>;
+  }
+  return <Tag>{status || '-'}</Tag>;
+}
+
+function blockReasonLabel(reason?: string | null) {
+  return {
+    endpoint_missing: 'endpoint 缺失',
+    endpoint_invalid: 'endpoint 无效',
+    unsupported_channel_type: '不支持的通道类型',
+  }[reason || ''] ?? '-';
+}
+
 function formatTime(value?: string | number) {
   if (!value) {
     return '-';
@@ -159,11 +189,16 @@ function retryableTag(value?: boolean) {
 export default function NotificationsPage() {
   const [rows, setRows] = useState<NotificationChannelRow[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
+  const [dryRun, setDryRun] = useState<NotificationSecretBackfillDryRunResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [dryRunLoading, setDryRunLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<NotificationChannelRow | null>(null);
   const [channelSecretStorageStatus, setChannelSecretStorageStatus] = useState('');
   const [channelEnabled, setChannelEnabled] = useState('');
+  const [dryRunEnabled, setDryRunEnabled] = useState('');
+  const [dryRunChannelType, setDryRunChannelType] = useState('');
+  const [dryRunLimit, setDryRunLimit] = useState<number | null>(100);
   const [deliveryAlertId, setDeliveryAlertId] = useState<number | null>(null);
   const [deliveryStatus, setDeliveryStatus] = useState('');
   const [deliveryChannelType, setDeliveryChannelType] = useState('');
@@ -185,6 +220,14 @@ export default function NotificationsPage() {
       status: deliveryStatus,
       channelType: deliveryChannelType,
       channelId: deliveryChannelId,
+    };
+  }
+
+  function currentDryRunFilters(): DryRunFilters {
+    return {
+      enabled: dryRunEnabled,
+      channelType: dryRunChannelType,
+      limit: dryRunLimit,
     };
   }
 
@@ -217,6 +260,21 @@ export default function NotificationsPage() {
     return `/api/notifications/deliveries?${params.toString()}`;
   }
 
+  function dryRunPath(filters = currentDryRunFilters()) {
+    const params = new URLSearchParams();
+    if (filters.enabled) {
+      params.set('enabled', filters.enabled);
+    }
+    if (filters.channelType) {
+      params.set('channelType', filters.channelType);
+    }
+    if (filters.limit) {
+      params.set('limit', String(filters.limit));
+    }
+    const query = params.toString();
+    return query ? `/api/notifications/secret-backfill/dry-run?${query}` : '/api/notifications/secret-backfill/dry-run';
+  }
+
   async function load(channelFilters = currentChannelFilters(), deliveryFilters = currentDeliveryFilters()) {
     setLoading(true);
     try {
@@ -231,6 +289,17 @@ export default function NotificationsPage() {
       setDeliveries([]);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDryRun(filters = currentDryRunFilters()) {
+    setDryRunLoading(true);
+    try {
+      setDryRun(await apiGet<NotificationSecretBackfillDryRunResult>(dryRunPath(filters)));
+    } catch {
+      setDryRun(null);
+    } finally {
+      setDryRunLoading(false);
     }
   }
 
@@ -266,6 +335,52 @@ export default function NotificationsPage() {
     await load(filters, currentDeliveryFilters());
   }
 
+  async function updateDryRunEnabled(value: string) {
+    const filters: DryRunFilters = {
+      enabled: value,
+      channelType: dryRunChannelType,
+      limit: dryRunLimit,
+    };
+    setDryRunEnabled(value);
+    await loadDryRun(filters);
+  }
+
+  async function updateDryRunChannelType(value: string) {
+    const filters: DryRunFilters = {
+      enabled: dryRunEnabled,
+      channelType: value,
+      limit: dryRunLimit,
+    };
+    setDryRunChannelType(value);
+    await loadDryRun(filters);
+  }
+
+  async function applyDryRunFilters() {
+    await loadDryRun();
+  }
+
+  async function resetDryRunFilters() {
+    const filters: DryRunFilters = {
+      enabled: '',
+      channelType: '',
+      limit: 100,
+    };
+    setDryRunEnabled(filters.enabled);
+    setDryRunChannelType(filters.channelType);
+    setDryRunLimit(filters.limit);
+    await loadDryRun(filters);
+  }
+
+  async function showLegacyChannels() {
+    const filters: ChannelFilters = {
+      secretStorageStatus: 'legacy_plaintext',
+      enabled: '',
+    };
+    setChannelSecretStorageStatus(filters.secretStorageStatus);
+    setChannelEnabled(filters.enabled);
+    await load(filters, currentDeliveryFilters());
+  }
+
   async function applyDeliveryFilters() {
     await load();
   }
@@ -286,6 +401,7 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     void load();
+    void loadDryRun();
   }, []);
 
   async function submit() {
@@ -318,6 +434,7 @@ export default function NotificationsPage() {
     setEditingRow(null);
     form.resetFields();
     await load();
+    await loadDryRun();
   }
 
   async function retryDelivery(row: NotificationDeliveryRow) {
@@ -450,6 +567,63 @@ export default function NotificationsPage() {
     },
   ];
 
+  const dryRunColumns: ColumnsType<NotificationSecretBackfillDryRunItem> = [
+    {
+      title: '通道名称',
+      dataIndex: 'name',
+      width: 180,
+      ellipsis: true,
+      render: (value: string) => (
+        <Typography.Text ellipsis={{ tooltip: value }}>
+          {value || '-'}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'channelType',
+      width: 100,
+      render: (value: string) => <Tag color="blue">{channelTypeLabel(value)}</Tag>,
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      width: 90,
+      render: (value: boolean) => <Tag color={value ? 'success' : 'default'}>{value ? '启用' : '停用'}</Tag>,
+    },
+    {
+      title: '密钥状态',
+      dataIndex: 'secretStorageStatus',
+      width: 110,
+      render: secretStorageStatusTag,
+    },
+    {
+      title: '地址',
+      dataIndex: 'endpointMasked',
+      width: 220,
+      ellipsis: true,
+      render: (value: string) => <Typography.Text code ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text>,
+    },
+    {
+      title: 'Dry Run',
+      dataIndex: 'dryRunStatus',
+      width: 130,
+      render: dryRunStatusTag,
+    },
+    {
+      title: '阻塞原因',
+      dataIndex: 'blockReason',
+      width: 150,
+      render: blockReasonLabel,
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updatedAt',
+      width: 150,
+      render: formatTime,
+    },
+  ];
+
   const deliveryColumns: ColumnsType<NotificationDeliveryRow> = [
     {
       title: '发送内容',
@@ -578,6 +752,75 @@ export default function NotificationsPage() {
         showIcon
         message="告警手动触发通知后会在这里显示"
       />
+
+      <Card
+        size="small"
+        className="form-hint"
+        title="密钥回填 Dry Run"
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={() => loadDryRun()} loading={dryRunLoading}>
+              刷新 dry-run
+            </Button>
+            <Button onClick={showLegacyChannels}>查看 legacy 通道</Button>
+          </Space>
+        }
+      >
+        <Alert
+          className="form-hint"
+          type="info"
+          showIcon
+          message="这里只展示 legacy plaintext 通道的理论迁移资格，不执行 backfill，不清理历史数据。"
+        />
+        <Space className="form-hint" wrap>
+          <Select
+            style={{ width: 140 }}
+            value={dryRunEnabled}
+            options={CHANNEL_ENABLED_OPTIONS}
+            onChange={(value) => void updateDryRunEnabled(value)}
+          />
+          <Select
+            style={{ width: 160 }}
+            value={dryRunChannelType}
+            options={DELIVERY_CHANNEL_TYPE_OPTIONS}
+            onChange={(value) => void updateDryRunChannelType(value)}
+          />
+          <InputNumber
+            min={1}
+            max={500}
+            precision={0}
+            placeholder="limit"
+            value={dryRunLimit ?? undefined}
+            onChange={(value) => setDryRunLimit(typeof value === 'number' ? value : null)}
+          />
+          <Button type="primary" onClick={applyDryRunFilters} loading={dryRunLoading}>
+            查询
+          </Button>
+          <Button onClick={resetDryRunFilters}>查看全部</Button>
+        </Space>
+        <Space className="form-hint" wrap>
+          <Tag>通道总数 {dryRun?.summary.totalChannels ?? 0}</Tag>
+          <Tag color="warning">legacy {dryRun?.summary.legacyPlaintext ?? 0}</Tag>
+          <Tag color="success">理论可迁移 {dryRun?.summary.migrationEligible ?? 0}</Tag>
+          <Tag color="error">阻塞 {dryRun?.summary.blocked ?? 0}</Tag>
+          <Tag color="blue">已加密 {dryRun?.summary.encrypted ?? 0}</Tag>
+          <Tag>missing {dryRun?.summary.missing ?? 0}</Tag>
+          <Tag>endpoint 缺失 {dryRun?.blockReasons.endpoint_missing ?? 0}</Tag>
+          <Tag>endpoint 无效 {dryRun?.blockReasons.endpoint_invalid ?? 0}</Tag>
+          <Tag>类型不支持 {dryRun?.blockReasons.unsupported_channel_type ?? 0}</Tag>
+          {dryRun?.truncated ? <Tag color="warning">明细已按 limit 截断</Tag> : <Tag>明细未截断</Tag>}
+        </Space>
+        <Table<NotificationSecretBackfillDryRunItem>
+          rowKey="id"
+          size="small"
+          loading={dryRunLoading}
+          dataSource={dryRun?.items ?? []}
+          columns={dryRunColumns}
+          scroll={{ x: 1230 }}
+          pagination={{ pageSize: 5 }}
+          locale={{ emptyText: '暂无 dry-run 明细' }}
+        />
+      </Card>
 
       <Typography.Title level={5} className="section-subtitle">
         通知通道

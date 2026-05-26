@@ -83,6 +83,24 @@ class NotificationControllerTest {
     }
 
     @Test
+    void secretBackfillDryRunRouteAcceptsFilters() throws Exception {
+        Method dryRun = NotificationController.class.getMethod(
+            "secretBackfillDryRun",
+            String.class,
+            String.class,
+            String.class
+        );
+
+        assertArrayEquals(new String[] {"/secret-backfill/dry-run"}, dryRun.getAnnotation(GetMapping.class).value());
+        assertEquals("enabled", dryRun.getParameters()[0].getAnnotation(RequestParam.class).value());
+        assertEquals(false, dryRun.getParameters()[0].getAnnotation(RequestParam.class).required());
+        assertEquals("channelType", dryRun.getParameters()[1].getAnnotation(RequestParam.class).value());
+        assertEquals(false, dryRun.getParameters()[1].getAnnotation(RequestParam.class).required());
+        assertEquals("limit", dryRun.getParameters()[2].getAnnotation(RequestParam.class).value());
+        assertEquals(false, dryRun.getParameters()[2].getAnnotation(RequestParam.class).required());
+    }
+
+    @Test
     void alertSendRequestRejectsUnknownCreationFields() {
         var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -123,6 +141,7 @@ class NotificationControllerTest {
 
         var sent = controller.sendAlert(new AlertNotificationSendRequest(123L, 456L));
         var channels = controller.listChannels("legacy_plaintext", "true");
+        var dryRun = controller.secretBackfillDryRun("false", "wecom", "75");
         var deliveries = controller.listDeliveries(75, 123L, "failed", "wecom", 456L);
         var retried = controller.retryDelivery(77L, Map.of());
 
@@ -140,6 +159,10 @@ class NotificationControllerTest {
         assertEquals("legacy_plaintext", notificationService.secretStorageStatus);
         assertEquals("true", notificationService.enabledFilter);
         assertEquals("channel", channels.data().get(0).get("status"));
+        assertEquals("false", notificationService.dryRunEnabled);
+        assertEquals("wecom", notificationService.dryRunChannelType);
+        assertEquals("75", notificationService.dryRunLimit);
+        assertEquals("dry-run", dryRun.data().get("status"));
     }
 
     @Test
@@ -180,6 +203,47 @@ class NotificationControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.success").value(false))
             .andExpect(jsonPath("$.message").value("invalid_enabled_filter"));
+    }
+
+    @Test
+    void secretBackfillDryRunHttpRejectsInvalidFilters() throws Exception {
+        var mvc = mockMvc(new NotificationController(
+            new NotificationService(null, null),
+            new StubAlertNotificationService()
+        ));
+
+        mvc.perform(get("/api/notifications/secret-backfill/dry-run")
+                .param("enabled", "abc"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_enabled_filter"));
+
+        mvc.perform(get("/api/notifications/secret-backfill/dry-run")
+                .param("channelType", "email"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("unsupported_channel"));
+
+        mvc.perform(get("/api/notifications/secret-backfill/dry-run")
+                .param("limit", "abc"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_limit"));
+    }
+
+    @Test
+    void secretBackfillDryRunHttpKeepsResponseContractSecretSafe() throws Exception {
+        var mvc = mockMvc(new NotificationController(
+            new StubNotificationService(),
+            new StubAlertNotificationService()
+        ));
+
+        mvc.perform(get("/api/notifications/secret-backfill/dry-run"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.items[0].endpointMasked").value("https://example.test/..."))
+            .andExpect(jsonPath("$.data.items[0].endpoint_url").doesNotExist())
+            .andExpect(jsonPath("$.data.items[0].endpoint_secret_ciphertext").doesNotExist())
+            .andExpect(jsonPath("$.data.items[0].endpoint_secret_key_version").doesNotExist());
     }
 
     @Test
@@ -412,6 +476,9 @@ class NotificationControllerTest {
         private Long deliveryChannelId;
         private String secretStorageStatus;
         private String enabledFilter;
+        private String dryRunEnabled;
+        private String dryRunChannelType;
+        private String dryRunLimit;
         private Long updatedChannelId;
         private com.edsp.alert.dto.NotificationChannelRequest updateRequest;
         private Set<String> updateFields;
@@ -426,6 +493,21 @@ class NotificationControllerTest {
             this.secretStorageStatus = secretStorageStatus;
             this.enabledFilter = enabled;
             return List.of(Map.of("status", "channel"));
+        }
+
+        @Override
+        public Map<String, Object> secretBackfillDryRun(String enabled, String channelType, String limit) {
+            this.dryRunEnabled = enabled;
+            this.dryRunChannelType = channelType;
+            this.dryRunLimit = limit;
+            return Map.of(
+                "status", "dry-run",
+                "items", List.of(Map.of(
+                    "id", 1,
+                    "endpointMasked", "https://example.test/...",
+                    "dryRunStatus", "migration_eligible"
+                ))
+            );
         }
 
         @Override

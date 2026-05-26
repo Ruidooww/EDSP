@@ -80,6 +80,56 @@ public class NotificationService {
             .toList();
     }
 
+    public Map<String, Object> secretBackfillDryRun(String enabled, String channelType, String limit) {
+        var normalizedEnabled = normalizeEnabledFilter(enabled);
+        var normalizedChannelType = normalizeDryRunChannelTypeFilter(channelType);
+        var safeLimit = normalizeDryRunLimit(limit);
+        var filters = new ArrayList<String>();
+        var args = new ArrayList<Object>();
+
+        if (normalizedEnabled != null) {
+            filters.add("enabled = ?");
+            args.add(normalizedEnabled);
+        }
+        if (normalizedChannelType != null) {
+            filters.add("channel_type = ?");
+            args.add(normalizedChannelType);
+        }
+
+        var sql = new StringBuilder("""
+            select id, name, channel_type, endpoint_url, endpoint_masked,
+                   secret_storage_status, enabled, updated_at
+            from notification_channels
+            """);
+        if (!filters.isEmpty()) {
+            sql.append("where ").append(String.join(" and ", filters)).append("\n");
+        }
+        sql.append("""
+            order by updated_at desc, id desc
+            """);
+
+        var rows = jdbcTemplate.queryForList(sql.toString(), args.toArray());
+        var summary = dryRunSummary();
+        var blockReasons = dryRunBlockReasons();
+        var items = new ArrayList<Map<String, Object>>();
+
+        for (var row : rows) {
+            var item = dryRunItem(row);
+            updateDryRunSummary(summary, blockReasons, item);
+            if (items.size() < safeLimit) {
+                items.add(item);
+            }
+        }
+
+        var result = new LinkedHashMap<String, Object>();
+        result.put("summary", summary);
+        result.put("blockReasons", blockReasons);
+        result.put("limit", safeLimit);
+        result.put("truncated", rows.size() > safeLimit);
+        result.put("items", items);
+        return result;
+    }
+
     public List<Map<String, Object>> listDeliveries(int limit) {
         return listDeliveries(limit, null);
     }
@@ -356,6 +406,36 @@ public class NotificationService {
         return status;
     }
 
+    private String normalizeDryRunChannelTypeFilter(String value) {
+        if (value == null) {
+            return null;
+        }
+        var channelType = value.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("webhook", "wecom", "feishu").contains(channelType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
+        }
+        return channelType;
+    }
+
+    private int normalizeDryRunLimit(String value) {
+        if (value == null) {
+            return 100;
+        }
+        var normalized = value.trim();
+        if (normalized.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_limit");
+        }
+        try {
+            var limit = Integer.parseInt(normalized);
+            if (limit < 1 || limit > 500) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_limit");
+            }
+            return limit;
+        } catch (NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_limit");
+        }
+    }
+
     private String normalizeSecretStorageStatus(String value) {
         if (value == null) {
             return null;
@@ -379,6 +459,114 @@ public class NotificationService {
             return false;
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_enabled_filter");
+    }
+
+    private Map<String, Object> dryRunSummary() {
+        var summary = new LinkedHashMap<String, Object>();
+        summary.put("totalChannels", 0);
+        summary.put("legacyPlaintext", 0);
+        summary.put("migrationEligible", 0);
+        summary.put("blocked", 0);
+        summary.put("encrypted", 0);
+        summary.put("missing", 0);
+        summary.put("unsupportedStatus", 0);
+        return summary;
+    }
+
+    private Map<String, Object> dryRunBlockReasons() {
+        var blockReasons = new LinkedHashMap<String, Object>();
+        blockReasons.put("endpoint_missing", 0);
+        blockReasons.put("endpoint_invalid", 0);
+        blockReasons.put("unsupported_channel_type", 0);
+        return blockReasons;
+    }
+
+    private Map<String, Object> dryRunItem(Map<String, Object> row) {
+        var item = new LinkedHashMap<String, Object>();
+        var status = stringOrBlank(row.get("secret_storage_status"));
+        var channelType = stringOrBlank(row.get("channel_type")).trim().toLowerCase(Locale.ROOT);
+        var endpointUrl = stringOrBlank(row.get("endpoint_url"));
+        var dryRunStatus = "";
+        String blockReason = null;
+        var migrationEligible = false;
+
+        if ("encrypted".equals(status)) {
+            dryRunStatus = "already_encrypted";
+        } else if ("missing".equals(status)) {
+            dryRunStatus = "missing";
+        } else if ("legacy_plaintext".equals(status)) {
+            if (!Set.of("webhook", "wecom", "feishu").contains(channelType)) {
+                dryRunStatus = "blocked";
+                blockReason = "unsupported_channel_type";
+            } else if (endpointUrl.isBlank()) {
+                dryRunStatus = "blocked";
+                blockReason = "endpoint_missing";
+            } else if (endpointIsInvalid(channelType, endpointUrl)) {
+                dryRunStatus = "blocked";
+                blockReason = "endpoint_invalid";
+            } else {
+                dryRunStatus = "migration_eligible";
+                migrationEligible = true;
+            }
+        } else {
+            dryRunStatus = "unsupported_status";
+        }
+
+        item.put("id", row.get("id"));
+        item.put("name", row.get("name"));
+        item.put("channelType", channelType);
+        item.put("enabled", booleanValue(row.get("enabled")));
+        item.put("secretStorageStatus", status);
+        item.put("endpointMasked", endpointMasked(row));
+        item.put("dryRunStatus", dryRunStatus);
+        item.put("blockReason", blockReason);
+        item.put("migrationEligible", migrationEligible);
+        item.put("updatedAt", row.get("updated_at"));
+        return item;
+    }
+
+    private boolean endpointIsInvalid(String channelType, String endpointUrl) {
+        try {
+            normalizeEndpoint(channelType, endpointUrl);
+            return false;
+        } catch (ResponseStatusException | IllegalArgumentException ex) {
+            return true;
+        }
+    }
+
+    private void updateDryRunSummary(
+        Map<String, Object> summary,
+        Map<String, Object> blockReasons,
+        Map<String, Object> item
+    ) {
+        increment(summary, "totalChannels");
+        var status = stringOrBlank(item.get("secretStorageStatus"));
+        if ("legacy_plaintext".equals(status)) {
+            increment(summary, "legacyPlaintext");
+            if (Boolean.TRUE.equals(item.get("migrationEligible"))) {
+                increment(summary, "migrationEligible");
+            } else {
+                increment(summary, "blocked");
+                var blockReason = stringOrBlank(item.get("blockReason"));
+                if (!blockReason.isBlank() && blockReasons.containsKey(blockReason)) {
+                    increment(blockReasons, blockReason);
+                }
+            }
+            return;
+        }
+        if ("encrypted".equals(status)) {
+            increment(summary, "encrypted");
+            return;
+        }
+        if ("missing".equals(status)) {
+            increment(summary, "missing");
+            return;
+        }
+        increment(summary, "unsupportedStatus");
+    }
+
+    private void increment(Map<String, Object> values, String key) {
+        values.put(key, ((Number) values.get(key)).intValue() + 1);
     }
 
     private String normalizeEndpoint(String channelType, String value) {

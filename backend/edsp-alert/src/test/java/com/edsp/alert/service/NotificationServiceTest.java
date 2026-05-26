@@ -95,6 +95,14 @@ class NotificationServiceTest {
                 created_at timestamptz not null default now()
             )
             """);
+        jdbcTemplate.execute("""
+            create table alert_lifecycle_events (
+                id bigserial primary key,
+                alert_id bigint,
+                event_type varchar(64) not null,
+                created_at timestamptz not null default now()
+            )
+            """);
         service = new NotificationService(
             jdbcTemplate,
             new ObjectMapper(),
@@ -197,6 +205,109 @@ class NotificationServiceTest {
         assertEquals("invalid_enabled_filter", invalidEnabled.getReason());
         assertEquals(HttpStatus.BAD_REQUEST, emptyEnabled.getStatusCode());
         assertEquals("invalid_enabled_filter", emptyEnabled.getReason());
+    }
+
+    @Test
+    void secretBackfillDryRunClassifiesAndSummarizesWithoutWriting() throws Exception {
+        insertEncryptedChannel("encrypted", "webhook", false);
+        insertMissingChannel("webhook", false);
+        insertLegacyChannel("legacy valid", "https://legacy.example.test/hook?token=WEBHOOKTOKEN123456", true);
+        insertLegacyChannel("legacy missing", null, true);
+        insertLegacyChannel("legacy invalid", "not-a-url", true);
+        insertLegacyChannel("legacy unsupported", "email", "https://legacy.example.test/hook?token=EMAILTOKEN123456", true);
+        var before = channelSnapshots();
+
+        var result = service.secretBackfillDryRun(null, null, null);
+        var summary = asMap(result.get("summary"));
+        var blockReasons = asMap(result.get("blockReasons"));
+        var items = asList(result.get("items"));
+        var response = String.valueOf(result);
+
+        assertEquals(6, number(summary.get("totalChannels")));
+        assertEquals(4, number(summary.get("legacyPlaintext")));
+        assertEquals(1, number(summary.get("migrationEligible")));
+        assertEquals(3, number(summary.get("blocked")));
+        assertEquals(1, number(summary.get("encrypted")));
+        assertEquals(1, number(summary.get("missing")));
+        assertEquals(1, number(blockReasons.get("endpoint_missing")));
+        assertEquals(1, number(blockReasons.get("endpoint_invalid")));
+        assertEquals(1, number(blockReasons.get("unsupported_channel_type")));
+        assertEquals(100, number(result.get("limit")));
+        assertEquals(false, result.get("truncated"));
+        assertEquals(6, items.size());
+
+        assertDryRunItem(items, "encrypted", "already_encrypted", null, false);
+        assertDryRunItem(items, "missing channel", "missing", null, false);
+        assertDryRunItem(items, "legacy valid", "migration_eligible", null, true);
+        assertDryRunItem(items, "legacy missing", "blocked", "endpoint_missing", false);
+        assertDryRunItem(items, "legacy invalid", "blocked", "endpoint_invalid", false);
+        assertDryRunItem(items, "legacy unsupported", "blocked", "unsupported_channel_type", false);
+
+        assertEquals(before, channelSnapshots());
+        assertEquals(0L, jdbcTemplate.queryForObject("select count(*) from notification_deliveries", Long.class));
+        assertEquals(0L, jdbcTemplate.queryForObject("select count(*) from alert_lifecycle_events", Long.class));
+        assertFalse(response.contains("endpoint_url"));
+        assertFalse(response.contains("endpoint_secret_ciphertext"));
+        assertFalse(response.contains("endpoint_secret_key_version"));
+        assertFalse(response.contains("WEBHOOKTOKEN123456"));
+        assertFalse(response.contains("EMAILTOKEN123456"));
+        assertFalse(response.contains("access_token"));
+        assertFalse(response.contains("Authorization"));
+        assertFalse(response.contains("Bearer"));
+    }
+
+    @Test
+    void secretBackfillDryRunFiltersLimitsAndDoesNotRequireMasterKey() {
+        insertLegacyChannel("enabled webhook", "webhook", "https://legacy.example.test/webhook?token=WEBHOOKTOKEN123456", true);
+        insertLegacyChannel("disabled webhook", "webhook", "https://legacy.example.test/disabled?token=DISABLEDTOKEN123456", false);
+        insertLegacyChannel("enabled wecom", "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=WESECRET123456", true);
+        insertLegacyChannel("enabled feishu", "feishu", FEISHU_URL, true);
+        var noKeyService = new NotificationService(jdbcTemplate, new ObjectMapper(), new NotificationSecretStore(""));
+
+        var enabledWebhook = noKeyService.secretBackfillDryRun("true", "webhook", "1");
+        var summary = asMap(enabledWebhook.get("summary"));
+        var items = asList(enabledWebhook.get("items"));
+
+        assertEquals(1, number(summary.get("totalChannels")));
+        assertEquals(1, number(summary.get("legacyPlaintext")));
+        assertEquals(1, number(summary.get("migrationEligible")));
+        assertEquals(1, items.size());
+        assertEquals(false, enabledWebhook.get("truncated"));
+        assertEquals("enabled webhook", items.get(0).get("name"));
+
+        var disabled = noKeyService.secretBackfillDryRun("false", null, null);
+        assertEquals(1, number(asMap(disabled.get("summary")).get("totalChannels")));
+        assertEquals("disabled webhook", asList(disabled.get("items")).get(0).get("name"));
+
+        var wecom = noKeyService.secretBackfillDryRun(null, "wecom", null);
+        assertEquals(1, number(asMap(wecom.get("summary")).get("totalChannels")));
+        assertEquals("enabled wecom", asList(wecom.get("items")).get(0).get("name"));
+
+        var feishu = noKeyService.secretBackfillDryRun(null, "feishu", null);
+        assertEquals(1, number(asMap(feishu.get("summary")).get("totalChannels")));
+        assertEquals("enabled feishu", asList(feishu.get("items")).get(0).get("name"));
+
+        var allLimited = noKeyService.secretBackfillDryRun(null, null, "2");
+        var response = String.valueOf(allLimited);
+        assertEquals(4, number(asMap(allLimited.get("summary")).get("totalChannels")));
+        assertEquals(2, asList(allLimited.get("items")).size());
+        assertEquals(true, allLimited.get("truncated"));
+        assertFalse(response.contains("WEBHOOKTOKEN123456"));
+        assertFalse(response.contains("DISABLEDTOKEN123456"));
+        assertFalse(response.contains("WESECRET123456"));
+        assertFalse(response.contains(FEISHU_TOKEN));
+    }
+
+    @Test
+    void secretBackfillDryRunRejectsInvalidFilters() {
+        assertBadRequest("invalid_enabled_filter", () -> service.secretBackfillDryRun("abc", null, null));
+        assertBadRequest("invalid_enabled_filter", () -> service.secretBackfillDryRun("", null, null));
+        assertBadRequest("unsupported_channel", () -> service.secretBackfillDryRun(null, "email", null));
+        assertBadRequest("invalid_limit", () -> service.secretBackfillDryRun(null, null, "0"));
+        assertBadRequest("invalid_limit", () -> service.secretBackfillDryRun(null, null, "-1"));
+        assertBadRequest("invalid_limit", () -> service.secretBackfillDryRun(null, null, "abc"));
+        assertBadRequest("invalid_limit", () -> service.secretBackfillDryRun(null, null, ""));
+        assertBadRequest("invalid_limit", () -> service.secretBackfillDryRun(null, null, "501"));
     }
 
     @Test
@@ -1071,6 +1182,73 @@ class NotificationServiceTest {
             )
             values ('missing channel', ?, null, 'demo://not-configured', 'missing', ?, ?)
             """, channelType, enabled, enabled ? "ready" : "disabled");
+    }
+
+    private Long insertEncryptedChannel(String name, String channelType, boolean enabled) {
+        return insertAndReturnId("""
+            insert into notification_channels(
+                name, channel_type, endpoint_url, endpoint_secret_ciphertext,
+                endpoint_secret_key_version, endpoint_masked, secret_storage_status, enabled, status
+            )
+            values (?, ?, null, 'v1:ciphertext', 'local-v1', 'https://encrypted.example.test/...', 'encrypted', ?, ?)
+            """, name, channelType, enabled, enabled ? "ready" : "disabled");
+    }
+
+    private Long insertLegacyChannel(String name, String channelType, String endpointUrl, boolean enabled) {
+        return insertAndReturnId("""
+            insert into notification_channels(
+                name, channel_type, endpoint_url, secret_storage_status, enabled, status
+            )
+            values (?, ?, ?, 'legacy_plaintext', ?, ?)
+            """, name, channelType, endpointUrl, enabled, enabled ? "ready" : "disabled");
+    }
+
+    private List<Map<String, Object>> channelSnapshots() {
+        return jdbcTemplate.queryForList("""
+            select id, endpoint_url, endpoint_secret_ciphertext, endpoint_secret_key_version,
+                   endpoint_masked, secret_storage_status, updated_at, enabled, status
+            from notification_channels
+            order by id
+            """);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object value) {
+        return (Map<String, Object>) value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> asList(Object value) {
+        return (List<Map<String, Object>>) value;
+    }
+
+    private long number(Object value) {
+        return ((Number) value).longValue();
+    }
+
+    private void assertDryRunItem(
+        List<Map<String, Object>> items,
+        String name,
+        String dryRunStatus,
+        String blockReason,
+        boolean migrationEligible
+    ) {
+        var item = items.stream()
+            .filter(row -> name.equals(row.get("name")))
+            .findFirst()
+            .orElseThrow();
+        assertEquals(dryRunStatus, item.get("dryRunStatus"));
+        assertEquals(blockReason, item.get("blockReason"));
+        assertEquals(migrationEligible, item.get("migrationEligible"));
+        assertFalse(item.containsKey("endpoint_url"));
+        assertFalse(item.containsKey("endpoint_secret_ciphertext"));
+        assertFalse(item.containsKey("endpoint_secret_key_version"));
+    }
+
+    private void assertBadRequest(String reason, Runnable action) {
+        var error = assertThrows(ResponseStatusException.class, action::run);
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+        assertEquals(reason, error.getReason());
     }
 
     private String configJson(long id) {

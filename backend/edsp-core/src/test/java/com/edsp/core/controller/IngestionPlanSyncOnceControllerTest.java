@@ -80,7 +80,7 @@ class IngestionPlanSyncOnceControllerTest {
         private int limit;
 
         StubSyncOnceService() {
-            super(null, null, null, null, null);
+            super(null, null, null, null, null, null);
         }
 
         @Override

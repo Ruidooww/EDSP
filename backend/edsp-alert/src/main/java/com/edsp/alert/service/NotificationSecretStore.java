@@ -2,6 +2,7 @@ package com.edsp.alert.service;
 
 import java.util.Base64;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -14,6 +15,7 @@ public class NotificationSecretStore {
     private final String configuredMasterKey;
     private final NotificationSecretCodec codec;
 
+    @Autowired
     public NotificationSecretStore(@Value("${edsp.notification.secret.master-key:}") String configuredMasterKey) {
         this(configuredMasterKey, new NotificationSecretCodec());
     }

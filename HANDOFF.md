@@ -6,67 +6,46 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Notification Secret Storage Hardening MVP`
-- 最新 feature merge commit：`38923cd merge: notification secret storage hardening mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for notification secret storage hardening mvp`
-- 本轮阶段分支：`codex/notification-secret-storage-hardening-mvp`
-- 本轮结果：已完成通知通道 partial update hardening。编辑通知通道时可只修改名称、描述、启用状态和配置；未传 endpoint 时保留既有 encrypted secret 或 legacy plaintext fallback；传入新 endpoint 时才重新校验并重新加密。
+- 当前阶段：`Alerts Page Table Layout Hotfix`
+- 最新 feature merge commit：`1d18b1f merge: alerts page table layout hotfix`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for alerts page table layout hotfix`
+- 本轮阶段分支：`codex/alerts-page-table-layout-hotfix`
+- 本轮结果：已修复前端告警中心告警列表表格布局问题，避免告警标题、中文字段、状态和操作按钮被压缩成竖排，恢复横向滚动、可读列宽和正常行高。
 
 ## 已完成能力
 
-- 后端 `PUT /api/notifications/channels/{id}` 支持 partial update：
-  - 未传 `webhookUrl` / `endpointUrl` 时保留旧 secret。
-  - blank / whitespace endpoint 返回 `400`，不清空旧 secret。
-  - 传入新 endpoint 时重新校验、重新加密，并保持 `endpoint_url = null`。
-  - 未传 `enabled` / `description` / `config` / `name` 时按规则保留旧值。
-  - 显式 `enabled=false` 可禁用通道。
-  - 显式 `description=null` 可清空描述。
-  - `config={}` 可更新为空配置，并继续经过 sanitizer。
-- encrypted channel update：
-  - 不传 endpoint 时保留 `endpoint_secret_ciphertext`、`endpoint_secret_key_version`、`endpoint_masked`、`secret_storage_status=encrypted`。
-  - 不传 endpoint 时不调用 `NotificationSecretStore.storeEndpoint(...)`，不要求 master key。
-  - 传新 endpoint 时重新加密，旧 token 不进入 DB / API response。
-- legacy plaintext channel update：
-  - 不传 endpoint 时保留 `endpoint_url` fallback，不生成 ciphertext，不要求 master key。
-  - 传新 endpoint 时转换为 encrypted，并清空 `endpoint_url`。
-- missing channel update：
-  - `missing + no endpoint + finalEnabled=true` 返回 `notification_secret_unavailable`。
-  - `missing + no endpoint + finalEnabled=false` 允许更新 metadata 并保持 missing。
-  - `missing + new endpoint` 转换为 encrypted。
-- channel type hardening：
-  - update 未传 `channelType` 时保留旧值。
-  - update 传相同 `channelType` 允许。
-  - update 传不同 `channelType` 返回 `channel_type_immutable`。
-- 前端 `NotificationsPage`：
-  - 支持编辑通知通道，不再要求重新输入 endpoint。
-  - endpoint 留空表示保留现有密钥。
-  - 空格 endpoint 会被识别为无效输入。
-  - 新增只读密钥状态展示：`encrypted` = 已加密，`legacy_plaintext` = 待重配，`missing` = 未配置。
-  - 不展示 raw endpoint / ciphertext / key version。
+- 前端 `AlertsPage` 表格布局修复：
+  - 为告警标题、等级、状态、规则、Decision ID、Standard Event、指派给、用户、资产、发生时间、更新时间、操作列设置明确宽度。
+  - 将告警列表横向滚动宽度提升到 `scroll={{ x: 2200 }}`，避免浏览器压缩列宽导致中文逐字换行。
+  - 告警标题列固定宽度并限制在单行展示，长标题通过 ellipsis 省略。
+  - 规则、用户、资产、指派人、时间等长文本字段统一使用受控 ellipsis。
+  - 操作列保持 `fixed: 'right'`，宽度调整为 `360`，按钮保持横向排列。
+- 局部 CSS 防护：
+  - 仅在 `.alerts-table` 作用域下增加 `white-space: nowrap`、ellipsis 和 action button nowrap 防护。
+  - 不影响 `NotificationsPage` / `DashboardPage` / 其他表格。
+- 保留现有告警操作：
+  - 详情
+  - 确认
+  - 指派
+  - 关闭
+  - 发送通知
 
 ## 明确未做 / 禁止误解
 
+- 未改后端。
 - 未新增 migration。
-- 未修改 V16 字段定义。
-- 未删除 `endpoint_url` 字段。
-- 未做历史 secret backfill / cleanup。
-- 未做历史数据批量清洗。
-- 未做 key rotation。
-- 未接 Vault / KMS。
-- 未接外部 secret provider。
-- 未新增 Email / SMS adapter。
-- 未新增通知通道 adapter。
-- 未做自动通知。
-- 未做自动 retry / 批量 retry / 失败队列。
-- 未做通知升级 / 通知编排。
-- 未修改 notification send / retry API 语义。
 - 未修改 alert lifecycle。
-- 未写 `alert_lifecycle_events`。
+- 未修改 alert status 语义。
+- 未修改 assign / acknowledge / close API。
+- 未修改 notification send / retry。
+- 未修改 Notification Secret Storage。
 - 未修改 rule evaluation。
 - 未修改 alert generation。
-- 未修改 sync-once / scheduled sync 语义。
-- 未混入 Docker Compose Container Name Hardening。
+- 未修改 sync-once / scheduled sync。
+- 未修改 Docker / compose。
 - 未修改 `AGENTS.md`。
+- 未新增业务入口。
+- 未删除现有功能按钮。
 
 ## 当前关键边界
 
@@ -86,18 +65,20 @@
 ## 测试和验证结果
 
 - 阶段分支验证：
-  - `mvn -pl edsp-alert -am test` 通过：`Tests run: 82, Failures: 0, Errors: 0, Skipped: 0`
-  - `mvn -pl edsp-core -am test` 通过：`Tests run: 116, Failures: 0, Errors: 0, Skipped: 0`
-  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning
-  - `git diff --check` 通过；无 whitespace error
-- 敏感信息检查：
-  - 前端未引用 `endpoint_url` / `endpoint_secret_ciphertext` / `endpoint_secret_key_version`
-  - 生产代码 / 前端 diff 未发现测试 secret 常量泄露
-  - 测试文件中的 `WEBHOOKTOKEN` 等仅用于断言覆盖
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `git diff --check` 通过；无 whitespace error。
+  - `git status --short --branch` clean after branch commit / push。
+- 手工 UI 验证结论：
+  - 告警列表不再依赖自动压缩列宽。
+  - 告警标题列有固定宽度和 ellipsis。
+  - 表格启用横向滚动。
+  - 操作列按钮保持可见且横向排列。
+  - 详情 / 确认 / 指派 / 关闭 / 发送通知等已有操作未删除。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
 
+- 本轮未启动真实后端数据做浏览器截图验证；如需要，可后续用真实 alert 数据在 1366px / 1440px 宽度下补一轮视觉确认。
 - 历史 `notification_channels.endpoint_url` 中已有 plaintext endpoint，本轮未做 backfill / cleanup。
 - 历史 `notification_channels.config_json` 中如已有敏感值，本轮未做 migration 清理。
 - 历史 `notification_deliveries.response_body / failure_reason / payload_json` 中如已有敏感值，本轮未做 migration 清理。

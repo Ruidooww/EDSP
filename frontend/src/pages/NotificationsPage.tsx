@@ -28,6 +28,11 @@ interface DeliveryFilters {
   channelId: number | null;
 }
 
+interface ChannelFilters {
+  secretStorageStatus: string;
+  enabled: string;
+}
+
 const CHANNEL_TYPE_OPTIONS = [
   { value: 'webhook', label: 'Webhook' },
   { value: 'wecom', label: '企业微信' },
@@ -43,6 +48,19 @@ const DELIVERY_STATUS_OPTIONS = [
 const DELIVERY_CHANNEL_TYPE_OPTIONS = [
   { value: '', label: '全部通道类型' },
   ...CHANNEL_TYPE_OPTIONS,
+];
+
+const CHANNEL_SECRET_STORAGE_STATUS_OPTIONS = [
+  { value: '', label: '全部密钥状态' },
+  { value: 'encrypted', label: '已加密' },
+  { value: 'legacy_plaintext', label: '待重配' },
+  { value: 'missing', label: '未配置' },
+];
+
+const CHANNEL_ENABLED_OPTIONS = [
+  { value: '', label: '全部启用状态' },
+  { value: 'true', label: '启用' },
+  { value: 'false', label: '停用' },
 ];
 
 function channelTypeLabel(value: string) {
@@ -144,6 +162,8 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<NotificationChannelRow | null>(null);
+  const [channelSecretStorageStatus, setChannelSecretStorageStatus] = useState('');
+  const [channelEnabled, setChannelEnabled] = useState('');
   const [deliveryAlertId, setDeliveryAlertId] = useState<number | null>(null);
   const [deliveryStatus, setDeliveryStatus] = useState('');
   const [deliveryChannelType, setDeliveryChannelType] = useState('');
@@ -152,6 +172,13 @@ export default function NotificationsPage() {
   const [retryLoadingId, setRetryLoadingId] = useState<number | null>(null);
   const [form] = Form.useForm<NotificationChannelFormValues>();
 
+  function currentChannelFilters(): ChannelFilters {
+    return {
+      secretStorageStatus: channelSecretStorageStatus,
+      enabled: channelEnabled,
+    };
+  }
+
   function currentDeliveryFilters(): DeliveryFilters {
     return {
       alertId: deliveryAlertId,
@@ -159,6 +186,18 @@ export default function NotificationsPage() {
       channelType: deliveryChannelType,
       channelId: deliveryChannelId,
     };
+  }
+
+  function channelsPath(filters = currentChannelFilters()) {
+    const params = new URLSearchParams();
+    if (filters.secretStorageStatus) {
+      params.set('secretStorageStatus', filters.secretStorageStatus);
+    }
+    if (filters.enabled) {
+      params.set('enabled', filters.enabled);
+    }
+    const query = params.toString();
+    return query ? `/api/notifications/channels?${query}` : '/api/notifications/channels';
   }
 
   function deliveriesPath(filters = currentDeliveryFilters()) {
@@ -178,12 +217,12 @@ export default function NotificationsPage() {
     return `/api/notifications/deliveries?${params.toString()}`;
   }
 
-  async function load(filters = currentDeliveryFilters()) {
+  async function load(channelFilters = currentChannelFilters(), deliveryFilters = currentDeliveryFilters()) {
     setLoading(true);
     try {
       const [channelRows, deliveryRows] = await Promise.all([
-        apiGet<NotificationChannelRow[]>('/api/notifications/channels'),
-        apiGet<NotificationDeliveryRow[]>(deliveriesPath(filters)),
+        apiGet<NotificationChannelRow[]>(channelsPath(channelFilters)),
+        apiGet<NotificationDeliveryRow[]>(deliveriesPath(deliveryFilters)),
       ]);
       setRows(channelRows);
       setDeliveries(deliveryRows);
@@ -193,6 +232,38 @@ export default function NotificationsPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function applyChannelFilters() {
+    await load();
+  }
+
+  async function updateChannelSecretStorageStatus(value: string) {
+    const filters: ChannelFilters = {
+      secretStorageStatus: value,
+      enabled: channelEnabled,
+    };
+    setChannelSecretStorageStatus(value);
+    await load(filters, currentDeliveryFilters());
+  }
+
+  async function updateChannelEnabled(value: string) {
+    const filters: ChannelFilters = {
+      secretStorageStatus: channelSecretStorageStatus,
+      enabled: value,
+    };
+    setChannelEnabled(value);
+    await load(filters, currentDeliveryFilters());
+  }
+
+  async function resetChannelFilters() {
+    const filters: ChannelFilters = {
+      secretStorageStatus: '',
+      enabled: '',
+    };
+    setChannelSecretStorageStatus(filters.secretStorageStatus);
+    setChannelEnabled(filters.enabled);
+    await load(filters, currentDeliveryFilters());
   }
 
   async function applyDeliveryFilters() {
@@ -210,7 +281,7 @@ export default function NotificationsPage() {
     setDeliveryStatus(filters.status);
     setDeliveryChannelType(filters.channelType);
     setDeliveryChannelId(filters.channelId);
-    await load(filters);
+    await load(currentChannelFilters(), filters);
   }
 
   useEffect(() => {
@@ -303,6 +374,13 @@ export default function NotificationsPage() {
     : selectedChannelType === 'feishu'
       ? 'https://open.feishu.cn/open-apis/bot/v2/hook/...'
       : 'https://example.com/webhook';
+  const endpointExtra = editingRow?.secret_storage_status === 'legacy_plaintext'
+    ? '留空则保留现有密钥；重新输入 Webhook URL 后将转换为加密存储'
+    : editingRow?.secret_storage_status === 'missing'
+      ? '需要输入 endpoint 才能启用'
+      : editingRow
+        ? '留空则保留现有密钥'
+        : undefined;
 
   const channelColumns: ColumnsType<NotificationChannelRow> = [
     {
@@ -504,6 +582,24 @@ export default function NotificationsPage() {
       <Typography.Title level={5} className="section-subtitle">
         通知通道
       </Typography.Title>
+      <Space className="form-hint" wrap>
+        <Select
+          style={{ width: 160 }}
+          value={channelSecretStorageStatus}
+          options={CHANNEL_SECRET_STORAGE_STATUS_OPTIONS}
+          onChange={(value) => void updateChannelSecretStorageStatus(value)}
+        />
+        <Select
+          style={{ width: 140 }}
+          value={channelEnabled}
+          options={CHANNEL_ENABLED_OPTIONS}
+          onChange={(value) => void updateChannelEnabled(value)}
+        />
+        <Button type="primary" onClick={applyChannelFilters}>
+          查询
+        </Button>
+        <Button onClick={resetChannelFilters}>查看全部</Button>
+      </Space>
       <Table<NotificationChannelRow>
         rowKey="id"
         loading={loading}
@@ -596,7 +692,7 @@ export default function NotificationsPage() {
                 },
               },
             ]}
-            extra={editingRow ? '留空则保留现有密钥' : undefined}
+            extra={endpointExtra}
           >
             <Input prefix={<ApiOutlined />} placeholder={endpointPlaceholder} />
           </Form.Item>

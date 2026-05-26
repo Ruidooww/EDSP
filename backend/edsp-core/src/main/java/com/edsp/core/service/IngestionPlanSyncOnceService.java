@@ -1,11 +1,20 @@
 package com.edsp.core.service;
 
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
+import com.edsp.core.transform.TransformRemoteShadowClient;
+import com.edsp.core.transform.TransformShadowReport;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.transform.contract.BatchTransformRequest;
+import com.edsp.transform.contract.TransformDraftDto;
+import com.edsp.transform.contract.TransformMappingPlanDto;
+import com.edsp.transform.contract.TransformOptionsDto;
+import com.edsp.transform.contract.TransformResponse;
 import com.edsp.transform.standardevent.MappingPlan;
 import com.edsp.transform.standardevent.SourceRow;
+import com.edsp.transform.standardevent.StandardEventDraft;
 import com.edsp.transform.standardevent.StandardEventTransformService;
 import com.edsp.transform.standardevent.TransformOptions;
+import com.edsp.transform.standardevent.TransformResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,6 +38,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -43,6 +53,7 @@ public class IngestionPlanSyncOnceService {
     private final JdbcShadowSampleService sampleService;
     private final StandardEventDedupService standardEventDedupService;
     private final StandardEventTransformService transformService;
+    private final TransformRemoteShadowClient transformRemoteShadowClient;
 
     public IngestionPlanSyncOnceService(
         JdbcTemplate jdbcTemplate,
@@ -52,12 +63,36 @@ public class IngestionPlanSyncOnceService {
         StandardEventDedupService standardEventDedupService,
         StandardEventTransformService transformService
     ) {
+        this(
+            jdbcTemplate,
+            objectMapper,
+            support,
+            sampleService,
+            standardEventDedupService,
+            transformService,
+            TransformRemoteShadowClient.disabled()
+        );
+    }
+
+    @Autowired
+    public IngestionPlanSyncOnceService(
+        JdbcTemplate jdbcTemplate,
+        ObjectMapper objectMapper,
+        CoreRequestSupport support,
+        JdbcShadowSampleService sampleService,
+        StandardEventDedupService standardEventDedupService,
+        StandardEventTransformService transformService,
+        TransformRemoteShadowClient transformRemoteShadowClient
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.support = support;
         this.sampleService = sampleService;
         this.standardEventDedupService = standardEventDedupService;
         this.transformService = transformService;
+        this.transformRemoteShadowClient = transformRemoteShadowClient == null
+            ? TransformRemoteShadowClient.disabled()
+            : transformRemoteShadowClient;
     }
 
     @Transactional
@@ -175,9 +210,12 @@ public class IngestionPlanSyncOnceService {
         var duplicateCount = 0;
         var rawCount = 0;
         var standardCount = 0;
+        var localTransformResults = new ArrayList<TransformResponse>();
 
         for (var row : rows) {
-            var standard = standardRecord(mappingPlan, transformOptions, row);
+            var transformed = standardRecord(mappingPlan, transformOptions, row);
+            var standard = transformed.standardRecord();
+            localTransformResults.add(transformed.response());
             var rawId = insertRawEvent(ingestionRunId, dataSourceId, source, standard, row, syncMode);
             rawCount++;
             if (!standard.errors().isEmpty()) {
@@ -207,8 +245,9 @@ public class IngestionPlanSyncOnceService {
             warnings.add("no_source_rows");
         }
         var status = failedCount > 0 || !warnings.isEmpty() ? "warning" : "passed";
+        var transformShadow = transformShadow(rows, mappingPlan, transformOptions, localTransformResults);
         return new SyncResult(status, readCount, successCount, failedCount, duplicateCount, rawCount,
-            standardCount, new ArrayList<>(warnings), errorsByType);
+            standardCount, new ArrayList<>(warnings), errorsByType, transformShadow);
     }
 
     private List<Map<String, Object>> sampleRows(Source source, int sampleLimit) {
@@ -246,18 +285,72 @@ public class IngestionPlanSyncOnceService {
         return null;
     }
 
-    private StandardRecord standardRecord(
+    private StandardTransform standardRecord(
         MappingPlan mappingPlan,
         TransformOptions transformOptions,
         Map<String, Object> row
     ) {
         var result = transformService.transform(new SourceRow(row), mappingPlan, transformOptions);
         var draft = result.draft();
-        return new StandardRecord(
+        return new StandardTransform(
+            new StandardRecord(
+                draft.sourceSystem(),
+                draft.externalId(),
+                draft.eventType(),
+                draft.occurredAt(),
+                draft.actor(),
+                draft.assetRef(),
+                draft.subjectType(),
+                draft.subjectRef(),
+                draft.action(),
+                draft.result(),
+                draft.severity(),
+                draft.riskScore(),
+                draft.dedupKey(),
+                toJson(draft.normalized()),
+                toJson(draft.extra()),
+                result.errors()
+            ),
+            transformResponse(result)
+        );
+    }
+
+    private TransformShadowReport transformShadow(
+        List<Map<String, Object>> rows,
+        MappingPlan mappingPlan,
+        TransformOptions transformOptions,
+        List<TransformResponse> localTransformResults
+    ) {
+        if (!transformRemoteShadowClient.enabled()) {
+            return TransformShadowReport.disabled();
+        }
+        try {
+            var request = new BatchTransformRequest(
+                rows,
+                new TransformMappingPlanDto(mappingPlan.fieldMappings(), mappingPlan.dedupFields()),
+                new TransformOptionsDto(
+                    transformOptions.dataSourceId(),
+                    transformOptions.schemaTableId(),
+                    transformOptions.sourceTable(),
+                    transformOptions.syncMode()
+                )
+            );
+            return transformRemoteShadowClient.shadow(request, localTransformResults);
+        } catch (RuntimeException ex) {
+            return TransformShadowReport.unavailable(localTransformResults.size());
+        }
+    }
+
+    private TransformResponse transformResponse(TransformResult result) {
+        return new TransformResponse(transformDraft(result.draft()), result.errors(), result.warnings());
+    }
+
+    private TransformDraftDto transformDraft(StandardEventDraft draft) {
+        return new TransformDraftDto(
             draft.sourceSystem(),
             draft.externalId(),
             draft.eventType(),
-            draft.occurredAt(),
+            draft.occurredAt() == null ? null : draft.occurredAt().toString(),
             draft.actor(),
             draft.assetRef(),
             draft.subjectType(),
@@ -267,9 +360,8 @@ public class IngestionPlanSyncOnceService {
             draft.severity(),
             draft.riskScore(),
             draft.dedupKey(),
-            toJson(draft.normalized()),
-            toJson(draft.extra()),
-            result.errors()
+            draft.normalized(),
+            draft.extra()
         );
     }
 
@@ -532,6 +624,9 @@ public class IngestionPlanSyncOnceService {
         report.put("standardCount", result.standardCount());
         report.put("warnings", result.warnings());
         report.put("errorsByType", result.errorsByType());
+        if (result.transformShadowReport().enabled()) {
+            report.put("transformShadow", result.transformShadowReport().toReportMap());
+        }
         return report;
     }
 
@@ -707,6 +802,12 @@ public class IngestionPlanSyncOnceService {
     ) {
     }
 
+    private record StandardTransform(
+        StandardRecord standardRecord,
+        TransformResponse response
+    ) {
+    }
+
     private record SyncResult(
         String status,
         int readCount,
@@ -716,10 +817,11 @@ public class IngestionPlanSyncOnceService {
         int rawCount,
         int standardCount,
         List<String> warnings,
-        Map<String, Integer> errorsByType
+        Map<String, Integer> errorsByType,
+        TransformShadowReport transformShadowReport
     ) {
         private static SyncResult empty(String status) {
-            return new SyncResult(status, 0, 0, 0, 0, 0, 0, List.of(), Map.of());
+            return new SyncResult(status, 0, 0, 0, 0, 0, 0, List.of(), Map.of(), TransformShadowReport.disabled());
         }
     }
 

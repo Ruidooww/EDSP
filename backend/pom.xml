@@ -12,6 +12,8 @@
     <modules>
         <module>edsp-common</module>
         <module>edsp-transform</module>
+        <module>edsp-transform-contract</module>
+        <module>edsp-transform-service</module>
         <module>edsp-gateway</module>
         <module>edsp-auth</module>
         <module>edsp-core</module>

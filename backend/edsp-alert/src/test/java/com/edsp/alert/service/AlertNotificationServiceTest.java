@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -77,7 +78,8 @@ class AlertNotificationServiceTest {
                 description text,
                 config_json jsonb not null default '{}',
                 enabled boolean not null default true,
-                status varchar(40) not null default 'ready'
+                status varchar(40) not null default 'ready',
+                updated_at timestamptz not null default now()
             )
             """);
         jdbcTemplate.execute("""
@@ -216,6 +218,81 @@ class AlertNotificationServiceTest {
         assertEquals("encrypted", channel.get("secret_storage_status"));
         assertFalse(String.valueOf(channel.get("endpoint_secret_ciphertext")).contains("WEBHOOKTOKEN123456"));
         assertNoSecretLeak(String.valueOf(normalizeDbValue(delivery.get("payload_json"))));
+    }
+
+    @Test
+    void encryptedChannelStillSendsAndRetriesAfterPartialMetadataUpdateWithoutMasterKey() {
+        var alertId = insertAlert("encrypted partial update", "open");
+        var endpoint = "https://example.test/webhook?token=WEBHOOKTOKEN123456";
+        var notificationService = new NotificationService(
+            jdbcTemplate,
+            objectMapper,
+            new NotificationSecretStore(TEST_MASTER_KEY)
+        );
+        var created = notificationService.createChannel(new com.edsp.alert.dto.NotificationChannelRequest(
+            "encrypted webhook",
+            "webhook",
+            endpoint,
+            null,
+            true,
+            Map.of()
+        ));
+        var channelId = ((Number) created.get("id")).longValue();
+        var missingKeyService = new NotificationService(
+            jdbcTemplate,
+            objectMapper,
+            new NotificationSecretStore("")
+        );
+        missingKeyService.updateChannel(
+            channelId,
+            new com.edsp.alert.dto.NotificationChannelRequest("renamed encrypted", null, null, null, null, null),
+            Set.of("name")
+        );
+
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", 503, "server down", "webhook_http_503");
+        var failed = service.send(alertId, channelId);
+        var failedDeliveryId = ((Number) failed.get("deliveryId")).longValue();
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 204, "accepted", "webhook_delivered");
+        var retry = service.retryDelivery(failedDeliveryId);
+
+        assertEquals("success", retry.get("status"));
+        assertEquals(endpoint, webhookClient.lastEndpointUrl);
+        assertEquals(2L, countDeliveries());
+        assertEquals(1, ((Number) deliveryRow(failedDeliveryId).get("retry_count")).intValue());
+        assertEquals("renamed encrypted", channelRow(channelId).get("name"));
+        assertEquals(null, channelRow(channelId).get("endpoint_url"));
+        assertEquals("encrypted", channelRow(channelId).get("secret_storage_status"));
+    }
+
+    @Test
+    void legacyPlaintextChannelStillSendsAndRetriesAfterPartialMetadataUpdateWithoutMasterKey() {
+        var alertId = insertAlert("legacy partial update", "open");
+        var endpoint = "http://example.test/webhook?token=WEBHOOKTOKEN123456";
+        var channelId = insertChannel("webhook", endpoint, true);
+        var missingKeyService = new NotificationService(
+            jdbcTemplate,
+            objectMapper,
+            new NotificationSecretStore("")
+        );
+        missingKeyService.updateChannel(
+            channelId,
+            new com.edsp.alert.dto.NotificationChannelRequest("renamed legacy", null, null, null, null, null),
+            Set.of("name")
+        );
+
+        webhookClient.nextResult = new WebhookDeliveryResult("failed", 503, "server down", "webhook_http_503");
+        var failed = service.send(alertId, channelId);
+        var failedDeliveryId = ((Number) failed.get("deliveryId")).longValue();
+        webhookClient.nextResult = new WebhookDeliveryResult("success", 204, "accepted", "webhook_delivered");
+        var retry = service.retryDelivery(failedDeliveryId);
+
+        assertEquals("success", retry.get("status"));
+        assertEquals(endpoint, webhookClient.lastEndpointUrl);
+        assertEquals(2L, countDeliveries());
+        assertEquals(1, ((Number) deliveryRow(failedDeliveryId).get("retry_count")).intValue());
+        assertEquals("renamed legacy", channelRow(channelId).get("name"));
+        assertEquals(endpoint, channelRow(channelId).get("endpoint_url"));
+        assertEquals("legacy_plaintext", channelRow(channelId).get("secret_storage_status"));
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.edsp.alert.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -404,6 +406,295 @@ class NotificationServiceTest {
     }
 
     @Test
+    void updateEncryptedChannelWithoutEndpointPreservesSecretAndDoesNotRequireMasterKey() {
+        var created = service.createChannel(new NotificationChannelRequest(
+            "encrypted",
+            "webhook",
+            "https://hook.example.test/first?token=FIRSTSECRET123456",
+            "old description",
+            true,
+            Map.of("team", "secops")
+        ));
+        var id = ((Number) created.get("id")).longValue();
+        var before = channelRow(id);
+        var missingKeyService = new NotificationService(
+            jdbcTemplate,
+            new ObjectMapper(),
+            new NotificationSecretStore("")
+        );
+
+        missingKeyService.updateChannel(
+            id,
+            new NotificationChannelRequest("renamed", null, null, null, null, null),
+            Set.of("name")
+        );
+
+        var after = channelRow(id);
+        assertEquals("renamed", after.get("name"));
+        assertEquals("old description", after.get("description"));
+        assertEquals(true, after.get("enabled"));
+        assertEquals(before.get("endpoint_secret_ciphertext"), after.get("endpoint_secret_ciphertext"));
+        assertEquals(before.get("endpoint_secret_key_version"), after.get("endpoint_secret_key_version"));
+        assertEquals(before.get("endpoint_masked"), after.get("endpoint_masked"));
+        assertEquals("encrypted", after.get("secret_storage_status"));
+        assertEquals(null, after.get("endpoint_url"));
+    }
+
+    @Test
+    void updateEncryptedChannelWithNewEndpointReencryptsAndKeepsSecretsOutOfResponses() {
+        var created = service.createChannel(new NotificationChannelRequest(
+            "encrypted",
+            "webhook",
+            "https://hook.example.test/first?token=FIRSTSECRET123456",
+            null,
+            true,
+            Map.of("team", "secops")
+        ));
+        var id = ((Number) created.get("id")).longValue();
+        var before = channelRow(id);
+        var updatedUrl = "https://hook.example.test/second?token=SECONDSECRET123456";
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest("encrypted", "webhook", updatedUrl, null, true, Map.of()),
+            Set.of("name", "channelType", "webhookUrl", "enabled", "config")
+        );
+
+        var after = channelRow(id);
+        var response = service.listChannels().stream()
+            .filter(row -> ((Number) row.get("id")).longValue() == id)
+            .findFirst()
+            .orElseThrow();
+
+        assertEquals(null, after.get("endpoint_url"));
+        assertEquals("encrypted", after.get("secret_storage_status"));
+        assertEquals("local-v1", after.get("endpoint_secret_key_version"));
+        assertNotEquals(before.get("endpoint_secret_ciphertext"), after.get("endpoint_secret_ciphertext"));
+        assertEquals("https://hook.example.test/...", after.get("endpoint_masked"));
+        assertFalse(String.valueOf(after.get("endpoint_secret_ciphertext")).contains("FIRSTSECRET123456"));
+        assertFalse(String.valueOf(after.get("endpoint_secret_ciphertext")).contains("SECONDSECRET123456"));
+        assertFalse(response.containsKey("endpoint_url"));
+        assertFalse(response.containsKey("endpoint_secret_ciphertext"));
+        assertFalse(response.containsKey("endpoint_secret_key_version"));
+        assertFalse(String.valueOf(response).contains("FIRSTSECRET123456"));
+        assertFalse(String.valueOf(response).contains("SECONDSECRET123456"));
+        assertFalse(String.valueOf(response).contains(updatedUrl));
+    }
+
+    @Test
+    void updateBlankEndpointRejectsWithoutClearingExistingSecret() {
+        var created = service.createChannel(new NotificationChannelRequest(
+            "encrypted",
+            "webhook",
+            "https://hook.example.test/first?token=FIRSTSECRET123456",
+            null,
+            true,
+            Map.of()
+        ));
+        var id = ((Number) created.get("id")).longValue();
+        var before = channelRow(id);
+
+        var error = assertThrows(ResponseStatusException.class, () -> service.updateChannel(
+            id,
+            new NotificationChannelRequest("encrypted", "webhook", "   ", null, true, Map.of()),
+            Set.of("webhookUrl")
+        ));
+
+        var after = channelRow(id);
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+        assertEquals("invalid_webhook_url", error.getReason());
+        assertEquals(before.get("endpoint_secret_ciphertext"), after.get("endpoint_secret_ciphertext"));
+        assertEquals(before.get("endpoint_masked"), after.get("endpoint_masked"));
+        assertEquals(null, after.get("endpoint_url"));
+    }
+
+    @Test
+    void updateLegacyPlaintextWithoutEndpointPreservesFallbackAndDoesNotRequireMasterKey() {
+        var id = insertChannel("webhook", "https://legacy.example.test/hook?token=LEGACYSECRET123456");
+        var missingKeyService = new NotificationService(
+            jdbcTemplate,
+            new ObjectMapper(),
+            new NotificationSecretStore("")
+        );
+
+        missingKeyService.updateChannel(
+            id,
+            new NotificationChannelRequest("legacy renamed", null, null, null, null, null),
+            Set.of("name")
+        );
+
+        var after = channelRow(id);
+        var response = service.listChannels().stream()
+            .filter(row -> ((Number) row.get("id")).longValue() == id)
+            .findFirst()
+            .orElseThrow();
+        assertEquals("legacy renamed", after.get("name"));
+        assertEquals("https://legacy.example.test/hook?token=LEGACYSECRET123456", after.get("endpoint_url"));
+        assertEquals(null, after.get("endpoint_secret_ciphertext"));
+        assertEquals(null, after.get("endpoint_secret_key_version"));
+        assertEquals("legacy_plaintext", after.get("secret_storage_status"));
+        assertFalse(response.containsKey("endpoint_url"));
+        assertEquals("legacy_plaintext", response.get("secret_storage_status"));
+        assertFalse(String.valueOf(response).contains("LEGACYSECRET123456"));
+    }
+
+    @Test
+    void updateLegacyPlaintextWithNewEndpointConvertsToEncryptedStorage() {
+        var id = insertChannel("webhook", "https://legacy.example.test/hook?token=LEGACYSECRET123456");
+        var updatedUrl = "https://hook.example.test/new?token=NEWSECRET123456";
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest("legacy upgraded", "webhook", updatedUrl, null, true, Map.of()),
+            Set.of("name", "channelType", "webhookUrl", "enabled", "config")
+        );
+
+        var after = channelRow(id);
+        var response = service.listChannels().stream()
+            .filter(row -> ((Number) row.get("id")).longValue() == id)
+            .findFirst()
+            .orElseThrow();
+        assertEquals(null, after.get("endpoint_url"));
+        assertEquals("encrypted", after.get("secret_storage_status"));
+        assertEquals("local-v1", after.get("endpoint_secret_key_version"));
+        assertCiphertextFormat(String.valueOf(after.get("endpoint_secret_ciphertext")));
+        assertFalse(String.valueOf(after.get("endpoint_secret_ciphertext")).contains("LEGACYSECRET123456"));
+        assertFalse(String.valueOf(after.get("endpoint_secret_ciphertext")).contains("NEWSECRET123456"));
+        assertFalse(String.valueOf(response).contains("LEGACYSECRET123456"));
+        assertFalse(String.valueOf(response).contains("NEWSECRET123456"));
+        assertFalse(response.containsKey("endpoint_url"));
+    }
+
+    @Test
+    void updateMissingChannelWithoutEndpointRequiresFinalDisabledState() {
+        var disabledMissingId = insertMissingChannel("webhook", false);
+        var enabledMissingId = insertMissingChannel("webhook", true);
+
+        service.updateChannel(
+            disabledMissingId,
+            new NotificationChannelRequest("still missing", null, null, null, null, null),
+            Set.of("name")
+        );
+        var disabledAfter = channelRow(disabledMissingId);
+        assertEquals("still missing", disabledAfter.get("name"));
+        assertEquals("missing", disabledAfter.get("secret_storage_status"));
+        assertEquals(false, disabledAfter.get("enabled"));
+        assertEquals(null, disabledAfter.get("endpoint_url"));
+        assertEquals(null, disabledAfter.get("endpoint_secret_ciphertext"));
+
+        var enableError = assertThrows(ResponseStatusException.class, () -> service.updateChannel(
+            disabledMissingId,
+            new NotificationChannelRequest(null, null, null, null, true, null),
+            Set.of("enabled")
+        ));
+        var renameEnabledMissingError = assertThrows(ResponseStatusException.class, () -> service.updateChannel(
+            enabledMissingId,
+            new NotificationChannelRequest("invalid enabled missing", null, null, null, null, null),
+            Set.of("name")
+        ));
+
+        assertEquals("notification_secret_unavailable", enableError.getReason());
+        assertEquals("notification_secret_unavailable", renameEnabledMissingError.getReason());
+        assertEquals(false, channelRow(disabledMissingId).get("enabled"));
+        assertEquals("missing channel", channelRow(enabledMissingId).get("name"));
+    }
+
+    @Test
+    void updateMissingChannelWithEndpointConvertsToEncryptedStorage() {
+        var id = insertMissingChannel("webhook", false);
+        var endpoint = "https://hook.example.test/new?token=NEWSECRET123456";
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest("configured", "webhook", endpoint, null, true, Map.of()),
+            Set.of("name", "channelType", "webhookUrl", "enabled", "config")
+        );
+
+        var after = channelRow(id);
+        assertEquals("configured", after.get("name"));
+        assertEquals(true, after.get("enabled"));
+        assertEquals(null, after.get("endpoint_url"));
+        assertEquals("encrypted", after.get("secret_storage_status"));
+        assertCiphertextFormat(String.valueOf(after.get("endpoint_secret_ciphertext")));
+        assertFalse(String.valueOf(after.get("endpoint_secret_ciphertext")).contains("NEWSECRET123456"));
+    }
+
+    @Test
+    void partialUpdatePreservesMissingFieldsAndHonorsExplicitNullOrFalseValues() {
+        var created = service.createChannel(new NotificationChannelRequest(
+            "original",
+            "webhook",
+            "https://hook.example.test/original?token=ORIGINALSECRET123456",
+            "original description",
+            true,
+            Map.of("team", "secops")
+        ));
+        var id = ((Number) created.get("id")).longValue();
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest("renamed", null, null, null, null, null),
+            Set.of("name")
+        );
+        var afterNameOnly = channelRow(id);
+        assertEquals("renamed", afterNameOnly.get("name"));
+        assertEquals("original description", afterNameOnly.get("description"));
+        assertEquals(true, afterNameOnly.get("enabled"));
+        assertTrue(configJson(id).contains("secops"));
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest(null, null, null, null, null, null),
+            Set.of("description")
+        );
+        assertEquals(null, channelRow(id).get("description"));
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest(null, null, null, null, false, null),
+            Set.of("enabled")
+        );
+        assertEquals(false, channelRow(id).get("enabled"));
+        assertEquals("disabled", channelRow(id).get("status"));
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest(null, null, null, null, null, Map.of()),
+            Set.of("config")
+        );
+        assertFalse(configJson(id).contains("secops"));
+    }
+
+    @Test
+    void updateChannelTypeIsImmutable() {
+        var created = service.createChannel(new NotificationChannelRequest(
+            "webhook",
+            "webhook",
+            "https://hook.example.test/original?token=ORIGINALSECRET123456",
+            null,
+            true,
+            Map.of()
+        ));
+        var id = ((Number) created.get("id")).longValue();
+
+        service.updateChannel(
+            id,
+            new NotificationChannelRequest("same type", "webhook", null, null, null, null),
+            Set.of("name", "channelType")
+        );
+
+        var error = assertThrows(ResponseStatusException.class, () -> service.updateChannel(
+            id,
+            new NotificationChannelRequest("wrong type", "wecom", null, null, null, null),
+            Set.of("channelType")
+        ));
+
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+        assertEquals("channel_type_immutable", error.getReason());
+        assertEquals("webhook", channelRow(id).get("channel_type"));
+    }
+
+    @Test
     void listDeliveriesRedactsStoredResponseFailureReasonAndPayloadPreview() {
         var alertId = insertAlert("historical delivery alert");
         var endpoint = "https://hook.example.test/webhook?token=DELIVERYSECRET123456&tenant=secops";
@@ -680,6 +971,23 @@ class NotificationServiceTest {
             channelType,
             channelType,
             endpointUrl
+        );
+    }
+
+    private Long insertMissingChannel(String channelType, boolean enabled) {
+        return insertAndReturnId("""
+            insert into notification_channels(
+                name, channel_type, endpoint_url, endpoint_masked, secret_storage_status, enabled, status
+            )
+            values ('missing channel', ?, null, 'demo://not-configured', 'missing', ?, ?)
+            """, channelType, enabled, enabled ? "ready" : "disabled");
+    }
+
+    private String configJson(long id) {
+        return jdbcTemplate.queryForObject(
+            "select cast(config_json as varchar) from notification_channels where id = ?",
+            String.class,
+            id
         );
     }
 

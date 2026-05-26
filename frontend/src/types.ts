@@ -231,6 +231,8 @@ export interface NotificationChannelRow {
   channelType?: string;
   endpoint_masked: string;
   endpointMasked?: string;
+  secret_storage_status?: string;
+  secretStorageStatus?: string;
   description?: string;
   enabled: boolean;
   status: string;

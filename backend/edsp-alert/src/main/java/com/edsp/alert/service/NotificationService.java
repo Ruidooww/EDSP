@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -148,20 +149,81 @@ public class NotificationService {
     }
 
     public Map<String, Object> updateChannel(long id, NotificationChannelRequest request) {
-        var channelType = normalizeType(request.channelType());
-        var endpointUrl = normalizeEndpoint(channelType, request.webhookUrl());
-        var storedEndpoint = secretStore.storeEndpoint(endpointUrl, SECRET_SANITIZER.maskEndpoint(endpointUrl));
+        return updateChannel(id, request, Set.of("name", "channelType", "webhookUrl", "description", "enabled", "config"));
+    }
+
+    public Map<String, Object> updateChannel(
+        long id,
+        NotificationChannelRequest request,
+        Set<String> presentFields
+    ) {
+        var fields = presentFields == null ? Set.<String>of() : new HashSet<>(presentFields);
+        var current = currentChannel(id);
+        var currentChannelType = normalizeType(stringOrBlank(current.get("channel_type")));
+        var requestedChannelType = fields.contains("channelType")
+            ? normalizeType(request.channelType())
+            : currentChannelType;
+        if (!requestedChannelType.equals(currentChannelType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "channel_type_immutable");
+        }
+
+        var finalName = fields.contains("name") ? normalizeName(request.name()) : stringOrBlank(current.get("name"));
+        var finalDescription = fields.contains("description")
+            ? request.description()
+            : stringOrNull(current.get("description"));
+        var finalEnabled = fields.contains("enabled") ? request.enabled() : booleanValue(current.get("enabled"));
+        var endpointProvided = fields.contains("webhookUrl") || fields.contains("endpointUrl");
+        var newEndpoint = endpointProvided && request.webhookUrl() != null;
+
+        String endpointUrl;
+        String endpointSecretCiphertext;
+        String endpointSecretKeyVersion;
+        String endpointMasked;
+        String secretStorageStatus;
+        String configJson;
+
+        if (newEndpoint) {
+            var normalizedEndpoint = normalizeEndpoint(currentChannelType, request.webhookUrl());
+            var storedEndpoint = secretStore.storeEndpoint(
+                normalizedEndpoint,
+                SECRET_SANITIZER.maskEndpoint(normalizedEndpoint)
+            );
+            endpointUrl = null;
+            endpointSecretCiphertext = storedEndpoint.ciphertext();
+            endpointSecretKeyVersion = storedEndpoint.keyVersion();
+            endpointMasked = storedEndpoint.endpointMasked();
+            secretStorageStatus = storedEndpoint.status();
+            configJson = fields.contains("config")
+                ? configJson(request, normalizedEndpoint)
+                : stringOrBlank(current.get("config_json"));
+        } else {
+            endpointUrl = stringOrNull(current.get("endpoint_url"));
+            endpointSecretCiphertext = stringOrNull(current.get("endpoint_secret_ciphertext"));
+            endpointSecretKeyVersion = stringOrNull(current.get("endpoint_secret_key_version"));
+            endpointMasked = stringOrNull(current.get("endpoint_masked"));
+            secretStorageStatus = stringOrBlank(current.get("secret_storage_status"));
+            if (secretStorageStatus.isBlank()) {
+                secretStorageStatus = "legacy_plaintext";
+            }
+            if ("missing".equals(secretStorageStatus) && finalEnabled) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "notification_secret_unavailable");
+            }
+            configJson = fields.contains("config")
+                ? configJson(request, endpointUrl)
+                : stringOrBlank(current.get("config_json"));
+        }
+
         jdbcTemplate.update("""
             update notification_channels
-            set name = ?, channel_type = ?, endpoint_url = null,
+            set name = ?, channel_type = ?, endpoint_url = ?,
                 endpoint_secret_ciphertext = ?, endpoint_secret_key_version = ?,
                 endpoint_masked = ?, secret_storage_status = ?, description = ?,
                 config_json = cast(? as jsonb), enabled = ?, status = ?, updated_at = now()
             where id = ?
             """,
-            request.name(), channelType, storedEndpoint.ciphertext(), storedEndpoint.keyVersion(),
-            storedEndpoint.endpointMasked(), storedEndpoint.status(), request.description(),
-            configJson(request), request.enabled(), request.enabled() ? "ready" : "disabled", id);
+            finalName, currentChannelType, endpointUrl, endpointSecretCiphertext,
+            endpointSecretKeyVersion, endpointMasked, secretStorageStatus, finalDescription,
+            configJson, finalEnabled, finalEnabled ? "ready" : "disabled", id);
         return Map.of("id", id);
     }
 
@@ -206,7 +268,11 @@ public class NotificationService {
     }
 
     private String configJson(NotificationChannelRequest request) {
-        return toJson(SECRET_SANITIZER.sanitizeConfig(request.config(), request.webhookUrl()));
+        return configJson(request, request.webhookUrl());
+    }
+
+    private String configJson(NotificationChannelRequest request, String endpointUrl) {
+        return toJson(SECRET_SANITIZER.sanitizeConfig(request.config(), endpointUrl));
     }
 
     private String endpointMasked(Map<String, Object> row) {
@@ -237,6 +303,13 @@ public class NotificationService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported_channel");
         }
         return type;
+    }
+
+    private String normalizeName(String value) {
+        if (value == null || value.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_channel_name");
+        }
+        return value.trim();
     }
 
     private String normalizeOptionalChannelType(String value) {
@@ -333,6 +406,32 @@ public class NotificationService {
 
     private String stringOrBlank(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private String stringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private boolean booleanValue(Object value) {
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        return Boolean.parseBoolean(stringOrBlank(value));
+    }
+
+    private Map<String, Object> currentChannel(long id) {
+        var rows = jdbcTemplate.queryForList("""
+            select id, name, channel_type, endpoint_url, endpoint_secret_ciphertext,
+                   endpoint_secret_key_version, endpoint_masked, secret_storage_status,
+                   description, cast(config_json as varchar) as config_json,
+                   enabled, status
+            from notification_channels
+            where id = ?
+            """, id);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "channel_not_found");
+        }
+        return rows.get(0);
     }
 
 }

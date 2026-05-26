@@ -14,8 +14,10 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.server.ResponseStatusException;
 import jakarta.validation.Valid;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -64,9 +66,10 @@ public class NotificationController {
     @PutMapping("/channels/{id}")
     public ApiResponse<Map<String, Object>> updateChannel(
         @PathVariable("id") long id,
-        @Valid @RequestBody NotificationChannelRequest request
+        @RequestBody(required = false) Map<String, Object> request
     ) {
-        return ApiResponse.ok(notificationService.updateChannel(id, request), "updated");
+        var body = request == null ? Map.<String, Object>of() : request;
+        return ApiResponse.ok(notificationService.updateChannel(id, channelRequest(body), channelFields(body)), "updated");
     }
 
     @DeleteMapping("/channels/{id}")
@@ -111,5 +114,78 @@ public class NotificationController {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ApiResponse<Map<String, Object>>> responseStatus(ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode()).body(ApiResponse.fail(ex.getReason()));
+    }
+
+    private NotificationChannelRequest channelRequest(Map<String, Object> body) {
+        return new NotificationChannelRequest(
+            stringOrNull(body.get("name")),
+            stringOrNull(body.get("channelType")),
+            endpointValue(body),
+            body.containsKey("description") ? stringOrNull(body.get("description")) : null,
+            booleanOrNull(body.get("enabled")),
+            configOrNull(body.get("config"))
+        );
+    }
+
+    private Set<String> channelFields(Map<String, Object> body) {
+        var fields = new LinkedHashSet<String>();
+        if (body.containsKey("name")) {
+            fields.add("name");
+        }
+        if (body.containsKey("channelType") && body.get("channelType") != null) {
+            fields.add("channelType");
+        }
+        if (body.containsKey("webhookUrl")) {
+            fields.add("webhookUrl");
+        }
+        if (body.containsKey("endpointUrl")) {
+            fields.add("webhookUrl");
+            fields.add("endpointUrl");
+        }
+        if (body.containsKey("description")) {
+            fields.add("description");
+        }
+        if (body.containsKey("enabled") && body.get("enabled") != null) {
+            fields.add("enabled");
+        }
+        if (body.containsKey("config") && body.get("config") != null) {
+            fields.add("config");
+        }
+        return fields;
+    }
+
+    private String endpointValue(Map<String, Object> body) {
+        if (body.containsKey("webhookUrl")) {
+            return stringOrNull(body.get("webhookUrl"));
+        }
+        if (body.containsKey("endpointUrl")) {
+            return stringOrNull(body.get("endpointUrl"));
+        }
+        return null;
+    }
+
+    private String stringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Boolean booleanOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_request_contract");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> configOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_request_contract");
     }
 }

@@ -12,6 +12,7 @@ import jakarta.validation.Validation;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -26,6 +27,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -210,6 +212,109 @@ class NotificationControllerTest {
     }
 
     @Test
+    void channelUpdateHttpAllowsPartialPayloadAndDelegatesPresentFields() throws Exception {
+        var notificationService = new StubNotificationService();
+        var mvc = mockMvc(new NotificationController(notificationService, new StubAlertNotificationService()));
+
+        mvc.perform(put("/api/notifications/channels/9")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "name": "renamed",
+                      "enabled": false
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true))
+            .andExpect(jsonPath("$.data.id").value(9));
+
+        assertEquals(9L, notificationService.updatedChannelId);
+        assertEquals("renamed", notificationService.updateRequest.name());
+        assertEquals(false, notificationService.updateRequest.enabled());
+        assertEquals(null, notificationService.updateRequest.webhookUrl());
+        assertEquals(Set.of("name", "enabled"), notificationService.updateFields);
+    }
+
+    @Test
+    void channelUpdateHttpAcceptsEndpointUrlAliasForWebhookUrl() throws Exception {
+        var notificationService = new StubNotificationService();
+        var mvc = mockMvc(new NotificationController(notificationService, new StubAlertNotificationService()));
+
+        mvc.perform(put("/api/notifications/channels/9")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "endpointUrl": "https://hook.example.test/new?token=WEBHOOKTOKEN123456"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true));
+
+        assertEquals("https://hook.example.test/new?token=WEBHOOKTOKEN123456", notificationService.updateRequest.webhookUrl());
+        assertEquals(Set.of("webhookUrl", "endpointUrl"), notificationService.updateFields);
+    }
+
+    @Test
+    void channelUpdateHttpPropagatesBlankEndpointError() throws Exception {
+        var notificationService = new StubNotificationService();
+        notificationService.updateError = new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_webhook_url");
+        var mvc = mockMvc(new NotificationController(notificationService, new StubAlertNotificationService()));
+
+        mvc.perform(put("/api/notifications/channels/9")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "webhookUrl": "   "
+                    }
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_webhook_url"));
+
+        assertEquals(Set.of("webhookUrl"), notificationService.updateFields);
+    }
+
+    @Test
+    void channelUpdateHttpPropagatesChannelTypeImmutableError() throws Exception {
+        var notificationService = new StubNotificationService();
+        notificationService.updateError = new ResponseStatusException(HttpStatus.BAD_REQUEST, "channel_type_immutable");
+        var mvc = mockMvc(new NotificationController(notificationService, new StubAlertNotificationService()));
+
+        mvc.perform(put("/api/notifications/channels/9")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "channelType": "wecom"
+                    }
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("channel_type_immutable"));
+
+        assertEquals(Set.of("channelType"), notificationService.updateFields);
+    }
+
+    @Test
+    void channelUpdateHttpIgnoresUnknownFieldsWithoutChangingContract() throws Exception {
+        var notificationService = new StubNotificationService();
+        var mvc = mockMvc(new NotificationController(notificationService, new StubAlertNotificationService()));
+
+        mvc.perform(put("/api/notifications/channels/9")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "name": "renamed",
+                      "title": "must not be accepted as a notification payload"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true));
+
+        assertEquals("renamed", notificationService.updateRequest.name());
+        assertEquals(Set.of("name"), notificationService.updateFields);
+    }
+
+    @Test
     void retryDeliveryHttpPropagatesExplicitRetryErrors() throws Exception {
         var alertNotificationService = new StubAlertNotificationService();
         alertNotificationService.retryError = new ResponseStatusException(HttpStatus.BAD_REQUEST, "delivery_not_retryable");
@@ -266,6 +371,10 @@ class NotificationControllerTest {
         private String status;
         private String channelType;
         private Long deliveryChannelId;
+        private Long updatedChannelId;
+        private com.edsp.alert.dto.NotificationChannelRequest updateRequest;
+        private Set<String> updateFields;
+        private ResponseStatusException updateError;
 
         StubNotificationService() {
             super(null, null);
@@ -285,6 +394,21 @@ class NotificationControllerTest {
             this.channelType = channelType;
             this.deliveryChannelId = channelId;
             return List.of(Map.of("status", "delivery"));
+        }
+
+        @Override
+        public Map<String, Object> updateChannel(
+            long id,
+            com.edsp.alert.dto.NotificationChannelRequest request,
+            Set<String> presentFields
+        ) {
+            this.updatedChannelId = id;
+            this.updateRequest = request;
+            this.updateFields = presentFields;
+            if (updateError != null) {
+                throw updateError;
+            }
+            return Map.of("id", id);
         }
     }
 

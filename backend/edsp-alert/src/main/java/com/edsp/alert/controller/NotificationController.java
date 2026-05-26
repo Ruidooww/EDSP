@@ -50,6 +50,15 @@ public class NotificationController {
         return ApiResponse.ok(notificationService.listChannels(secretStorageStatus, enabled));
     }
 
+    @GetMapping("/secret-backfill/dry-run")
+    public ApiResponse<Map<String, Object>> secretBackfillDryRun(
+        @RequestParam(value = "enabled", required = false) String enabled,
+        @RequestParam(value = "channelType", required = false) String channelType,
+        @RequestParam(value = "limit", required = false) String limit
+    ) {
+        return ApiResponse.ok(notificationService.secretBackfillDryRun(enabled, channelType, limit));
+    }
+
     @GetMapping("/deliveries")
     public ApiResponse<List<Map<String, Object>>> listDeliveries(
         @RequestParam(value = "limit", defaultValue = "50") int limit,

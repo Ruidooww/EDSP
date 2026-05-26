@@ -263,6 +263,37 @@ export interface NotificationDeliveryRow {
   created_at: string;
 }
 
+export interface NotificationSecretBackfillDryRunSummary {
+  totalChannels: number;
+  legacyPlaintext: number;
+  migrationEligible: number;
+  blocked: number;
+  encrypted: number;
+  missing: number;
+  unsupportedStatus?: number;
+}
+
+export interface NotificationSecretBackfillDryRunItem {
+  id: number;
+  name: string;
+  channelType: string;
+  enabled: boolean;
+  secretStorageStatus: string;
+  endpointMasked: string;
+  dryRunStatus: string;
+  blockReason?: string | null;
+  migrationEligible: boolean;
+  updatedAt?: string | number;
+}
+
+export interface NotificationSecretBackfillDryRunResult {
+  summary: NotificationSecretBackfillDryRunSummary;
+  blockReasons: Record<string, number>;
+  limit: number;
+  truncated: boolean;
+  items: NotificationSecretBackfillDryRunItem[];
+}
+
 export interface NotificationAlertSendRequest {
   alertId: number;
   channelId: number;

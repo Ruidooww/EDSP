@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   CheckCircleOutlined,
+  EditOutlined,
   EyeOutlined,
   LinkOutlined,
   PlusOutlined,
@@ -9,13 +10,13 @@ import {
 import { Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
-import { apiGet, apiPost } from '../api';
+import { apiGet, apiPost, apiPut } from '../api';
 import type { NotificationChannelRow, NotificationDeliveryRow } from '../types';
 
 interface NotificationChannelFormValues {
   name: string;
   channelType: string;
-  webhookUrl: string;
+  webhookUrl?: string;
   description?: string;
   enabled: boolean;
 }
@@ -75,6 +76,19 @@ function deliveryStatusTag(status: string) {
   return <Tag color="processing">{status}</Tag>;
 }
 
+function secretStorageStatusTag(status?: string) {
+  if (status === 'encrypted') {
+    return <Tag color="success">已加密</Tag>;
+  }
+  if (status === 'legacy_plaintext') {
+    return <Tag color="warning">待重配</Tag>;
+  }
+  if (status === 'missing') {
+    return <Tag>未配置</Tag>;
+  }
+  return <Tag>{status || '-'}</Tag>;
+}
+
 function formatTime(value?: string | number) {
   if (!value) {
     return '-';
@@ -129,6 +143,7 @@ export default function NotificationsPage() {
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<NotificationChannelRow | null>(null);
   const [deliveryAlertId, setDeliveryAlertId] = useState<number | null>(null);
   const [deliveryStatus, setDeliveryStatus] = useState('');
   const [deliveryChannelType, setDeliveryChannelType] = useState('');
@@ -204,9 +219,32 @@ export default function NotificationsPage() {
 
   async function submit() {
     const values = await form.validateFields();
-    await apiPost('/api/notifications/channels', values);
-    message.success('通知通道已保存');
+    const endpoint = values.webhookUrl?.trim();
+    if (editingRow && values.webhookUrl && !endpoint) {
+      form.setFields([{ name: 'webhookUrl', errors: ['请输入有效通道地址，或留空保留现有密钥'] }]);
+      return;
+    }
+    if (editingRow) {
+      const payload: Record<string, unknown> = {
+        name: values.name,
+        channelType: editingRow.channel_type,
+        description: values.description ?? null,
+        enabled: values.enabled,
+      };
+      if (endpoint) {
+        payload.webhookUrl = endpoint;
+      }
+      await apiPut(`/api/notifications/channels/${editingRow.id}`, payload);
+      message.success('通知通道已更新');
+    } else {
+      await apiPost('/api/notifications/channels', {
+        ...values,
+        webhookUrl: endpoint,
+      });
+      message.success('通知通道已保存');
+    }
     setOpen(false);
+    setEditingRow(null);
     form.resetFields();
     await load();
   }
@@ -226,11 +264,32 @@ export default function NotificationsPage() {
   }
 
   function openCreate() {
+    setEditingRow(null);
+    form.resetFields();
     setOpen(true);
     form.setFieldsValue({
       channelType: 'webhook',
       enabled: true,
     });
+  }
+
+  function openEdit(row: NotificationChannelRow) {
+    setEditingRow(row);
+    form.resetFields();
+    setOpen(true);
+    form.setFieldsValue({
+      name: row.name,
+      channelType: row.channel_type,
+      webhookUrl: undefined,
+      description: row.description,
+      enabled: row.enabled,
+    });
+  }
+
+  function closeModal() {
+    setOpen(false);
+    setEditingRow(null);
+    form.resetFields();
   }
 
   const selectedChannelType = Form.useWatch('channelType', form) || 'webhook';
@@ -274,6 +333,12 @@ export default function NotificationsPage() {
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
+      title: '密钥状态',
+      dataIndex: 'secret_storage_status',
+      width: 110,
+      render: secretStorageStatusTag,
+    },
+    {
       title: '启用',
       dataIndex: 'enabled',
       width: 90,
@@ -293,6 +358,16 @@ export default function NotificationsPage() {
           {statusTag(row.last_test_status || 'draft')}
           <span className="table-subtext">{row.last_test_message || formatTime(row.last_test_at)}</span>
         </div>
+      ),
+    },
+    {
+      title: '操作',
+      align: 'right',
+      width: 100,
+      render: (_, row) => (
+        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
+          编辑
+        </Button>
       ),
     },
   ];
@@ -434,7 +509,7 @@ export default function NotificationsPage() {
         loading={loading}
         dataSource={rows}
         columns={channelColumns}
-        scroll={{ x: 980 }}
+        scroll={{ x: 1120 }}
         locale={{ emptyText: '暂无通知通道，可以先新增一个推送通道。' }}
       />
 
@@ -482,23 +557,46 @@ export default function NotificationsPage() {
         locale={{ emptyText: '告警手动触发通知后会在这里显示' }}
       />
 
-      <Modal title="新增通知通道" open={open} onOk={submit} onCancel={() => setOpen(false)} okText="保存" destroyOnHidden>
+      <Modal
+        title={editingRow ? '编辑通知通道' : '新增通知通道'}
+        open={open}
+        onOk={submit}
+        onCancel={closeModal}
+        okText="保存"
+        destroyOnHidden
+      >
         <Form layout="vertical" form={form} initialValues={{ channelType: 'webhook', enabled: true }}>
           <Form.Item name="name" label="通道名称" rules={[{ required: true, message: '请输入通道名称' }]}>
             <Input prefix={<CheckCircleOutlined />} placeholder="例如：安全运营 Webhook、企业微信、飞书" />
           </Form.Item>
 
           <Form.Item name="channelType" label="通道类型">
-            <Select options={CHANNEL_TYPE_OPTIONS} />
+            <Select options={CHANNEL_TYPE_OPTIONS} disabled={Boolean(editingRow)} />
           </Form.Item>
 
           <Form.Item
             name="webhookUrl"
             label={endpointLabel}
             rules={[
-              { required: true, message: `请输入${endpointLabel}` },
-              { type: 'url', message: '请输入合法 URL，例如 https://example.com/webhook' },
+              { required: !editingRow, message: `请输入${endpointLabel}` },
+              {
+                validator: async (_, value?: string) => {
+                  if (!value) {
+                    return;
+                  }
+                  const trimmed = value.trim();
+                  if (!trimmed) {
+                    throw new Error('请输入有效通道地址，或留空保留现有密钥');
+                  }
+                  try {
+                    new URL(trimmed);
+                  } catch {
+                    throw new Error('请输入合法 URL，例如 https://example.com/webhook');
+                  }
+                },
+              },
             ]}
+            extra={editingRow ? '留空则保留现有密钥' : undefined}
           >
             <Input prefix={<ApiOutlined />} placeholder={endpointPlaceholder} />
           </Form.Item>

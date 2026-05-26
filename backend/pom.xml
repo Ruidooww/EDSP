@@ -11,6 +11,7 @@
 
     <modules>
         <module>edsp-common</module>
+        <module>edsp-transform</module>
         <module>edsp-gateway</module>
         <module>edsp-auth</module>
         <module>edsp-core</module>

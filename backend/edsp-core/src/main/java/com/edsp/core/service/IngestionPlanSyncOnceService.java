@@ -2,6 +2,10 @@ package com.edsp.core.service;
 
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.transform.standardevent.MappingPlan;
+import com.edsp.transform.standardevent.SourceRow;
+import com.edsp.transform.standardevent.StandardEventTransformService;
+import com.edsp.transform.standardevent.TransformOptions;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,37 +36,28 @@ public class IngestionPlanSyncOnceService {
     private static final int DEFAULT_SAMPLE_LIMIT = 50;
     private static final int MAX_SAMPLE_LIMIT = 100;
     private static final Set<String> PLAN_SYNC_STATUSES = Set.of("approved", "shadow_ready");
-    private static final Map<String, String> NORMALIZED_SEVERITIES = Map.ofEntries(
-        Map.entry("critical", "critical"),
-        Map.entry("1", "critical"),
-        Map.entry("high", "high"),
-        Map.entry("2", "high"),
-        Map.entry("medium", "medium"),
-        Map.entry("warning", "medium"),
-        Map.entry("3", "medium"),
-        Map.entry("low", "low"),
-        Map.entry("4", "low"),
-        Map.entry("info", "info")
-    );
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final CoreRequestSupport support;
     private final JdbcShadowSampleService sampleService;
     private final StandardEventDedupService standardEventDedupService;
+    private final StandardEventTransformService transformService;
 
     public IngestionPlanSyncOnceService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
         CoreRequestSupport support,
         JdbcShadowSampleService sampleService,
-        StandardEventDedupService standardEventDedupService
+        StandardEventDedupService standardEventDedupService,
+        StandardEventTransformService transformService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.support = support;
         this.sampleService = sampleService;
         this.standardEventDedupService = standardEventDedupService;
+        this.transformService = transformService;
     }
 
     @Transactional
@@ -165,8 +160,13 @@ public class IngestionPlanSyncOnceService {
         List<Map<String, Object>> rows,
         String syncMode
     ) {
-        var mappings = fieldMappingSources(source.plan());
-        var dedupFields = dedupFields(source.plan());
+        var mappingPlan = MappingPlan.fromPlan(source.plan());
+        var transformOptions = new TransformOptions(
+            dataSourceId,
+            longValue(source.plan().get("schemaTableId")),
+            source.tableName(),
+            syncMode
+        );
         var errorsByType = new LinkedHashMap<String, Integer>();
         var warnings = new LinkedHashSet<String>();
         var readCount = rows.size();
@@ -177,7 +177,7 @@ public class IngestionPlanSyncOnceService {
         var standardCount = 0;
 
         for (var row : rows) {
-            var standard = standardRecord(dataSourceId, source, mappings, dedupFields, row, syncMode);
+            var standard = standardRecord(mappingPlan, transformOptions, row);
             var rawId = insertRawEvent(ingestionRunId, dataSourceId, source, standard, row, syncMode);
             rawCount++;
             if (!standard.errors().isEmpty()) {
@@ -247,124 +247,30 @@ public class IngestionPlanSyncOnceService {
     }
 
     private StandardRecord standardRecord(
-        Long dataSourceId,
-        Source source,
-        Map<String, String> mappings,
-        List<String> dedupFields,
-        Map<String, Object> row,
-        String syncMode
+        MappingPlan mappingPlan,
+        TransformOptions transformOptions,
+        Map<String, Object> row
     ) {
-        var values = new LinkedHashMap<String, Object>();
-        mappings.forEach((sourceField, standardField) -> values.put(standardField, row.get(sourceField)));
-        var errors = new ArrayList<String>();
-        var occurredAt = parseRequiredTime(values.get("occurredAt"), errors);
-        var severity = normalizeSeverity(values.get("severity"), errors);
-        var sourceSystem = sourceSystem(dataSourceId, source);
-        var externalId = support.stringOrNull(values.get("externalId"));
-        var eventType = support.stringOrDefault(first(values.get("eventType"), values.get("title")), "ingestion_plan_event");
-        var actor = support.stringOrNull(values.get("actor"));
-        var assetRef = support.stringOrNull(values.get("assetRef"));
-        var subjectRef = support.stringOrNull(values.get("subjectRef"));
-        var dedupKey = dedupKey(dataSourceId, source, row, dedupFields, sourceSystem, externalId, eventType,
-            occurredAt, actor, assetRef, subjectRef);
-        if (dedupKey == null) {
-            errors.add("dedup_key_missing");
-        }
-        var normalized = new LinkedHashMap<String, Object>();
-        normalized.put("sourceTable", source.tableName());
-        normalized.put("mapped", values);
-        var extra = new LinkedHashMap<String, Object>();
-        extra.put("syncMode", syncMode);
-        extra.put("sourceTable", source.tableName());
-        extra.put("dataSourceId", dataSourceId);
+        var result = transformService.transform(new SourceRow(row), mappingPlan, transformOptions);
+        var draft = result.draft();
         return new StandardRecord(
-            sourceSystem,
-            externalId,
-            eventType,
-            occurredAt,
-            actor,
-            assetRef,
-            support.stringOrDefault(values.get("subjectType"), "event"),
-            subjectRef == null ? assetRef : subjectRef,
-            support.stringOrNull(values.get("action")),
-            support.stringOrDefault(values.get("result"), "detected"),
-            severity,
-            riskScore(severity),
-            dedupKey,
-            toJson(normalized),
-            toJson(extra),
-            errors
+            draft.sourceSystem(),
+            draft.externalId(),
+            draft.eventType(),
+            draft.occurredAt(),
+            draft.actor(),
+            draft.assetRef(),
+            draft.subjectType(),
+            draft.subjectRef(),
+            draft.action(),
+            draft.result(),
+            draft.severity(),
+            draft.riskScore(),
+            draft.dedupKey(),
+            toJson(draft.normalized()),
+            toJson(draft.extra()),
+            result.errors()
         );
-    }
-
-    private OffsetDateTime parseRequiredTime(Object value, List<String> errors) {
-        var text = support.stringOrNull(value);
-        if (text == null) {
-            errors.add("missing_occurred_at");
-            return null;
-        }
-        try {
-            return support.parseTime(text);
-        } catch (RuntimeException ex) {
-            errors.add("invalid_time_format");
-            return null;
-        }
-    }
-
-    private String normalizeSeverity(Object value, List<String> errors) {
-        var text = support.stringOrNull(value);
-        if (text == null) {
-            return "info";
-        }
-        var severity = NORMALIZED_SEVERITIES.get(text.toLowerCase(Locale.ROOT));
-        if (severity == null) {
-            errors.add("severity_unrecognized");
-            return "info";
-        }
-        return severity;
-    }
-
-    private String dedupKey(
-        Long dataSourceId,
-        Source source,
-        Map<String, Object> row,
-        List<String> dedupFields,
-        String sourceSystem,
-        String externalId,
-        String eventType,
-        OffsetDateTime occurredAt,
-        String actor,
-        String assetRef,
-        String subjectRef
-    ) {
-        if (dedupFields.isEmpty()) {
-            return support.dedupKey(sourceSystem, externalId, eventType, occurredAt, actor, assetRef, subjectRef);
-        }
-        for (var field : dedupFields) {
-            if (support.stringOrNull(row.get(field)) == null) {
-                return null;
-            }
-        }
-        var values = new ArrayList<String>();
-        for (var field : dedupFields) {
-            values.add(field + "=" + row.get(field));
-        }
-        var schemaTableId = longValue(source.plan().get("schemaTableId"));
-        return sha256(String.join("|",
-            "sync_once",
-            "data_source:" + dataSourceId,
-            "schema_table:" + schemaTableId,
-            "table:" + source.tableName(),
-            String.join("|", values)
-        ));
-    }
-
-    private String sourceSystem(Long dataSourceId, Source source) {
-        if (dataSourceId == null) {
-            return "external";
-        }
-        var schemaTableId = longValue(source.plan().get("schemaTableId"));
-        return "ds:%d:st:%s".formatted(dataSourceId, schemaTableId);
     }
 
     private Long insertRawEvent(
@@ -527,45 +433,14 @@ public class IngestionPlanSyncOnceService {
 
     private List<String> selectedFields(Map<String, Object> plan) {
         var selected = new LinkedHashSet<String>();
-        selected.addAll(fieldMappingSources(plan).keySet());
-        selected.addAll(dedupFields(plan));
+        var mappingPlan = MappingPlan.fromPlan(plan);
+        selected.addAll(mappingPlan.fieldMappings().keySet());
+        selected.addAll(mappingPlan.dedupFields());
         var cursorField = support.stringOrNull(plan.get("cursorField"));
         if (cursorField != null) {
             selected.add(cursorField);
         }
         return new ArrayList<>(selected);
-    }
-
-    private Map<String, String> fieldMappingSources(Map<String, Object> plan) {
-        var mappings = new LinkedHashMap<String, String>();
-        if (plan.get("fieldMappings") instanceof Map<?, ?> fields) {
-            for (var entry : fields.entrySet()) {
-                var sourceField = support.stringOrNull(entry.getKey());
-                var standardField = support.stringOrNull(entry.getValue());
-                if (sourceField != null && standardField != null) {
-                    mappings.put(sourceField, standardField);
-                }
-            }
-        }
-        if (mappings.isEmpty() && plan.get("fieldMappingDetails") instanceof List<?> details) {
-            for (var item : details) {
-                if (item instanceof Map<?, ?> mapping) {
-                    var sourceField = support.stringOrNull(mapping.get("sourceField"));
-                    var standardField = support.stringOrNull(mapping.get("standardField"));
-                    if (sourceField != null && standardField != null) {
-                        mappings.put(sourceField, standardField);
-                    }
-                }
-            }
-        }
-        return mappings;
-    }
-
-    private List<String> dedupFields(Map<String, Object> plan) {
-        if (!(plan.get("dedupStrategy") instanceof Map<?, ?> strategy)) {
-            return List.of();
-        }
-        return stringList(strategy.get("fields"));
     }
 
     private Long insertIngestionRun(Long dataSourceId, String runType) {
@@ -722,25 +597,6 @@ public class IngestionPlanSyncOnceService {
         };
     }
 
-    private Integer riskScore(String severity) {
-        return switch (severity) {
-            case "critical" -> 95;
-            case "high" -> 80;
-            case "medium" -> 55;
-            case "low" -> 25;
-            default -> 10;
-        };
-    }
-
-    private Object first(Object... values) {
-        for (var value : values) {
-            if (support.stringOrNull(value) != null) {
-                return value;
-            }
-        }
-        return null;
-    }
-
     private Long insertAndReturnId(String sql, Object... args) {
         var keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
@@ -783,17 +639,6 @@ public class IngestionPlanSyncOnceService {
         } catch (JsonProcessingException ex) {
             return Map.of();
         }
-    }
-
-    private List<String> stringList(Object value) {
-        if (value instanceof List<?> list) {
-            return list.stream()
-                .map(support::stringOrNull)
-                .filter(item -> item != null)
-                .toList();
-        }
-        var item = support.stringOrNull(value);
-        return item == null ? List.of() : List.of(item);
     }
 
     private Long longValue(Object value) {
@@ -846,7 +691,7 @@ public class IngestionPlanSyncOnceService {
         String sourceSystem,
         String externalId,
         String eventType,
-        OffsetDateTime occurredAt,
+        java.time.OffsetDateTime occurredAt,
         String actor,
         String assetRef,
         String subjectType,

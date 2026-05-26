@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.transform.standardevent.StandardEventTransformService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -69,7 +70,8 @@ class IngestionPlanSyncOnceServiceTest {
             objectMapper,
             support,
             new JdbcShadowSampleService(objectMapper),
-            new StandardEventDedupService(jdbcTemplate, support)
+            new StandardEventDedupService(jdbcTemplate, support),
+            new StandardEventTransformService()
         );
         scheduleService = new IngestionPlanSyncScheduleService(jdbcTemplate, objectMapper, support, service);
         resetSourceDatabase();

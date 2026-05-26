@@ -119,6 +119,87 @@ class NotificationServiceTest {
     }
 
     @Test
+    void listChannelsCanFilterBySecretStorageStatusAndEnabled() {
+        service.createChannel(new NotificationChannelRequest(
+            "encrypted enabled",
+            "webhook",
+            "https://hook.example.test/enabled?token=ENABLEDSECRET123456",
+            null,
+            true,
+            Map.of()
+        ));
+        service.createChannel(new NotificationChannelRequest(
+            "encrypted disabled",
+            "webhook",
+            "https://hook.example.test/disabled?token=DISABLEDSECRET123456",
+            null,
+            false,
+            Map.of()
+        ));
+        insertLegacyChannel("legacy enabled", "https://legacy.example.test/enabled?token=LEGACYENABLED123456", true);
+        insertLegacyChannel("legacy disabled", "https://legacy.example.test/disabled?token=LEGACYDISABLED123456", false);
+        insertMissingChannel("webhook", false);
+
+        var encrypted = service.listChannels("encrypted", null);
+        var legacy = service.listChannels("legacy_plaintext", null);
+        var missing = service.listChannels("missing", null);
+        var enabled = service.listChannels(null, "true");
+        var disabled = service.listChannels(null, "false");
+        var enabledLegacy = service.listChannels("legacy_plaintext", "true");
+        var disabledEncrypted = service.listChannels("encrypted", "false");
+        var all = service.listChannels(null, null);
+
+        assertEquals(2, encrypted.size());
+        assertEquals(true, encrypted.stream().allMatch(row -> "encrypted".equals(row.get("secret_storage_status"))));
+        assertEquals(2, legacy.size());
+        assertEquals(true, legacy.stream().allMatch(row -> "legacy_plaintext".equals(row.get("secret_storage_status"))));
+        assertEquals(1, missing.size());
+        assertEquals("missing", missing.get(0).get("secret_storage_status"));
+        assertEquals(2, enabled.size());
+        assertEquals(true, enabled.stream().allMatch(row -> Boolean.TRUE.equals(row.get("enabled"))));
+        assertEquals(3, disabled.size());
+        assertEquals(true, disabled.stream().allMatch(row -> Boolean.FALSE.equals(row.get("enabled"))));
+        assertEquals(1, enabledLegacy.size());
+        assertEquals("legacy enabled", enabledLegacy.get(0).get("name"));
+        assertEquals(1, disabledEncrypted.size());
+        assertEquals("encrypted disabled", disabledEncrypted.get(0).get("name"));
+        assertEquals(5, all.size());
+
+        for (var row : all) {
+            assertFalse(row.containsKey("endpoint_url"));
+            assertFalse(row.containsKey("endpoint_secret_ciphertext"));
+            assertFalse(row.containsKey("endpoint_secret_key_version"));
+            assertFalse(String.valueOf(row).contains("ENABLEDSECRET123456"));
+            assertFalse(String.valueOf(row).contains("DISABLEDSECRET123456"));
+            assertFalse(String.valueOf(row).contains("LEGACYENABLED123456"));
+            assertFalse(String.valueOf(row).contains("LEGACYDISABLED123456"));
+        }
+    }
+
+    @Test
+    void listChannelsRejectsInvalidReadinessFilters() {
+        var invalidSecretStorageStatus = assertThrows(
+            ResponseStatusException.class,
+            () -> service.listChannels("plaintext", null)
+        );
+        var invalidEnabled = assertThrows(
+            ResponseStatusException.class,
+            () -> service.listChannels(null, "abc")
+        );
+        var emptyEnabled = assertThrows(
+            ResponseStatusException.class,
+            () -> service.listChannels(null, "")
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, invalidSecretStorageStatus.getStatusCode());
+        assertEquals("invalid_secret_storage_status", invalidSecretStorageStatus.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, invalidEnabled.getStatusCode());
+        assertEquals("invalid_enabled_filter", invalidEnabled.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, emptyEnabled.getStatusCode());
+        assertEquals("invalid_enabled_filter", emptyEnabled.getReason());
+    }
+
+    @Test
     void listDeliveriesReturnsReliabilityFieldsWithSafeDefaultsForOldRows() {
         var alertId = insertAlert("reliability fields alert");
         var channelId = insertChannel("webhook");
@@ -972,6 +1053,15 @@ class NotificationServiceTest {
             channelType,
             endpointUrl
         );
+    }
+
+    private Long insertLegacyChannel(String name, String endpointUrl, boolean enabled) {
+        return insertAndReturnId("""
+            insert into notification_channels(
+                name, channel_type, endpoint_url, secret_storage_status, enabled, status
+            )
+            values (?, 'webhook', ?, 'legacy_plaintext', ?, ?)
+            """, name, endpointUrl, enabled, enabled ? "ready" : "disabled");
     }
 
     private Long insertMissingChannel(String channelType, boolean enabled) {

@@ -45,13 +45,39 @@ public class NotificationService {
     }
 
     public List<Map<String, Object>> listChannels() {
-        return jdbcTemplate.queryForList("""
+        return listChannels(null, null);
+    }
+
+    public List<Map<String, Object>> listChannels(String secretStorageStatus, String enabled) {
+        var normalizedSecretStorageStatus = normalizeSecretStorageStatus(secretStorageStatus);
+        var normalizedEnabled = normalizeEnabledFilter(enabled);
+        var filters = new ArrayList<String>();
+        var args = new ArrayList<Object>();
+
+        if (normalizedSecretStorageStatus != null) {
+            filters.add("secret_storage_status = ?");
+            args.add(normalizedSecretStorageStatus);
+        }
+        if (normalizedEnabled != null) {
+            filters.add("enabled = ?");
+            args.add(normalizedEnabled);
+        }
+
+        var sql = new StringBuilder("""
             select id, name, channel_type, endpoint_url, endpoint_masked, secret_storage_status,
                    description, enabled, status,
                    last_test_status, last_test_message, last_test_at, created_at, updated_at
             from notification_channels
+            """);
+        if (!filters.isEmpty()) {
+            sql.append("where ").append(String.join(" and ", filters)).append("\n");
+        }
+        sql.append("""
             order by updated_at desc
-            """).stream().map(this::presentChannel).toList();
+            """);
+        return jdbcTemplate.queryForList(sql.toString(), args.toArray()).stream()
+            .map(this::presentChannel)
+            .toList();
     }
 
     public List<Map<String, Object>> listDeliveries(int limit) {
@@ -328,6 +354,31 @@ public class NotificationService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_delivery_status");
         }
         return status;
+    }
+
+    private String normalizeSecretStorageStatus(String value) {
+        if (value == null) {
+            return null;
+        }
+        var status = value.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("encrypted", "legacy_plaintext", "missing").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_secret_storage_status");
+        }
+        return status;
+    }
+
+    private Boolean normalizeEnabledFilter(String value) {
+        if (value == null) {
+            return null;
+        }
+        var normalized = value.trim().toLowerCase(Locale.ROOT);
+        if ("true".equals(normalized)) {
+            return true;
+        }
+        if ("false".equals(normalized)) {
+            return false;
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_enabled_filter");
     }
 
     private String normalizeEndpoint(String channelType, String value) {

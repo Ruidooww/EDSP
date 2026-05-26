@@ -43,8 +43,11 @@ public class NotificationController {
     }
 
     @GetMapping("/channels")
-    public ApiResponse<List<Map<String, Object>>> listChannels() {
-        return ApiResponse.ok(notificationService.listChannels());
+    public ApiResponse<List<Map<String, Object>>> listChannels(
+        @RequestParam(value = "secretStorageStatus", required = false) String secretStorageStatus,
+        @RequestParam(value = "enabled", required = false) String enabled
+    ) {
+        return ApiResponse.ok(notificationService.listChannels(secretStorageStatus, enabled));
     }
 
     @GetMapping("/deliveries")

@@ -68,6 +68,21 @@ class NotificationControllerTest {
     }
 
     @Test
+    void channelsRouteAcceptsReadinessFilters() throws Exception {
+        Method listChannels = NotificationController.class.getMethod(
+            "listChannels",
+            String.class,
+            String.class
+        );
+
+        assertArrayEquals(new String[] {"/channels"}, listChannels.getAnnotation(GetMapping.class).value());
+        assertEquals("secretStorageStatus", listChannels.getParameters()[0].getAnnotation(RequestParam.class).value());
+        assertEquals(false, listChannels.getParameters()[0].getAnnotation(RequestParam.class).required());
+        assertEquals("enabled", listChannels.getParameters()[1].getAnnotation(RequestParam.class).value());
+        assertEquals(false, listChannels.getParameters()[1].getAnnotation(RequestParam.class).required());
+    }
+
+    @Test
     void alertSendRequestRejectsUnknownCreationFields() {
         var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -107,6 +122,7 @@ class NotificationControllerTest {
         var controller = new NotificationController(notificationService, alertNotificationService);
 
         var sent = controller.sendAlert(new AlertNotificationSendRequest(123L, 456L));
+        var channels = controller.listChannels("legacy_plaintext", "true");
         var deliveries = controller.listDeliveries(75, 123L, "failed", "wecom", 456L);
         var retried = controller.retryDelivery(77L, Map.of());
 
@@ -121,6 +137,9 @@ class NotificationControllerTest {
         assertEquals("wecom", notificationService.channelType);
         assertEquals(456L, notificationService.deliveryChannelId);
         assertEquals("delivery", deliveries.data().get(0).get("status"));
+        assertEquals("legacy_plaintext", notificationService.secretStorageStatus);
+        assertEquals("true", notificationService.enabledFilter);
+        assertEquals("channel", channels.data().get(0).get("status"));
     }
 
     @Test
@@ -141,6 +160,26 @@ class NotificationControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.success").value(false))
             .andExpect(jsonPath("$.message").value("unsupported_channel"));
+    }
+
+    @Test
+    void channelsHttpRejectsInvalidReadinessFilters() throws Exception {
+        var mvc = mockMvc(new NotificationController(
+            new NotificationService(null, null),
+            new StubAlertNotificationService()
+        ));
+
+        mvc.perform(get("/api/notifications/channels")
+                .param("secretStorageStatus", "plaintext"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_secret_storage_status"));
+
+        mvc.perform(get("/api/notifications/channels")
+                .param("enabled", "abc"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_enabled_filter"));
     }
 
     @Test
@@ -371,6 +410,8 @@ class NotificationControllerTest {
         private String status;
         private String channelType;
         private Long deliveryChannelId;
+        private String secretStorageStatus;
+        private String enabledFilter;
         private Long updatedChannelId;
         private com.edsp.alert.dto.NotificationChannelRequest updateRequest;
         private Set<String> updateFields;
@@ -378,6 +419,13 @@ class NotificationControllerTest {
 
         StubNotificationService() {
             super(null, null);
+        }
+
+        @Override
+        public List<Map<String, Object>> listChannels(String secretStorageStatus, String enabled) {
+            this.secretStorageStatus = secretStorageStatus;
+            this.enabledFilter = enabled;
+            return List.of(Map.of("status", "channel"));
         }
 
         @Override

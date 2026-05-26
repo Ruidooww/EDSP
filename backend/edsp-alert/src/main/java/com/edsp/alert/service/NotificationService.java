@@ -8,14 +8,20 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -28,20 +34,40 @@ public class NotificationService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final NotificationSecretStore secretStore;
+    private final TransactionTemplate transactionTemplate;
 
     public NotificationService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
-        this(jdbcTemplate, objectMapper, new NotificationSecretStore(""));
+        this(jdbcTemplate, objectMapper, new NotificationSecretStore(""), (PlatformTransactionManager) null);
     }
 
     @Autowired
     public NotificationService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
+        NotificationSecretStore secretStore,
+        ObjectProvider<PlatformTransactionManager> transactionManagerProvider
+    ) {
+        this(jdbcTemplate, objectMapper, secretStore, transactionManagerProvider.getIfAvailable());
+    }
+
+    public NotificationService(
+        JdbcTemplate jdbcTemplate,
+        ObjectMapper objectMapper,
         NotificationSecretStore secretStore
+    ) {
+        this(jdbcTemplate, objectMapper, secretStore, (PlatformTransactionManager) null);
+    }
+
+    public NotificationService(
+        JdbcTemplate jdbcTemplate,
+        ObjectMapper objectMapper,
+        NotificationSecretStore secretStore,
+        PlatformTransactionManager transactionManager
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.secretStore = secretStore;
+        this.transactionTemplate = transactionManager == null ? null : requiresNewTemplate(transactionManager);
     }
 
     public List<Map<String, Object>> listChannels() {
@@ -128,6 +154,127 @@ public class NotificationService {
         result.put("truncated", rows.size() > safeLimit);
         result.put("items", items);
         return result;
+    }
+
+    public Map<String, Object> executeSecretBackfill(Map<String, Object> request) {
+        var channelIds = normalizeBackfillChannelIds(request.get("channelIds"));
+        var confirmation = stringOrBlank(request.get("confirmation"));
+        if (!"EXECUTE_NOTIFICATION_SECRET_BACKFILL".equals(confirmation)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_confirmation");
+        }
+        secretStore.requireWritableMasterKey();
+
+        var requestedBy = normalizeRequestedBy(request.get("requestedBy"));
+        var runId = createBackfillRun(channelIds.size(), requestedBy);
+        var eligibleCount = 0;
+        var migratedCount = 0;
+        var skippedCount = 0;
+        var failedCount = 0;
+        String globalFailureReason = null;
+
+        try {
+            for (var channelId : channelIds) {
+                var item = processBackfillChannel(runId, channelId);
+                if (item.eligible()) {
+                    eligibleCount++;
+                }
+                if ("migrated".equals(item.itemStatus())) {
+                    migratedCount++;
+                } else if ("skipped".equals(item.itemStatus())) {
+                    skippedCount++;
+                } else if ("failed".equals(item.itemStatus())) {
+                    failedCount++;
+                }
+            }
+            var finalStatus = failedCount > 0 ? "completed_with_failures" : "completed";
+            finalizeBackfillRun(
+                runId,
+                finalStatus,
+                eligibleCount,
+                migratedCount,
+                skippedCount,
+                failedCount,
+                null
+            );
+        } catch (RuntimeException ex) {
+            globalFailureReason = "unexpected_error";
+            finalizeBackfillRun(
+                runId,
+                "failed",
+                eligibleCount,
+                migratedCount,
+                skippedCount,
+                failedCount,
+                globalFailureReason
+            );
+            throw ex;
+        }
+
+        var result = backfillRunRow(runId);
+        if (globalFailureReason != null) {
+            result.put("failure_reason", globalFailureReason);
+        }
+        return result;
+    }
+
+    public Map<String, Object> listSecretBackfillRuns(String status, String limit) {
+        var normalizedStatus = normalizeBackfillRunStatus(status);
+        var safeLimit = normalizeBackfillRunLimit(limit);
+        var filters = new ArrayList<String>();
+        var args = new ArrayList<Object>();
+        if (normalizedStatus != null) {
+            filters.add("status = ?");
+            args.add(normalizedStatus);
+        }
+
+        var sql = new StringBuilder("""
+            select id, mode, status, confirmation_accepted, requested_by,
+                   requested_at, started_at, completed_at,
+                   total_requested, eligible_count, migrated_count, skipped_count,
+                   failed_count, failure_reason, created_at, updated_at
+            from notification_secret_backfill_runs
+            """);
+        if (!filters.isEmpty()) {
+            sql.append("where ").append(String.join(" and ", filters)).append("\n");
+        }
+        sql.append("""
+            order by created_at desc, id desc
+            limit ?
+            """);
+        args.add(safeLimit);
+
+        var result = new LinkedHashMap<String, Object>();
+        result.put("limit", safeLimit);
+        result.put("items", jdbcTemplate.queryForList(sql.toString(), args.toArray()).stream()
+            .map(this::presentBackfillRun)
+            .toList());
+        return result;
+    }
+
+    public Map<String, Object> secretBackfillRunDetail(long id) {
+        var rows = jdbcTemplate.queryForList("""
+            select id, mode, status, confirmation_accepted, requested_by,
+                   requested_at, started_at, completed_at,
+                   total_requested, eligible_count, migrated_count, skipped_count,
+                   failed_count, failure_reason, created_at, updated_at
+            from notification_secret_backfill_runs
+            where id = ?
+            """, id);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "backfill_run_not_found");
+        }
+        var run = presentBackfillRun(rows.get(0));
+        run.put("items", jdbcTemplate.queryForList("""
+            select id, run_id, channel_id, channel_type, before_secret_storage_status,
+                   after_secret_storage_status, endpoint_masked, item_status,
+                   failure_reason, created_at, updated_at
+            from notification_secret_backfill_items
+            where run_id = ?
+            order by id
+            """, id).stream()
+            .map(this::presentBackfillItem)
+            .toList());
+        return run;
     }
 
     public List<Map<String, Object>> listDeliveries(int limit) {
@@ -436,6 +583,347 @@ public class NotificationService {
         }
     }
 
+    private List<Long> normalizeBackfillChannelIds(Object value) {
+        if (!(value instanceof List<?> values) || values.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_channel_ids");
+        }
+        var ids = new LinkedHashSet<Long>();
+        for (var item : values) {
+            if (!(item instanceof Number number)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_channel_ids");
+            }
+            var id = number.longValue();
+            if (id <= 0 || number.doubleValue() != id) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_channel_ids");
+            }
+            ids.add(id);
+        }
+        if (ids.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_channel_ids");
+        }
+        if (ids.size() > 50) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "too_many_channels");
+        }
+        return List.copyOf(ids);
+    }
+
+    private String normalizeRequestedBy(Object value) {
+        var requestedBy = stringOrBlank(value).trim();
+        return requestedBy.isBlank() ? "manual" : requestedBy;
+    }
+
+    private String normalizeBackfillRunStatus(String value) {
+        if (value == null) {
+            return null;
+        }
+        var status = value.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("running", "completed", "completed_with_failures", "failed").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_backfill_run_status");
+        }
+        return status;
+    }
+
+    private int normalizeBackfillRunLimit(String value) {
+        if (value == null) {
+            return 20;
+        }
+        var normalized = value.trim();
+        if (normalized.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_limit");
+        }
+        try {
+            var limit = Integer.parseInt(normalized);
+            if (limit < 1 || limit > 100) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_limit");
+            }
+            return limit;
+        } catch (NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_limit");
+        }
+    }
+
+    private long createBackfillRun(int totalRequested, String requestedBy) {
+        var keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement("""
+                insert into notification_secret_backfill_runs(
+                    mode, status, confirmation_accepted, requested_by, started_at,
+                    total_requested
+                )
+                values ('manual_channel_ids', 'running', true, ?, now(), ?)
+                """, new String[] {"id"});
+            statement.setString(1, requestedBy);
+            statement.setInt(2, totalRequested);
+            return statement;
+        }, keyHolder);
+        var id = keyHolder.getKey();
+        if (id == null) {
+            throw new IllegalStateException("Backfill run insert did not return an id");
+        }
+        return id.longValue();
+    }
+
+    private BackfillItemResult processBackfillChannel(long runId, long channelId) {
+        try {
+            return inBackfillTransaction(() -> processBackfillChannelInTransaction(runId, channelId));
+        } catch (RuntimeException ex) {
+            insertBackfillItemBestEffort(runId, channelId, null, null, null, null, "failed", "unexpected_error");
+            return new BackfillItemResult("failed", false);
+        }
+    }
+
+    private BackfillItemResult processBackfillChannelInTransaction(long runId, long channelId) {
+        var rows = jdbcTemplate.queryForList("""
+            select id, name, channel_type, endpoint_url, endpoint_secret_ciphertext,
+                   endpoint_secret_key_version, endpoint_masked, secret_storage_status,
+                   enabled, status, updated_at
+            from notification_channels
+            where id = ?
+            for update
+            """, channelId);
+        if (rows.isEmpty()) {
+            insertBackfillItem(runId, channelId, null, null, null, null, "skipped", "not_found");
+            return new BackfillItemResult("skipped", false);
+        }
+
+        var row = rows.get(0);
+        var channelType = stringOrBlank(row.get("channel_type")).trim().toLowerCase(Locale.ROOT);
+        var beforeStatus = stringOrBlank(row.get("secret_storage_status"));
+        var endpointUrl = stringOrBlank(row.get("endpoint_url"));
+        var endpointMasked = endpointMasked(row);
+        var skipReason = skipReason(channelType, beforeStatus, endpointUrl);
+        if (skipReason != null) {
+            insertBackfillItem(
+                runId,
+                channelId,
+                channelType,
+                beforeStatus,
+                beforeStatus,
+                endpointMasked,
+                "skipped",
+                skipReason
+            );
+            return new BackfillItemResult("skipped", false);
+        }
+
+        var normalizedEndpoint = normalizeEndpoint(channelType, endpointUrl);
+        NotificationSecretStore.StoredEndpoint storedEndpoint;
+        try {
+            storedEndpoint = secretStore.storeEndpoint(
+                normalizedEndpoint,
+                SECRET_SANITIZER.maskEndpoint(normalizedEndpoint)
+            );
+        } catch (ResponseStatusException ex) {
+            insertBackfillItem(
+                runId,
+                channelId,
+                channelType,
+                beforeStatus,
+                beforeStatus,
+                endpointMasked,
+                "failed",
+                secretStoreFailureReason(ex)
+            );
+            return new BackfillItemResult("failed", true);
+        } catch (RuntimeException ex) {
+            insertBackfillItem(
+                runId,
+                channelId,
+                channelType,
+                beforeStatus,
+                beforeStatus,
+                endpointMasked,
+                "failed",
+                "notification_secret_store_failed"
+            );
+            return new BackfillItemResult("failed", true);
+        }
+
+        jdbcTemplate.update("""
+            update notification_channels
+            set endpoint_url = null,
+                endpoint_secret_ciphertext = ?,
+                endpoint_secret_key_version = ?,
+                endpoint_masked = ?,
+                secret_storage_status = ?,
+                updated_at = now()
+            where id = ?
+            """,
+            storedEndpoint.ciphertext(),
+            storedEndpoint.keyVersion(),
+            storedEndpoint.endpointMasked(),
+            storedEndpoint.status(),
+            channelId
+        );
+        insertBackfillItem(
+            runId,
+            channelId,
+            channelType,
+            beforeStatus,
+            storedEndpoint.status(),
+            storedEndpoint.endpointMasked(),
+            "migrated",
+            null
+        );
+        return new BackfillItemResult("migrated", true);
+    }
+
+    private String skipReason(String channelType, String status, String endpointUrl) {
+        if ("encrypted".equals(status)) {
+            return "already_encrypted";
+        }
+        if (!"legacy_plaintext".equals(status)) {
+            return "not_legacy_plaintext";
+        }
+        if (!Set.of("webhook", "wecom", "feishu").contains(channelType)) {
+            return "unsupported_channel_type";
+        }
+        if (endpointUrl.isBlank()) {
+            return "endpoint_missing";
+        }
+        if (endpointIsInvalid(channelType, endpointUrl)) {
+            return "endpoint_invalid";
+        }
+        return null;
+    }
+
+    private String secretStoreFailureReason(ResponseStatusException ex) {
+        if ("notification_secret_key_missing".equals(ex.getReason())) {
+            return "notification_secret_key_missing";
+        }
+        if ("notification_secret_key_invalid".equals(ex.getReason())) {
+            return "notification_secret_key_invalid";
+        }
+        return "notification_secret_store_failed";
+    }
+
+    private void insertBackfillItem(
+        long runId,
+        long channelId,
+        String channelType,
+        String beforeStatus,
+        String afterStatus,
+        String endpointMasked,
+        String itemStatus,
+        String failureReason
+    ) {
+        jdbcTemplate.update("""
+            insert into notification_secret_backfill_items(
+                run_id, channel_id, channel_type, before_secret_storage_status,
+                after_secret_storage_status, endpoint_masked, item_status,
+                failure_reason
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            runId,
+            channelId,
+            channelType,
+            beforeStatus,
+            afterStatus,
+            endpointMasked == null ? null : SECRET_SANITIZER.sanitizeEndpointDisplay(endpointMasked),
+            itemStatus,
+            failureReason
+        );
+    }
+
+    private void insertBackfillItemBestEffort(
+        long runId,
+        long channelId,
+        String channelType,
+        String beforeStatus,
+        String afterStatus,
+        String endpointMasked,
+        String itemStatus,
+        String failureReason
+    ) {
+        try {
+            inBackfillTransaction(() -> {
+                insertBackfillItem(
+                    runId,
+                    channelId,
+                    channelType,
+                    beforeStatus,
+                    afterStatus,
+                    endpointMasked,
+                    itemStatus,
+                    failureReason
+                );
+                return null;
+            });
+        } catch (RuntimeException ignored) {
+            // Best-effort audit must not prevent run finalization.
+        }
+    }
+
+    private void finalizeBackfillRun(
+        long runId,
+        String status,
+        int eligibleCount,
+        int migratedCount,
+        int skippedCount,
+        int failedCount,
+        String failureReason
+    ) {
+        jdbcTemplate.update("""
+            update notification_secret_backfill_runs
+            set status = ?, completed_at = now(), eligible_count = ?,
+                migrated_count = ?, skipped_count = ?, failed_count = ?,
+                failure_reason = ?, updated_at = now()
+            where id = ?
+            """,
+            status,
+            eligibleCount,
+            migratedCount,
+            skippedCount,
+            failedCount,
+            failureReason,
+            runId
+        );
+    }
+
+    private Map<String, Object> backfillRunRow(long runId) {
+        return presentBackfillRun(jdbcTemplate.queryForMap("""
+            select id, mode, status, confirmation_accepted, requested_by,
+                   requested_at, started_at, completed_at,
+                   total_requested, eligible_count, migrated_count, skipped_count,
+                   failed_count, failure_reason, created_at, updated_at
+            from notification_secret_backfill_runs
+            where id = ?
+            """, runId));
+    }
+
+    private Map<String, Object> presentBackfillRun(Map<String, Object> row) {
+        var result = new LinkedHashMap<>(row);
+        result.remove("confirmation");
+        return result;
+    }
+
+    private Map<String, Object> presentBackfillItem(Map<String, Object> row) {
+        var result = new LinkedHashMap<>(row);
+        var endpointMasked = stringOrBlank(result.get("endpoint_masked"));
+        if (!endpointMasked.isBlank()) {
+            result.put("endpoint_masked", SECRET_SANITIZER.sanitizeEndpointDisplay(endpointMasked));
+        }
+        result.remove("endpoint_url");
+        result.remove("endpoint_secret_ciphertext");
+        result.remove("endpoint_secret_key_version");
+        result.remove("confirmation");
+        return result;
+    }
+
+    private <T> T inBackfillTransaction(Supplier<T> action) {
+        if (transactionTemplate == null) {
+            return action.get();
+        }
+        return transactionTemplate.execute(status -> action.get());
+    }
+
+    private static TransactionTemplate requiresNewTemplate(PlatformTransactionManager transactionManager) {
+        var template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template;
+    }
+
     private String normalizeSecretStorageStatus(String value) {
         if (value == null) {
             return null;
@@ -459,6 +947,9 @@ public class NotificationService {
             return false;
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_enabled_filter");
+    }
+
+    private record BackfillItemResult(String itemStatus, boolean eligible) {
     }
 
     private Map<String, Object> dryRunSummary() {

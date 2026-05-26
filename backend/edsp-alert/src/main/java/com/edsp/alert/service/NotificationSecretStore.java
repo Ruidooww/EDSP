@@ -35,6 +35,10 @@ public class NotificationSecretStore {
         );
     }
 
+    public void requireWritableMasterKey() {
+        masterKeyForWrite();
+    }
+
     public String resolveEndpoint(Map<String, Object> channel) {
         var status = stringOrBlank(channel.get("secret_storage_status"));
         var ciphertext = stringOrBlank(channel.get("endpoint_secret_ciphertext"));

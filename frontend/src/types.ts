@@ -294,6 +294,45 @@ export interface NotificationSecretBackfillDryRunResult {
   items: NotificationSecretBackfillDryRunItem[];
 }
 
+export interface NotificationSecretBackfillRunItem {
+  id: number;
+  run_id?: number;
+  channel_id: number;
+  channel_type?: string | null;
+  before_secret_storage_status?: string | null;
+  after_secret_storage_status?: string | null;
+  endpoint_masked?: string | null;
+  item_status: string;
+  failure_reason?: string | null;
+  created_at?: string | number;
+  updated_at?: string | number;
+}
+
+export interface NotificationSecretBackfillRun {
+  id: number;
+  mode: string;
+  status: string;
+  confirmation_accepted?: boolean;
+  requested_by?: string | null;
+  requested_at?: string | number;
+  started_at?: string | number;
+  completed_at?: string | number;
+  total_requested: number;
+  eligible_count: number;
+  migrated_count: number;
+  skipped_count: number;
+  failed_count: number;
+  failure_reason?: string | null;
+  created_at?: string | number;
+  updated_at?: string | number;
+  items?: NotificationSecretBackfillRunItem[];
+}
+
+export interface NotificationSecretBackfillRunListResult {
+  limit: number;
+  items: NotificationSecretBackfillRun[];
+}
+
 export interface NotificationAlertSendRequest {
   alertId: number;
   channelId: number;

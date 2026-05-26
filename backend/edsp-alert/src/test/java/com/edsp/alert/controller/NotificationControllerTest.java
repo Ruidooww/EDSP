@@ -101,6 +101,21 @@ class NotificationControllerTest {
     }
 
     @Test
+    void secretBackfillExecutionRoutesExist() throws Exception {
+        Method execute = NotificationController.class.getMethod("executeSecretBackfill", Map.class);
+        Method runs = NotificationController.class.getMethod("listSecretBackfillRuns", String.class, String.class);
+        Method detail = NotificationController.class.getMethod("secretBackfillRunDetail", long.class);
+
+        assertArrayEquals(new String[] {"/secret-backfill/execute"}, execute.getAnnotation(PostMapping.class).value());
+        assertArrayEquals(new String[] {"/secret-backfill/runs"}, runs.getAnnotation(GetMapping.class).value());
+        assertEquals("status", runs.getParameters()[0].getAnnotation(RequestParam.class).value());
+        assertEquals(false, runs.getParameters()[0].getAnnotation(RequestParam.class).required());
+        assertEquals("limit", runs.getParameters()[1].getAnnotation(RequestParam.class).value());
+        assertEquals(false, runs.getParameters()[1].getAnnotation(RequestParam.class).required());
+        assertArrayEquals(new String[] {"/secret-backfill/runs/{id}"}, detail.getAnnotation(GetMapping.class).value());
+    }
+
+    @Test
     void alertSendRequestRejectsUnknownCreationFields() {
         var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -142,6 +157,12 @@ class NotificationControllerTest {
         var sent = controller.sendAlert(new AlertNotificationSendRequest(123L, 456L));
         var channels = controller.listChannels("legacy_plaintext", "true");
         var dryRun = controller.secretBackfillDryRun("false", "wecom", "75");
+        var executed = controller.executeSecretBackfill(Map.of(
+            "channelIds", List.of(1, 2),
+            "confirmation", "EXECUTE_NOTIFICATION_SECRET_BACKFILL"
+        ));
+        var runs = controller.listSecretBackfillRuns("completed", "10");
+        var runDetail = controller.secretBackfillRunDetail(9L);
         var deliveries = controller.listDeliveries(75, 123L, "failed", "wecom", 456L);
         var retried = controller.retryDelivery(77L, Map.of());
 
@@ -163,6 +184,13 @@ class NotificationControllerTest {
         assertEquals("wecom", notificationService.dryRunChannelType);
         assertEquals("75", notificationService.dryRunLimit);
         assertEquals("dry-run", dryRun.data().get("status"));
+        assertEquals(List.of(1, 2), notificationService.executeRequest.get("channelIds"));
+        assertEquals("executed", executed.data().get("status"));
+        assertEquals("completed", notificationService.runStatus);
+        assertEquals("10", notificationService.runLimit);
+        assertEquals("runs", runs.data().get("status"));
+        assertEquals(9L, notificationService.runDetailId);
+        assertEquals("detail", runDetail.data().get("status"));
     }
 
     @Test
@@ -244,6 +272,66 @@ class NotificationControllerTest {
             .andExpect(jsonPath("$.data.items[0].endpoint_url").doesNotExist())
             .andExpect(jsonPath("$.data.items[0].endpoint_secret_ciphertext").doesNotExist())
             .andExpect(jsonPath("$.data.items[0].endpoint_secret_key_version").doesNotExist());
+    }
+
+    @Test
+    void secretBackfillExecutionHttpRejectsInvalidRequestsAndMissingRuns() throws Exception {
+        var notificationService = new StubNotificationService();
+        notificationService.updateError = new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_confirmation");
+        var mvc = mockMvc(new NotificationController(notificationService, new StubAlertNotificationService()));
+
+        mvc.perform(post("/api/notifications/secret-backfill/execute")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "channelIds": [1],
+                      "confirmation": "wrong"
+                    }
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.message").value("invalid_confirmation"));
+
+        notificationService.updateError = new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_backfill_run_status");
+        mvc.perform(get("/api/notifications/secret-backfill/runs")
+                .param("status", "unknown"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("invalid_backfill_run_status"));
+
+        notificationService.updateError = new ResponseStatusException(HttpStatus.NOT_FOUND, "backfill_run_not_found");
+        mvc.perform(get("/api/notifications/secret-backfill/runs/999"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.message").value("backfill_run_not_found"));
+    }
+
+    @Test
+    void secretBackfillExecutionHttpKeepsResponseContractSecretSafe() throws Exception {
+        var mvc = mockMvc(new NotificationController(
+            new StubNotificationService(),
+            new StubAlertNotificationService()
+        ));
+
+        mvc.perform(post("/api/notifications/secret-backfill/execute")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "channelIds": [1],
+                      "confirmation": "EXECUTE_NOTIFICATION_SECRET_BACKFILL"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.endpoint_url").doesNotExist())
+            .andExpect(jsonPath("$.data.endpoint_secret_ciphertext").doesNotExist())
+            .andExpect(jsonPath("$.data.endpoint_secret_key_version").doesNotExist())
+            .andExpect(jsonPath("$.data.confirmation").doesNotExist());
+
+        mvc.perform(get("/api/notifications/secret-backfill/runs/1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.items[0].endpoint_masked").value("https://example.test/..."))
+            .andExpect(jsonPath("$.data.items[0].endpoint_url").doesNotExist())
+            .andExpect(jsonPath("$.data.items[0].endpoint_secret_ciphertext").doesNotExist())
+            .andExpect(jsonPath("$.data.items[0].endpoint_secret_key_version").doesNotExist())
+            .andExpect(jsonPath("$.data.confirmation").doesNotExist());
     }
 
     @Test
@@ -479,6 +567,10 @@ class NotificationControllerTest {
         private String dryRunEnabled;
         private String dryRunChannelType;
         private String dryRunLimit;
+        private Map<String, Object> executeRequest;
+        private String runStatus;
+        private String runLimit;
+        private Long runDetailId;
         private Long updatedChannelId;
         private com.edsp.alert.dto.NotificationChannelRequest updateRequest;
         private Set<String> updateFields;
@@ -506,6 +598,46 @@ class NotificationControllerTest {
                     "id", 1,
                     "endpointMasked", "https://example.test/...",
                     "dryRunStatus", "migration_eligible"
+                ))
+            );
+        }
+
+        @Override
+        public Map<String, Object> executeSecretBackfill(Map<String, Object> request) {
+            this.executeRequest = request;
+            if (updateError != null) {
+                throw updateError;
+            }
+            return Map.of(
+                "id", 1,
+                "status", "executed",
+                "confirmation_accepted", true
+            );
+        }
+
+        @Override
+        public Map<String, Object> listSecretBackfillRuns(String status, String limit) {
+            this.runStatus = status;
+            this.runLimit = limit;
+            if (updateError != null) {
+                throw updateError;
+            }
+            return Map.of("status", "runs", "items", List.of());
+        }
+
+        @Override
+        public Map<String, Object> secretBackfillRunDetail(long id) {
+            this.runDetailId = id;
+            if (updateError != null) {
+                throw updateError;
+            }
+            return Map.of(
+                "id", id,
+                "status", "detail",
+                "items", List.of(Map.of(
+                    "channel_id", 1,
+                    "endpoint_masked", "https://example.test/...",
+                    "item_status", "migrated"
                 ))
             );
         }

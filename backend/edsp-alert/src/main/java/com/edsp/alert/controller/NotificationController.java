@@ -59,6 +59,27 @@ public class NotificationController {
         return ApiResponse.ok(notificationService.secretBackfillDryRun(enabled, channelType, limit));
     }
 
+    @PostMapping("/secret-backfill/execute")
+    public ApiResponse<Map<String, Object>> executeSecretBackfill(
+        @RequestBody(required = false) Map<String, Object> request
+    ) {
+        var body = request == null ? Map.<String, Object>of() : request;
+        return ApiResponse.ok(notificationService.executeSecretBackfill(body), "executed");
+    }
+
+    @GetMapping("/secret-backfill/runs")
+    public ApiResponse<Map<String, Object>> listSecretBackfillRuns(
+        @RequestParam(value = "status", required = false) String status,
+        @RequestParam(value = "limit", required = false) String limit
+    ) {
+        return ApiResponse.ok(notificationService.listSecretBackfillRuns(status, limit));
+    }
+
+    @GetMapping("/secret-backfill/runs/{id}")
+    public ApiResponse<Map<String, Object>> secretBackfillRunDetail(@PathVariable("id") long id) {
+        return ApiResponse.ok(notificationService.secretBackfillRunDetail(id));
+    }
+
     @GetMapping("/deliveries")
     public ApiResponse<List<Map<String, Object>>> listDeliveries(
         @RequestParam(value = "limit", defaultValue = "50") int limit,

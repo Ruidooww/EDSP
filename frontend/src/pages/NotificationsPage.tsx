@@ -11,7 +11,15 @@ import { Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Mo
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../api';
-import type { NotificationChannelRow, NotificationDeliveryRow, NotificationSecretBackfillDryRunItem, NotificationSecretBackfillDryRunResult } from '../types';
+import type {
+  NotificationChannelRow,
+  NotificationDeliveryRow,
+  NotificationSecretBackfillDryRunItem,
+  NotificationSecretBackfillDryRunResult,
+  NotificationSecretBackfillRun,
+  NotificationSecretBackfillRunItem,
+  NotificationSecretBackfillRunListResult,
+} from '../types';
 
 interface NotificationChannelFormValues {
   name: string;
@@ -68,6 +76,8 @@ const CHANNEL_ENABLED_OPTIONS = [
   { value: 'true', label: '启用' },
   { value: 'false', label: '停用' },
 ];
+
+const BACKFILL_CONFIRMATION = 'EXECUTE_NOTIFICATION_SECRET_BACKFILL';
 
 function channelTypeLabel(value: string) {
   return {
@@ -137,6 +147,50 @@ function blockReasonLabel(reason?: string | null) {
   }[reason || ''] ?? '-';
 }
 
+function backfillRunStatusTag(status?: string) {
+  if (status === 'completed') {
+    return <Tag color="success">completed</Tag>;
+  }
+  if (status === 'completed_with_failures') {
+    return <Tag color="warning">completed_with_failures</Tag>;
+  }
+  if (status === 'failed') {
+    return <Tag color="error">failed</Tag>;
+  }
+  if (status === 'running') {
+    return <Tag color="processing">running</Tag>;
+  }
+  return <Tag>{status || '-'}</Tag>;
+}
+
+function backfillItemStatusTag(status?: string) {
+  if (status === 'migrated') {
+    return <Tag color="success">migrated</Tag>;
+  }
+  if (status === 'skipped') {
+    return <Tag>skipped</Tag>;
+  }
+  if (status === 'failed') {
+    return <Tag color="error">failed</Tag>;
+  }
+  return <Tag>{status || '-'}</Tag>;
+}
+
+function backfillFailureReasonLabel(reason?: string | null) {
+  return {
+    not_found: 'not_found',
+    already_encrypted: 'already_encrypted',
+    not_legacy_plaintext: 'not_legacy_plaintext',
+    endpoint_missing: 'endpoint_missing',
+    endpoint_invalid: 'endpoint_invalid',
+    unsupported_channel_type: 'unsupported_channel_type',
+    notification_secret_key_missing: 'notification_secret_key_missing',
+    notification_secret_key_invalid: 'notification_secret_key_invalid',
+    notification_secret_store_failed: 'notification_secret_store_failed',
+    unexpected_error: 'unexpected_error',
+  }[reason || ''] ?? '-';
+}
+
 function formatTime(value?: string | number) {
   if (!value) {
     return '-';
@@ -190,10 +244,16 @@ export default function NotificationsPage() {
   const [rows, setRows] = useState<NotificationChannelRow[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDeliveryRow[]>([]);
   const [dryRun, setDryRun] = useState<NotificationSecretBackfillDryRunResult | null>(null);
+  const [backfillRuns, setBackfillRuns] = useState<NotificationSecretBackfillRun[]>([]);
+  const [lastBackfillRun, setLastBackfillRun] = useState<NotificationSecretBackfillRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [dryRunLoading, setDryRunLoading] = useState(false);
+  const [backfillExecuteLoading, setBackfillExecuteLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [backfillConfirmOpen, setBackfillConfirmOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<NotificationChannelRow | null>(null);
+  const [selectedBackfillChannelIds, setSelectedBackfillChannelIds] = useState<number[]>([]);
+  const [backfillConfirmationInput, setBackfillConfirmationInput] = useState('');
   const [channelSecretStorageStatus, setChannelSecretStorageStatus] = useState('');
   const [channelEnabled, setChannelEnabled] = useState('');
   const [dryRunEnabled, setDryRunEnabled] = useState('');
@@ -296,10 +356,21 @@ export default function NotificationsPage() {
     setDryRunLoading(true);
     try {
       setDryRun(await apiGet<NotificationSecretBackfillDryRunResult>(dryRunPath(filters)));
+      setSelectedBackfillChannelIds([]);
     } catch {
       setDryRun(null);
+      setSelectedBackfillChannelIds([]);
     } finally {
       setDryRunLoading(false);
+    }
+  }
+
+  async function loadBackfillRuns() {
+    try {
+      const result = await apiGet<NotificationSecretBackfillRunListResult>('/api/notifications/secret-backfill/runs?limit=5');
+      setBackfillRuns(result.items);
+    } catch {
+      setBackfillRuns([]);
     }
   }
 
@@ -402,6 +473,7 @@ export default function NotificationsPage() {
   useEffect(() => {
     void load();
     void loadDryRun();
+    void loadBackfillRuns();
   }, []);
 
   async function submit() {
@@ -448,6 +520,36 @@ export default function NotificationsPage() {
     } finally {
       await load();
       setRetryLoadingId(null);
+    }
+  }
+
+  async function executeSelectedBackfill() {
+    if (selectedBackfillChannelIds.length === 0 || selectedBackfillChannelIds.length > 50) {
+      return;
+    }
+    if (backfillConfirmationInput !== BACKFILL_CONFIRMATION) {
+      message.error('confirmation phrase mismatch');
+      return;
+    }
+    setBackfillExecuteLoading(true);
+    try {
+      const run = await apiPost<NotificationSecretBackfillRun>('/api/notifications/secret-backfill/execute', {
+        channelIds: selectedBackfillChannelIds,
+        confirmation: BACKFILL_CONFIRMATION,
+        requestedBy: 'manual',
+      });
+      const detail = await apiGet<NotificationSecretBackfillRun>(`/api/notifications/secret-backfill/runs/${run.id}`);
+      setLastBackfillRun(detail);
+      setBackfillConfirmOpen(false);
+      setBackfillConfirmationInput('');
+      setSelectedBackfillChannelIds([]);
+      message.success(`backfill run #${run.id} completed`);
+      await Promise.all([load(), loadDryRun(), loadBackfillRuns()]);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'unknown error';
+      message.error(`backfill execution failed: ${errorMessage}`);
+    } finally {
+      setBackfillExecuteLoading(false);
     }
   }
 
@@ -624,6 +726,51 @@ export default function NotificationsPage() {
     },
   ];
 
+  const backfillRunItemColumns: ColumnsType<NotificationSecretBackfillRunItem> = [
+    {
+      title: 'Channel ID',
+      dataIndex: 'channel_id',
+      width: 100,
+    },
+    {
+      title: 'Type',
+      dataIndex: 'channel_type',
+      width: 110,
+      render: (value?: string | null) => value ? <Tag color="blue">{channelTypeLabel(value)}</Tag> : '-',
+    },
+    {
+      title: 'Item Status',
+      dataIndex: 'item_status',
+      width: 120,
+      render: backfillItemStatusTag,
+    },
+    {
+      title: 'Reason',
+      dataIndex: 'failure_reason',
+      width: 190,
+      render: backfillFailureReasonLabel,
+    },
+    {
+      title: 'Before',
+      dataIndex: 'before_secret_storage_status',
+      width: 150,
+      render: secretStorageStatusTag,
+    },
+    {
+      title: 'After',
+      dataIndex: 'after_secret_storage_status',
+      width: 150,
+      render: secretStorageStatusTag,
+    },
+    {
+      title: 'Endpoint',
+      dataIndex: 'endpoint_masked',
+      width: 220,
+      ellipsis: true,
+      render: (value?: string | null) => <Typography.Text code ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Typography.Text>,
+    },
+  ];
+
   const deliveryColumns: ColumnsType<NotificationDeliveryRow> = [
     {
       title: '发送内容',
@@ -759,6 +906,13 @@ export default function NotificationsPage() {
         title="密钥回填 Dry Run"
         extra={
           <Space>
+            <Button
+              type="primary"
+              disabled={selectedBackfillChannelIds.length === 0 || selectedBackfillChannelIds.length > 50}
+              onClick={() => setBackfillConfirmOpen(true)}
+            >
+              执行选中迁移
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => loadDryRun()} loading={dryRunLoading}>
               刷新 dry-run
             </Button>
@@ -809,6 +963,7 @@ export default function NotificationsPage() {
           <Tag>endpoint 无效 {dryRun?.blockReasons.endpoint_invalid ?? 0}</Tag>
           <Tag>类型不支持 {dryRun?.blockReasons.unsupported_channel_type ?? 0}</Tag>
           {dryRun?.truncated ? <Tag color="warning">明细已按 limit 截断</Tag> : <Tag>明细未截断</Tag>}
+          {selectedBackfillChannelIds.length > 50 ? <Tag color="error">单次最多 50 个通道</Tag> : null}
         </Space>
         <Table<NotificationSecretBackfillDryRunItem>
           rowKey="id"
@@ -816,10 +971,47 @@ export default function NotificationsPage() {
           loading={dryRunLoading}
           dataSource={dryRun?.items ?? []}
           columns={dryRunColumns}
+          rowSelection={{
+            selectedRowKeys: selectedBackfillChannelIds,
+            onChange: (keys) => setSelectedBackfillChannelIds(keys.map((key) => Number(key))),
+            getCheckboxProps: (record) => ({
+              disabled: !(record.migrationEligible === true && record.dryRunStatus === 'migration_eligible'),
+            }),
+          }}
           scroll={{ x: 1230 }}
           pagination={{ pageSize: 5 }}
           locale={{ emptyText: '暂无 dry-run 明细' }}
         />
+        {lastBackfillRun ? (
+          <Card size="small" className="form-hint" title={`最近执行 run #${lastBackfillRun.id}`}>
+            <Space wrap className="form-hint">
+              {backfillRunStatusTag(lastBackfillRun.status)}
+              <Tag>requested {lastBackfillRun.total_requested}</Tag>
+              <Tag color="success">eligible {lastBackfillRun.eligible_count}</Tag>
+              <Tag color="success">migrated {lastBackfillRun.migrated_count}</Tag>
+              <Tag>skipped {lastBackfillRun.skipped_count}</Tag>
+              <Tag color={lastBackfillRun.failed_count ? 'error' : 'default'}>failed {lastBackfillRun.failed_count}</Tag>
+            </Space>
+            <Table<NotificationSecretBackfillRunItem>
+              rowKey="id"
+              size="small"
+              dataSource={lastBackfillRun.items ?? []}
+              columns={backfillRunItemColumns}
+              pagination={{ pageSize: 5 }}
+              scroll={{ x: 1040 }}
+            />
+          </Card>
+        ) : null}
+        {backfillRuns.length > 0 ? (
+          <Space className="form-hint" wrap>
+            <Typography.Text type="secondary">最近 runs</Typography.Text>
+            {backfillRuns.map((run) => (
+              <Tag key={run.id}>
+                #{run.id} {run.status} / migrated {run.migrated_count}
+              </Tag>
+            ))}
+          </Space>
+        ) : null}
       </Card>
 
       <Typography.Title level={5} className="section-subtitle">
@@ -948,6 +1140,35 @@ export default function NotificationsPage() {
             <Switch />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="执行选中密钥回填"
+        open={backfillConfirmOpen}
+        onOk={executeSelectedBackfill}
+        onCancel={() => {
+          setBackfillConfirmOpen(false);
+          setBackfillConfirmationInput('');
+        }}
+        confirmLoading={backfillExecuteLoading}
+        okButtonProps={{ disabled: backfillConfirmationInput !== BACKFILL_CONFIRMATION }}
+        okText="执行选中迁移"
+        destroyOnHidden
+      >
+        <Alert
+          className="form-hint"
+          type="warning"
+          showIcon
+          message="该操作会把选中的 legacy plaintext endpoint 加密迁移到 secret storage。成功后会清空这些通道的 endpoint_url。该操作不会清理历史 config_json 或 notification_deliveries。"
+        />
+        <Typography.Paragraph>
+          已选择 {selectedBackfillChannelIds.length} 个通道。请输入确认短语以继续。
+        </Typography.Paragraph>
+        <Input
+          value={backfillConfirmationInput}
+          onChange={(event) => setBackfillConfirmationInput(event.target.value)}
+          placeholder={BACKFILL_CONFIRMATION}
+        />
       </Modal>
 
       <Drawer title="通知发送详情" width={640} open={Boolean(activeDelivery)} onClose={() => setActiveDelivery(null)} destroyOnHidden>

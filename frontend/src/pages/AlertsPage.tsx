@@ -190,6 +190,15 @@ function deliveryStatusColor(status?: string) {
   return 'processing';
 }
 
+function compactText(value?: string | number | null, width = 140) {
+  const text = value === null || value === undefined || value === '' ? '-' : String(value);
+  return (
+    <Typography.Text className="alert-table-ellipsis" style={{ maxWidth: width }} ellipsis={{ tooltip: text }}>
+      {text}
+    </Typography.Text>
+  );
+}
+
 export default function AlertsPage() {
   const [rows, setRows] = useState<AlertRow[]>([]);
   const [statusFilter, setStatusFilter] = useState<AlertStatusFilter>('all');
@@ -338,7 +347,7 @@ export default function AlertsPage() {
 
     if (row.status === 'acknowledged') {
       return (
-        <Space>
+        <Space className="alert-actions" wrap={false}>
           <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
             详情
           </Button>
@@ -354,7 +363,7 @@ export default function AlertsPage() {
 
     if (row.status === 'open') {
       return (
-        <Space>
+        <Space className="alert-actions" wrap={false}>
           <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
             详情
           </Button>
@@ -375,7 +384,7 @@ export default function AlertsPage() {
     }
 
     return (
-      <Space>
+      <Space className="alert-actions" wrap={false}>
         <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(row)}>
           详情
         </Button>
@@ -415,10 +424,12 @@ export default function AlertsPage() {
     {
       title: '告警',
       dataIndex: 'title',
+      width: 320,
+      ellipsis: true,
       render: (title: string, row) => (
-        <div>
+        <div className="alert-title-cell">
           <strong>{title}</strong>
-          <span className="table-subtext">
+          <span className="table-subtext alert-subtitle-cell">
             {row.sourceSystem || row.source_system || 'unknown'} / {row.alertType || row.alert_type || 'generic'}
           </span>
         </div>
@@ -433,32 +444,33 @@ export default function AlertsPage() {
     {
       title: '状态',
       dataIndex: 'status',
-      width: 90,
+      width: 100,
       render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
     },
-    { title: '规则', width: 180, render: (_, row) => ruleName(row) },
-    { title: 'Decision ID', width: 120, render: (_, row) => decisionId(row) ?? '-' },
-    { title: 'Standard Event', width: 140, render: (_, row) => standardEventId(row) ?? '-' },
-    { title: '指派给', width: 120, render: (_, row) => assignedTo(row) || '-' },
-    { title: '用户', dataIndex: 'actor', width: 120, render: (value) => value || '-' },
+    { title: '规则', width: 220, ellipsis: true, render: (_, row) => compactText(ruleName(row), 200) },
+    { title: 'Decision ID', width: 120, render: (_, row) => compactText(decisionId(row), 100) },
+    { title: 'Standard Event', width: 150, render: (_, row) => compactText(standardEventId(row), 130) },
+    { title: '指派给', width: 130, ellipsis: true, render: (_, row) => compactText(assignedTo(row), 110) },
+    { title: '用户', dataIndex: 'actor', width: 150, ellipsis: true, render: (value) => compactText(value, 130) },
     {
       title: '资产',
-      width: 140,
-      render: (_, row) => row.assetRef || row.asset_ref || '-',
+      width: 220,
+      ellipsis: true,
+      render: (_, row) => compactText(row.assetRef || row.asset_ref, 200),
     },
     {
       title: '发生时间',
-      width: 150,
-      render: (_, row) => formatTime(row.occurredAt || row.occurred_at),
+      width: 160,
+      render: (_, row) => compactText(formatTime(row.occurredAt || row.occurred_at), 140),
     },
     {
       title: '更新时间',
-      width: 150,
-      render: (_, row) => formatTime(updatedAt(row)),
+      width: 160,
+      render: (_, row) => compactText(formatTime(updatedAt(row)), 140),
     },
     {
       title: '操作',
-      width: 340,
+      width: 360,
       fixed: 'right',
       render: (_, row) => renderLifecycleActions(row),
     },
@@ -521,7 +533,7 @@ export default function AlertsPage() {
           loading={loading}
           dataSource={rows}
           columns={columns}
-          scroll={{ x: 1480 }}
+          scroll={{ x: 2200 }}
           locale={{ emptyText: '暂无告警。可先在规则评估页生成 matched alert_decisions，再按 Decision ID 手动生成告警。' }}
         />
       </Card>

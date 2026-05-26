@@ -686,6 +686,34 @@ body {
   margin-top: 10px;
 }
 
+.alerts-table .ant-table-cell {
+  white-space: nowrap;
+}
+
+.alerts-table .alert-title-cell {
+  width: 100%;
+  max-width: 320px;
+  min-width: 0;
+}
+
+.alerts-table .alert-title-cell strong,
+.alerts-table .alert-subtitle-cell,
+.alerts-table .alert-table-ellipsis {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.alerts-table .alert-actions {
+  flex-wrap: nowrap;
+}
+
+.alerts-table .alert-actions .ant-btn {
+  flex: 0 0 auto;
+}
+
 .json-preview {
   margin: 0;
 }

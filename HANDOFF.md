@@ -6,46 +6,70 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Alerts Page Table Layout Hotfix`
-- 最新 feature merge commit：`1d18b1f merge: alerts page table layout hotfix`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for alerts page table layout hotfix`
-- 本轮阶段分支：`codex/alerts-page-table-layout-hotfix`
-- 本轮结果：已修复前端告警中心告警列表表格布局问题，避免告警标题、中文字段、状态和操作按钮被压缩成竖排，恢复横向滚动、可读列宽和正常行高。
+- 当前阶段：`Notification Secret Backfill Readiness MVP`
+- 最新 feature merge commit：`f7d5ffe merge: notification secret backfill readiness mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for notification secret backfill readiness mvp`
+- 本轮阶段分支：`codex/notification-secret-backfill-readiness-mvp`
+- 本轮结果：已让 legacy plaintext 通知通道可筛选、可定位、可人工重配；未做自动 backfill / cleanup。
 
 ## 已完成能力
 
-- 前端 `AlertsPage` 表格布局修复：
-  - 为告警标题、等级、状态、规则、Decision ID、Standard Event、指派给、用户、资产、发生时间、更新时间、操作列设置明确宽度。
-  - 将告警列表横向滚动宽度提升到 `scroll={{ x: 2200 }}`，避免浏览器压缩列宽导致中文逐字换行。
-  - 告警标题列固定宽度并限制在单行展示，长标题通过 ellipsis 省略。
-  - 规则、用户、资产、指派人、时间等长文本字段统一使用受控 ellipsis。
-  - 操作列保持 `fixed: 'right'`，宽度调整为 `360`，按钮保持横向排列。
-- 局部 CSS 防护：
-  - 仅在 `.alerts-table` 作用域下增加 `white-space: nowrap`、ellipsis 和 action button nowrap 防护。
-  - 不影响 `NotificationsPage` / `DashboardPage` / 其他表格。
-- 保留现有告警操作：
-  - 详情
-  - 确认
-  - 指派
-  - 关闭
-  - 发送通知
+- 后端扩展现有 `GET /api/notifications/channels` 查询参数：
+  - `secretStorageStatus=encrypted|legacy_plaintext|missing`
+  - `enabled=true|false`
+  - 两个 filter 可组合。
+  - 不传参数时保持现有列表行为。
+- 后端参数校验：
+  - 非法 `secretStorageStatus` 返回 `400 invalid_secret_storage_status`。
+  - 非法 `enabled` 返回 `400 invalid_enabled_filter`。
+  - 未使用 `Boolean.parseBoolean(...)` 静默把非法值转成 `false`。
+- 通道列表 response 继续保持 secret-safe：
+  - 不返回 `endpoint_url`。
+  - 不返回 `endpoint_secret_ciphertext`。
+  - 不返回 `endpoint_secret_key_version`。
+  - `endpoint_masked` 返回前继续走 sanitizer 兜底。
+- 前端 `NotificationsPage` 增加通道筛选：
+  - 密钥状态：全部 / 已加密 / 待重配 / 未配置。
+  - 启用状态：全部 / 启用 / 停用。
+  - 筛选通过后端 query 参数完成，不做本地过滤。
+  - “全部”状态不发送对应 query 参数。
+- 前端编辑提示：
+  - 仅 legacy plaintext 通道编辑时提示：`重新输入 Webhook URL 后将转换为加密存储`。
+  - encrypted 通道继续提示留空保留现有密钥。
+  - missing 通道提示需要输入 endpoint 才能启用。
+- 已保持上一轮 hardening 语义：
+  - `legacy_plaintext + update 不传 endpoint` 保留 `endpoint_url` fallback。
+  - `legacy_plaintext + update 传新 endpoint` 转换为 encrypted。
+  - `encrypted + update 不传 endpoint` 保留原 encrypted secret。
+  - `missing + no endpoint + finalEnabled=true` 继续拒绝 `notification_secret_unavailable`。
 
 ## 明确未做 / 禁止误解
 
-- 未改后端。
 - 未新增 migration。
+- 未新增 API endpoint。
+- 未做自动 backfill。
+- 未做自动 cleanup。
+- 未做历史数据批量清洗。
+- 未做批量迁移。
+- 未做批量清空。
+- 未做批量禁用。
+- 未做批量重配。
+- 未读取、未改写、未脱敏重写历史 `notification_deliveries` 数据。
+- 未修改历史 `notification_channels.endpoint_url` 数据。
+- 未清空 legacy plaintext `endpoint_url`。
+- 未修改 V16 字段定义。
+- 未做 key rotation。
+- 未接 Vault / KMS。
+- 未接外部 secret provider。
+- 未修改 notification send / retry API 语义。
 - 未修改 alert lifecycle。
-- 未修改 alert status 语义。
-- 未修改 assign / acknowledge / close API。
-- 未修改 notification send / retry。
-- 未修改 Notification Secret Storage。
+- 未写 `alert_lifecycle_events`。
 - 未修改 rule evaluation。
 - 未修改 alert generation。
 - 未修改 sync-once / scheduled sync。
+- 未混入 `Docker Compose Container Name Hardening MVP`。
 - 未修改 Docker / compose。
 - 未修改 `AGENTS.md`。
-- 未新增业务入口。
-- 未删除现有功能按钮。
 
 ## 当前关键边界
 
@@ -61,37 +85,44 @@
 - `notification_deliveries.payload_json` 不得新增 channel endpoint / webhookUrl / endpointUrl / token / key / secret 等通道密钥字段。
 - `GET /api/core/overview` 不得暴露 endpoint secret。
 - legacy plaintext fallback 仍仅为兼容旧数据，不是新建 / 更新通道的默认存储路径。
+- legacy plaintext 现在可通过 `secretStorageStatus=legacy_plaintext` 定位并人工重配，但不会自动迁移。
 
 ## 测试和验证结果
 
 - 阶段分支验证：
+  - `mvn -pl edsp-alert -am test` 通过，`86` tests。
+  - `mvn -pl edsp-core -am test` 通过，`116` tests。
   - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
-  - `git diff --check` 通过；无 whitespace error。
+  - `git diff --check` 通过；无 whitespace error，仅有 CRLF/LF warning。
   - `git status --short --branch` clean after branch commit / push。
-- 手工 UI 验证结论：
-  - 告警列表不再依赖自动压缩列宽。
-  - 告警标题列有固定宽度和 ellipsis。
-  - 表格启用横向滚动。
-  - 操作列按钮保持可见且横向排列。
-  - 详情 / 确认 / 指派 / 关闭 / 发送通知等已有操作未删除。
+- 本轮新增 / 覆盖测试：
+  - `secretStorageStatus=encrypted` 查询。
+  - `secretStorageStatus=legacy_plaintext` 查询。
+  - `secretStorageStatus=missing` 查询。
+  - `enabled=true / false` 查询。
+  - `secretStorageStatus + enabled` 组合查询。
+  - 非法 `secretStorageStatus` 返回 `invalid_secret_storage_status`。
+  - 非法 `enabled` 返回 `invalid_enabled_filter`。
+  - channels response 不返回 raw endpoint / ciphertext / key version。
+  - legacy edit 传新 endpoint 后仍转换为 encrypted。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
 
-- 本轮未启动真实后端数据做浏览器截图验证；如需要，可后续用真实 alert 数据在 1366px / 1440px 宽度下补一轮视觉确认。
+- 本轮是 readiness，不是 cleanup；legacy plaintext 仍允许 fallback send / retry。
 - 历史 `notification_channels.endpoint_url` 中已有 plaintext endpoint，本轮未做 backfill / cleanup。
 - 历史 `notification_channels.config_json` 中如已有敏感值，本轮未做 migration 清理。
 - 历史 `notification_deliveries.response_body / failure_reason / payload_json` 中如已有敏感值，本轮未做 migration 清理。
-- `legacy_plaintext` 仍保留 fallback，只在前端显示为“待重配”。
 - 本轮未做 key rotation；如果 master key 丢失或更换，encrypted channel 仍需要后续恢复 / 轮换策略。
 - 当前 `docker-compose.yml` 固定 `container_name` 会导致不同 compose project 无法并行启动同一套 EDSP 容器；如需处理，应单独规划 `Docker Compose Container Name Hardening MVP`，不要混入通知业务阶段。
 
 ## 下一轮建议
 
-建议下一阶段优先做 `Notification Secret Backfill / Cleanup MVP`：
+建议下一阶段再评估是否进入 `Notification Secret Backfill / Cleanup MVP`：
 
-- 规划 legacy plaintext channel 的可控迁移 / 人工重配策略。
-- 明确是否允许后台 backfill，或仅提供只读排查与手动重配入口。
+- 先设计 dry-run / audit / rollback 边界。
+- 明确是否允许自动 backfill，或继续只支持人工重配。
+- 明确失败恢复策略和审计记录。
 - 保持 send / retry / alert lifecycle / rule evaluation / alert generation 语义不变。
 - 不接 Vault / KMS，除非单独立项。
 - 不做 key rotation，除非单独立项。

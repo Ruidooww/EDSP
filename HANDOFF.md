@@ -1,96 +1,75 @@
 # 数据安全预警分析平台 Handoff
 
-更新时间：2026-05-25
+更新时间：2026-05-26
 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
 
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Notification Secret Storage Foundation MVP`
-- 最新 feature merge commit：`6e46078 merge: notification secret storage foundation mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for notification secret storage foundation mvp`
-- 本轮阶段分支：`codex/notification-secret-storage-foundation-mvp`
-- 本轮结果：已完成通知通道密钥加密存储基础能力；保留 legacy plaintext fallback，不删除 `endpoint_url` 字段，不做历史数据批量清洗，不改变 send / retry / alert lifecycle 语义。
+- 当前阶段：`Notification Secret Storage Runtime Verification MVP`
+- 最新 feature merge commit：`78dd807 merge: notification secret storage runtime verification mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for notification secret storage runtime verification mvp`
+- 本轮阶段分支：`codex/notification-secret-storage-runtime-verification-mvp`
+- 本轮结果：已在真实 Docker PostgreSQL runtime 下验证 Notification Secret Storage Foundation，确认 V16 migration、secret storage 字段、核心服务启动、gateway/frontend 代理和只读 API smoke test 可用；同时修复 `NotificationSecretStore` Spring 注入导致 `edsp-alert` runtime 启动失败的问题。
 
 ## 已完成能力
 
-- 新增 V16 migration：`V16__notification_secret_storage.sql`
+- 新增 runtime verification 文档：
+  - `docs/notification-secret-storage-runtime-verification.md`
+  - 记录 Docker Compose project、服务启动状态、PostgreSQL readiness、Flyway V16、V16 字段、HTTP smoke test、测试结果、敏感信息检查和 known risks。
+- 真实 PostgreSQL runtime 验证：
+  - 使用既有非破坏性 Docker Compose project：`edsp-pg-verify`
+  - 未执行 `docker compose down -v`
+  - 未删除任何 volume
+  - 未手动改库绕过 Flyway
+  - PostgreSQL 容器保持 healthy
+- Flyway 验证：
+  - `flyway_schema_history` 中 V16 `notification secret storage` 存在且 `success = true`
+  - 同时确认 V15 / V14 仍成功
+  - 未发现 checksum / duplicate migration / SQL compatibility 错误
+- V16 字段验证：
   - `notification_channels.endpoint_secret_ciphertext`
   - `notification_channels.endpoint_secret_key_version`
   - `notification_channels.endpoint_masked`
   - `notification_channels.secret_storage_status`
-  - `secret_storage_status` 约束：`encrypted` / `legacy_plaintext` / `missing`
-  - `secret_storage_status` 索引
-- 新增 `NotificationSecretCodec`
-  - 使用 `AES/GCM/NoPadding`
-  - 使用 12-byte `SecureRandom` nonce
-  - ciphertext 格式：`v1:<base64-nonce>:<base64-ciphertext-with-tag>`
-  - master key 要求为 Base64 编码的 32 bytes
-- 新增 `NotificationSecretStore`
-  - master key 读取顺序：
-    - `edsp.notification.secret.master-key`
-    - `EDSP_NOTIFICATION_SECRET_KEY`
-  - 明确区分 key missing / key invalid / decrypt failed 语义
-  - 支持 encrypted channel 解密发送
-  - 支持 legacy plaintext channel fallback 使用 `endpoint_url`
-  - missing secret 返回 `notification_secret_unavailable`
-- `NotificationService` 加固
-  - 新建 / 更新通道后 `endpoint_url = null`
-  - `endpoint_secret_ciphertext` 保存加密结果，不保存 raw endpoint / token / key
-  - `endpoint_masked` 不泄露 webhook token / WeCom key / Feishu token
-  - `config_json` 不保存 `webhookUrl` / `endpointUrl` / `url` / `key` / `token` / `secret` / `authorization` / `bearer`
-  - `GET /api/notifications/channels` 不返回 `endpoint_url` / `endpoint_secret_ciphertext` / `endpoint_secret_key_version`
-- `AlertNotificationService` 加固
-  - send / retry 发送路径统一通过 `NotificationSecretStore.resolveEndpoint(channel)`
-  - resolve 失败时不调用 adapter
-  - resolve 失败时不写 `notification_deliveries`
-  - retry resolve 失败时不递增 `retry_count`
-  - 不修改 alert status
-  - 不写 `alert_lifecycle_events`
-- `NotificationSecretSanitizer` 加固
-  - generic webhook `endpoint_masked` 统一收敛为 `scheme://host/...`
-  - Feishu endpoint 展示为 `https://open.feishu.cn/open-apis/bot/v2/hook/...`
-  - WeCom endpoint 展示为 `https://qyapi.weixin.qq.com/...`
-  - response / failure / payload 脱敏逻辑继续保留上一轮 Secret Hygiene 边界
-- `DemoDataSeeder` 调整
-  - 不 seed WeCom / Feishu secret-like endpoint
-  - demo channel 使用 `endpoint_url = null`
-  - `endpoint_masked = demo://not-configured`
-  - `secret_storage_status = missing`
-  - `enabled = false`
-  - `status = disabled`
-  - 更新已有 demo channel 时清空历史 `endpoint_secret_ciphertext` / `endpoint_secret_key_version`
-  - 未引入 `edsp-core -> edsp-alert` 依赖
-- 补充测试覆盖
-  - AES-GCM codec / key missing / invalid key / decrypt failed
-  - create / update channel 加密存储和响应脱敏
-  - encrypted send / retry
-  - legacy plaintext fallback
-  - missing secret 不调用 adapter、不写 delivery、不递增 retry_count
-  - DemoDataSeeder 不写真实通知密钥
-  - ciphertext 不包含原始 endpoint / token / key
+  - `secret_storage_status` 状态分布查询可正常执行
+- Runtime blocker 修复：
+  - 修复 `NotificationSecretStore` 无默认构造函数导致 Spring runtime bean 创建失败的问题
+  - 为生产构造函数增加 Spring 注入标记
+  - 新增 `NotificationSecretStoreSpringContextTest` 覆盖 Spring bean 创建
+- HTTP smoke test 验证：
+  - `GET /api/notifications/channels` 返回 `200 OK`
+  - `GET /api/notifications/deliveries?limit=10` 返回 `200 OK`
+  - `GET /api/core/overview` 返回 `200 OK`
+  - API response 未包含 `endpoint_secret_ciphertext`
+  - API response 未包含 `endpoint_secret_key_version`
+  - API response 未包含 raw `endpoint_url`
+  - API response 未包含 webhook token / WeCom key / Feishu token
 
 ## 明确未做 / 禁止误解
 
+- 未做新业务功能。
+- 未做 Notification Secret Storage Hardening。
+- 未做 partial update。
+- 未做“不传 webhookUrl 保留旧 secret”。
 - 未做历史数据批量清洗。
-- 未删除 `notification_channels.endpoint_url` 字段。
+- 未做 backfill / cleanup。
+- 未做 key rotation。
 - 未接 Vault / KMS。
+- 未接外部 secret provider。
+- 未接外部业务库。
 - 未新增 Email / SMS adapter。
-- 未做飞书签名校验。
-- 未做 Lark 国际版。
-- 未做自动通知。
-- 未做自动 retry / 批量 retry / 失败队列。
-- 未做通知升级 / 编排。
+- 未新增通知通道 adapter。
+- 未修改 notification send / retry API 语义。
 - 未修改 alert lifecycle。
 - 未写 `alert_lifecycle_events`。
-- 未修改 send / retry API 请求语义。
-- 未修改 alerts / alert_decisions / standard_events 语义。
-- 未修改 rule evaluation / alert generation 语义。
+- 未修改 rule evaluation。
+- 未修改 alert generation。
 - 未修改 sync-once / scheduled sync 语义。
 - 未修改 `AGENTS.md`。
-- 未处理 PostgreSQL Runtime Verification MVP。
-- 未引入 Kafka / Redis / ClickHouse / AI。
-- 未做 partial update 语义；本阶段不支持“不传 webhookUrl 保留旧 secret”。
+- 未修改旧文档 `docs/postgresql-runtime-verification.md`。
+- 未执行 `docker compose -p edsp-pg-verify down -v`。
+- 未删除 `edsp-pg-verify_postgres_data` 或 `edsp_postgres_data` volume。
 
 ## 当前关键边界
 
@@ -105,40 +84,50 @@
 - `notification_deliveries.payload_json` 不得新增 channel endpoint / webhookUrl / endpointUrl / token / key / secret 等通道密钥字段。
 - `GET /api/core/overview` 不得暴露 endpoint secret。
 - legacy plaintext fallback 仅为兼容旧数据，不是新建 / 更新通道的存储路径。
+- runtime 验证阶段只允许非破坏性 Docker / PostgreSQL 检查，不允许删除 volume 或手动改库绕过 Flyway。
 
-## 测试结果
+## 测试和验证结果
 
+- Runtime verification：
+  - Docker Compose project：`edsp-pg-verify`
+  - PostgreSQL healthcheck：healthy
+  - V16 migration：`success = true`
+  - V16 fields：全部存在
+  - HTTP smoke test：`/api/notifications/channels`、`/api/notifications/deliveries?limit=10`、`/api/core/overview` 均返回 `200 OK`
+  - 敏感信息检查：API response 未命中 secret storage ciphertext / key version / raw endpoint / webhook token / WeCom key / Feishu token
 - 阶段分支验证：
-  - `mvn -pl edsp-alert -am test` 通过：`Tests run: 65, Failures: 0, Errors: 0, Skipped: 0`
+  - `mvn -pl edsp-alert -am test` 通过：`Tests run: 66, Failures: 0, Errors: 0, Skipped: 0`
   - `mvn -pl edsp-core -am test` 通过：`Tests run: 116, Failures: 0, Errors: 0, Skipped: 0`
-  - `npm.cmd run build` 通过，仅有 Vite chunk size warning
+  - `npm.cmd run build` 通过，仅有既有 Vite chunk size warning
   - `git diff --check` 通过，无 whitespace error
-- 敏感关键词扫描：
-  - 生产代码只命中结构字段名、脱敏正则和脱敏逻辑本身
-  - `DemoDataSeeder` 只命中字段名，不包含真实 webhook / WeCom / Feishu endpoint
-  - 测试代码命中测试用 secret 常量和断言，符合预期
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
 
+- 现有 `edsp-pg-verify` runtime 使用的数据库是 `edsp_pg_verify`，而 compose 默认数据库名仍可能是 `edsp`；后续如需稳定复现，应明确 runtime env。
+- 当前 `docker-compose.yml` 使用固定 `container_name`，不同 compose project 无法并行启动同一套 EDSP 容器；如需多 project 并行验证，应单独规划 `Docker Compose Container Name Hardening MVP`。
 - 历史 `notification_channels.endpoint_url` 中已存在的完整 URL 或 token，本轮未做 migration 清理。
 - 历史 `notification_channels.config_json` 中已存在的敏感值，本轮未做 migration 清理。
 - 历史 `notification_deliveries.response_body / failure_reason / payload_json` 中已存在的敏感值，本轮未做 migration 清理。
-- 当前 master 已具备“新建 / 更新通道不再明文落 endpoint”的基础能力，但历史密钥治理仍需单独阶段。
-- 如果后续需要“不传 webhookUrl 保留旧 secret”的编辑体验，应单独规划 partial update 语义和测试。
+- 本轮 runtime verification 不代表真实外部 webhook / WeCom / Feishu 网络可达。
+- 测试 key 只能用于验证，不得用于生产。
 
 ## 下一轮建议
 
-建议下一阶段优先做 `Notification Secret Storage Hardening MVP` 或 `PostgreSQL Runtime Verification MVP`，二选一：
+建议下一阶段优先做 `Notification Secret Storage Hardening MVP`：
 
-- `Notification Secret Storage Hardening MVP`
-  - 规划 partial update：未传 endpoint 时保留旧 encrypted secret。
-  - 规划历史 legacy plaintext channel 的可控迁移 / 人工重配策略。
-  - 继续保持 send / retry / alert lifecycle / rule evaluation / alert generation 语义不变。
-- `PostgreSQL Runtime Verification MVP`
-  - 在真实 PostgreSQL / Docker runtime 下验证 V16 migration 和应用启动。
-  - 项目目录为中文时，执行 Docker Compose 必须使用 `docker compose -p edsp ...`。
-  - 不执行 `docker compose down -v`，不删除已有 volume。
+- 规划 partial update：未传 endpoint 时保留旧 encrypted secret。
+- 规划历史 legacy plaintext channel 的可控迁移 / 人工重配策略。
+- 继续保持 send / retry / alert lifecycle / rule evaluation / alert generation 语义不变。
+- 不做 Vault / KMS，除非单独立项。
+- 不做外部 secret provider，除非单独立项。
+
+可作为后续独立阶段的工程项：
+
+- `Docker Compose Container Name Hardening MVP`
+  - 解决固定 `container_name` 导致不同 compose project 无法并行启动的问题。
+  - 明确 `POSTGRES_DB` / runtime project name / volume 使用规则。
+  - 不混入通知业务语义修改。
 
 下一阶段仍必须遵守：
 

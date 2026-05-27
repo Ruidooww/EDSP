@@ -10,6 +10,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.core.transform.TransformRemoteShadowClient;
+import com.edsp.core.transform.TransformShadowReport;
+import com.edsp.transform.contract.BatchTransformRequest;
+import com.edsp.transform.contract.TransformResponse;
 import com.edsp.transform.standardevent.StandardEventTransformService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -37,6 +41,7 @@ class IngestionPlanSyncOnceServiceTest {
     private ObjectMapper objectMapper;
     private IngestionPlanSyncOnceService service;
     private IngestionPlanSyncScheduleService scheduleService;
+    private RecordingTransformShadowClient remoteShadowClient;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -65,14 +70,8 @@ class IngestionPlanSyncOnceServiceTest {
         jdbcTemplate = new JdbcTemplate(dataSource);
         objectMapper = new ObjectMapper();
         var support = new CoreRequestSupport(objectMapper);
-        service = new IngestionPlanSyncOnceService(
-            jdbcTemplate,
-            objectMapper,
-            support,
-            new JdbcShadowSampleService(objectMapper),
-            new StandardEventDedupService(jdbcTemplate, support),
-            new StandardEventTransformService()
-        );
+        remoteShadowClient = new RecordingTransformShadowClient();
+        service = newService(remoteShadowClient);
         scheduleService = new IngestionPlanSyncScheduleService(jdbcTemplate, objectMapper, support, service);
         resetSourceDatabase();
     }
@@ -126,6 +125,97 @@ class IngestionPlanSyncOnceServiceTest {
         ));
         assertEquals("sync_once", report.get("mode"));
         assertEquals("Sync Once writes raw_events and standard_events only; no alerts or notifications", report.get("boundary"));
+        assertFalse(report.containsKey("transformShadow"));
+        assertEquals(0, remoteShadowClient.calls);
+    }
+
+    @Test
+    void remoteShadowMatchedReportDoesNotChangeSyncOnceCountsOrWrites() {
+        remoteShadowClient.nextReport = TransformShadowReport.enabled(2, 2, 0, 0, List.of());
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", result.get("status"));
+        assertEquals(2, intValue(result.get("successCount")));
+        assertEquals(0, intValue(result.get("failedCount")));
+        assertEquals(0, intValue(result.get("duplicateCount")));
+        assertEquals(2, intValue(result.get("rawCount")));
+        assertEquals(2, intValue(result.get("standardCount")));
+        assertEquals(1, remoteShadowClient.calls);
+        assertEquals(2, remoteShadowClient.lastRequest.rows().size());
+        assertEquals(2, remoteShadowClient.lastLocalResults.size());
+
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        var transformShadow = objectValue(report.get("transformShadow"));
+        assertEquals(true, transformShadow.get("enabled"));
+        assertEquals(2, intValue(transformShadow.get("attempted")));
+        assertEquals(2, intValue(transformShadow.get("matched")));
+        assertEquals(0, intValue(transformShadow.get("mismatched")));
+        assertEquals(0, intValue(transformShadow.get("unavailable")));
+        assertEquals(2L, count("raw_events"));
+        assertEquals(2L, count("standard_events"));
+    }
+
+    @Test
+    void remoteShadowMismatchAndUnavailableDoNotChangeMainSyncResult() throws Exception {
+        remoteShadowClient.nextReport = TransformShadowReport.enabled(
+            2,
+            1,
+            1,
+            0,
+            List.of(Map.of("index", 1, "field", "severity", "type", "value_mismatch"))
+        );
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", result.get("status"));
+        assertEquals(2, intValue(result.get("successCount")));
+        assertEquals(2L, count("standard_events"));
+        var mismatchReport = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        var mismatchShadow = objectValue(mismatchReport.get("transformShadow"));
+        assertEquals(1, intValue(mismatchShadow.get("mismatched")));
+        assertFalse(String.valueOf(mismatchShadow).contains("zhangsan"));
+        assertFalse(String.valueOf(mismatchShadow).contains("jdbc:"));
+
+        remoteShadowClient.nextReport = TransformShadowReport.unavailable(2);
+        executeSourceSql("update sec_alert_event set risk_level = 'unknown_level' where id = 'ALERT-2'");
+        var warning = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", warning.get("status"));
+        assertEquals(1, intValue(warning.get("failedCount")));
+        assertEquals(1, intValue(warning.get("duplicateCount")));
+        var unavailableReport = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            warning.get("id")
+        ));
+        var unavailableShadow = objectValue(unavailableReport.get("transformShadow"));
+        assertEquals(2, intValue(unavailableShadow.get("attempted")));
+        assertEquals(2, intValue(unavailableShadow.get("unavailable")));
+        assertEquals(4L, count("raw_events"));
+        assertEquals(2L, count("standard_events"));
     }
 
     @Test
@@ -1015,5 +1105,38 @@ class IngestionPlanSyncOnceServiceTest {
 
     private List<String> stringList(Object value) {
         return objectMapper.convertValue(value, new TypeReference<>() {});
+    }
+
+    private IngestionPlanSyncOnceService newService(TransformRemoteShadowClient shadowClient) {
+        var support = new CoreRequestSupport(objectMapper);
+        return new IngestionPlanSyncOnceService(
+            jdbcTemplate,
+            objectMapper,
+            support,
+            new JdbcShadowSampleService(objectMapper),
+            new StandardEventDedupService(jdbcTemplate, support),
+            new StandardEventTransformService(),
+            shadowClient
+        );
+    }
+
+    private static final class RecordingTransformShadowClient implements TransformRemoteShadowClient {
+        private int calls;
+        private BatchTransformRequest lastRequest;
+        private List<TransformResponse> lastLocalResults;
+        private TransformShadowReport nextReport = TransformShadowReport.disabled();
+
+        @Override
+        public boolean enabled() {
+            return nextReport.enabled();
+        }
+
+        @Override
+        public TransformShadowReport shadow(BatchTransformRequest request, List<TransformResponse> localResults) {
+            calls++;
+            lastRequest = request;
+            lastLocalResults = localResults;
+            return nextReport;
+        }
     }
 }

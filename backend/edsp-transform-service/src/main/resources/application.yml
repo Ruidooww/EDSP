@@ -1,0 +1,12 @@
+server:
+  port: ${SERVER_PORT:8085}
+
+spring:
+  application:
+    name: edsp-transform-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

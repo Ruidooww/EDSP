@@ -27,6 +27,20 @@ services:
       NACOS_ENABLED: "false"
     restart: unless-stopped
 
+  edsp-transform-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE_MODULE: edsp-transform-service
+    container_name: edsp-transform-service
+    environment:
+      SERVER_PORT: 8085
+      NACOS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${TRANSFORM_SERVICE_PORT:-18085}:8085"
+    restart: unless-stopped
+
   edsp-core:
     build:
       context: ./backend
@@ -38,6 +52,9 @@ services:
       SERVER_PORT: 8082
       NACOS_ENABLED: "false"
       EDSP_DEMO_ENABLED: ${EDSP_DEMO_ENABLED:-true}
+      EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED: ${EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED:-false}
+      EDSP_TRANSFORM_REMOTE_BASE_URL: ${EDSP_TRANSFORM_REMOTE_BASE_URL:-http://edsp-transform-service:8085}
+      EDSP_TRANSFORM_REMOTE_TIMEOUT_MS: ${EDSP_TRANSFORM_REMOTE_TIMEOUT_MS:-1000}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-edsp}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-edsp}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-edsp-demo-password}

@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`edsp-transform-service Contract & Shadow MVP`
-- 最新 feature merge commit：`a6f161c merge: edsp transform service contract shadow mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for edsp transform service contract shadow mvp`
-- 本轮阶段分支：`codex/edsp-transform-service-contract-shadow-mvp`
-- 本轮结果：已在 `Standard Event Transform Boundary MVP` 基础上新增远程 transform 契约模块、独立 transform service 服务壳，并在 `edsp-core` 中增加默认关闭的 remote shadow batch compare 能力。
+- 当前阶段：`edsp-transform-service Runtime Deployment MVP`
+- 最新 feature merge commit：`04521c7 merge: edsp transform service runtime deployment mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for edsp transform service runtime deployment mvp`
+- 本轮阶段分支：`codex/edsp-transform-service-runtime-deployment-mvp`
+- 本轮结果：已将 `edsp-transform-service` 接入 Docker Compose runtime，可构建、启动、健康检查和本地 smoke test；`edsp-core` 在 compose runtime 中具备默认关闭的 remote shadow 环境配置，但主链路仍保持 local transform。
 
 ## 已完成能力
 
@@ -55,7 +55,29 @@
   - `edsp-transform-contract`
   - `edsp-transform-service`
   - 该修改仅保证既有 `docker compose build` 能在 Maven aggregator 下找到新增 module。
-  - 未新增 compose service，未做 runtime deployment。
+- `backend/Dockerfile` 已增加 BuildKit cache / Maven retry 优化：
+  - 使用 BuildKit Maven cache mount 缓解 compose 多服务构建时重复下载依赖的问题。
+  - 使用 Maven batch / no-transfer-progress / retry 参数提升 Docker build 对 Maven Central read timeout 的容错。
+  - 该优化不改变服务运行时语义。
+- `docker-compose.yml` 已新增 `edsp-transform-service` runtime service：
+  - `SERVICE_MODULE=edsp-transform-service`。
+  - `SERVER_PORT=8085`。
+  - `NACOS_ENABLED=false`。
+  - 不配置 datasource。
+  - 不依赖 PostgreSQL。
+  - 不依赖 `edsp-core` / `edsp-alert` / `edsp-report`。
+  - 不新增 `depends_on`。
+  - 端口只绑定 `127.0.0.1:${TRANSFORM_SERVICE_PORT:-18085}:8085`，用于 localhost-only smoke test。
+- `docker-compose.yml` 已为 `edsp-core` 增加可选 remote shadow runtime env：
+  - `EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED=${EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED:-false}`。
+  - `EDSP_TRANSFORM_REMOTE_BASE_URL=${EDSP_TRANSFORM_REMOTE_BASE_URL:-http://edsp-transform-service:8085}`。
+  - `EDSP_TRANSFORM_REMOTE_TIMEOUT_MS=${EDSP_TRANSFORM_REMOTE_TIMEOUT_MS:-1000}`。
+  - 默认 false，不调用远程 transform service，不影响现有启动和 sync 行为。
+- `backend/edsp-transform-service/src/main/resources/application.yml` 已新增最小 runtime 配置：
+  - `server.port=${SERVER_PORT:8085}`。
+  - `spring.application.name=edsp-transform-service`。
+  - actuator 暴露 `health,info`。
+  - 不配置 datasource / flyway / nacos / gateway / security。
 
 ## 明确未做 / 禁止误解
 
@@ -64,11 +86,8 @@
 - 本轮不新增 `edsp.transform.mode=remote`。
 - 本轮不新增 `edsp.transform.mode=fallback`。
 - 本轮不新增 database migration。
-- 本轮不修改 `docker-compose.yml`。
-- 本轮不新增 Docker Compose service。
 - 本轮不新增 Gateway route。
 - 本轮不新增 Nacos 服务。
-- 本轮不做 runtime deployment。
 - 本轮不改 frontend。
 - 本轮不改 `SchemaPage`。
 - 本轮不改 `IngestionPlanPanel`。
@@ -91,7 +110,10 @@
 - `edsp-transform-contract` 是纯 DTO contract module。
 - `edsp-transform` 仍是纯 Java transform engine。
 - `edsp-transform` 不依赖 `edsp-transform-contract`。
-- `edsp-transform-service` 是独立服务壳，但本轮未接入运行编排。
+- `edsp-transform-service` 是独立服务壳，并已接入 Docker Compose runtime。
+- `edsp-transform-service` 仅 localhost-only 暴露 host 端口，不经过 Gateway。
+- `edsp-core` 没有 `depends_on: edsp-transform-service`。
+- `edsp-core` 主链路仍是 local transform，remote shadow 仍默认关闭。
 - `edsp-transform-service` 不依赖：
   - `edsp-core`
   - `JdbcTemplate`
@@ -132,6 +154,9 @@
   - `mvn -pl edsp-core -am dependency:tree "-Dincludes=com.edsp"` 通过。
   - `docker compose -p edsp config` 通过。
   - `docker compose -p edsp build` 通过。
+  - `docker compose -p edsp up --build -d edsp-transform-service` 通过。
+  - `curl.exe -i http://127.0.0.1:18085/actuator/health` 通过，返回 `HTTP 200` / `{"status":"UP"}`。
+  - `POST http://127.0.0.1:18085/api/transform/standard-events/batch` smoke test 通过，返回 `HTTP 200`、`results[0].index=0`、`externalId=ALERT-1`、`severity=high`、`errors=[]`。
   - `git diff --check` 通过。
   - `git status --short --branch` clean after branch commit / push。
 - 本轮新增 / 覆盖测试：
@@ -150,10 +175,10 @@
 
 ## 已知后续项
 
-- 本轮新增 `edsp-transform-service` 代码模块，但没有接入 Docker Compose runtime。
+- 本轮已新增 `edsp-transform-service` Docker Compose runtime。
 - 本轮没有新增 Gateway / Nacos / service discovery。
 - 本轮没有把 `edsp-core` 主链路切换到 remote transform。
-- Remote shadow 开启后仍依赖未来 runtime deployment 提供可访问的 `edsp-transform-service`。
+- Remote shadow 仍默认关闭；如手动开启，可通过 compose 内部地址 `http://edsp-transform-service:8085` 访问 transform service。
 - 当前 `docker-compose.yml` 固定 `container_name` 会导致不同 compose project 无法并行启动同一套 EDSP 容器；如需处理，应单独规划 `Docker Compose Container Name Hardening MVP`。
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
 - 后续如果要真正启用 remote transform，需要单独规划 runtime、fallback、观测和回滚边界。
@@ -163,17 +188,15 @@
 如果继续推进 transform service 主线，建议下一阶段进入：
 
 ```text
-edsp-transform-service Runtime Deployment MVP
+edsp-transform-service Switchable Runtime MVP
 ```
 
 目标建议：
 
-- 将 `edsp-transform-service` 接入 Docker / compose runtime。
-- 明确 gateway / internal-only 访问边界。
-- 做 runtime smoke test。
-- 保持 `edsp-core` 主链路仍为 local transform。
-- remote shadow 继续默认关闭。
-- 不新增 transform_rule processor。
+- 在保持安全默认值的前提下，评估 `local` / `remote` / `fallback` runtime mode。
+- 明确 remote transform 不可用时的失败 / fallback / report 语义。
+- 保持默认仍为 local transform，避免 runtime 服务不可用影响现有 sync。
+- 继续不新增 transform_rule processor。
 - 不改 rule evaluation / alert generation / notification / alert lifecycle。
 
 如果优先统一转换判断口径，可单独排期：

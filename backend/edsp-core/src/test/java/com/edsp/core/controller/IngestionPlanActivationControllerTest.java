@@ -9,6 +9,9 @@ import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanSyncOnceService;
 import com.edsp.core.service.IngestionPlanSyncScheduleService;
+import com.edsp.core.transform.runtime.TransformBatchResult;
+import com.edsp.core.transform.runtime.TransformRuntimeClient;
+import com.edsp.transform.contract.BatchTransformRequest;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -90,12 +93,24 @@ class IngestionPlanActivationControllerTest {
 
     private static class StubSyncOnceService extends IngestionPlanSyncOnceService {
         StubSyncOnceService() {
-            super(null, null, null, null, null, null);
+            super(null, null, null, null, null, null, new NoopTransformRuntimeClient());
         }
 
         @Override
         public Map<String, Object> syncOnce(long activationId, IngestionPlanSyncOnceRequest request) {
             return Map.of("id", activationId, "status", "passed");
+        }
+    }
+
+    private static class NoopTransformRuntimeClient implements TransformRuntimeClient {
+        @Override
+        public String mode() {
+            return "local";
+        }
+
+        @Override
+        public TransformBatchResult transform(BatchTransformRequest request) {
+            throw new UnsupportedOperationException("stub");
         }
     }
 

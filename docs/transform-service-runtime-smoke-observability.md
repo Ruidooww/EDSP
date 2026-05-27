@@ -316,3 +316,88 @@ docker compose -p edsp_smoke exec -T postgres psql -U edsp -d edsp_transform_run
 - 明确失败后的 artifact / 日志保留策略。
 - 明确安全清理策略，且不得默认执行 destructive volume 删除。
 - 将脚本运行时间、Docker build cache 和服务 ready 超时纳入 CI 预算。
+
+## CI Readiness Options
+
+本脚本已经具备 CI 化前置参数，但本轮不新增 GitHub Actions job，也不自动接入 CI。
+
+推荐的 CI-ready 手工命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-transform-runtime-smoke.ps1 -CiMode
+```
+
+`-CiMode` 行为：
+
+- 未显式传入 `-ComposeProject` 时，自动生成唯一 project：`edsp_smoke_ci_<runId>`。
+- 未显式传入 `-FinalAction` 时，默认使用 `Stop`。
+- 默认启用失败日志采集。
+- 写入 summary artifact：`logs/transform-runtime-smoke/<runId>/summary.json`。
+
+可选参数：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-transform-runtime-smoke.ps1 `
+  -CiMode `
+  -FrontendPort 18080 `
+  -TransformPort 18085 `
+  -ReadyAttempts 90 `
+  -ArtifactRoot logs/transform-runtime-smoke
+```
+
+`summary.json` 只记录聚合验证信息：
+
+```text
+runId
+composeProject
+frontendPort
+transformPort
+ciMode
+finalAction
+scenarios
+failureStage
+failureType
+failureMessage
+warnings
+```
+
+失败时脚本会采集有限日志到 artifact 目录：
+
+```text
+ps.txt
+logs-postgres.txt
+logs-edsp-core.txt
+logs-edsp-transform-service.txt
+logs-edsp-gateway.txt
+logs-frontend.txt
+summary.json
+```
+
+日志采集仍使用 project-scoped compose 命令，不读取或导出数据库 volume，不执行 destructive cleanup。
+
+`-FinalAction` 支持：
+
+```text
+Keep
+Stop
+```
+
+- `Keep`：保留本次 runtime 容器，便于人工检查。
+- `Stop`：执行 `docker compose -p <project> stop`，只停止容器，不删除容器或 volume。
+
+脚本仍禁止：
+
+```powershell
+docker compose -p <project> down -v
+docker volume rm
+docker volume prune
+docker rm
+```
+
+正式接入 GitHub Actions 前，仍需单独确认：
+
+- runner 资源是否足够完成 `docker compose build` 与 smoke runtime。
+- host port 是否固定可用，或是否改为 CI 专用端口策略。
+- artifact 保留策略。
+- smoke 失败后是否需要人工保留现场，或只保留 `Stop` 后的日志 artifact。
+- 是否需要把 runtime smoke 拆成独立 workflow，避免影响常规 backend/frontend 快速验证。

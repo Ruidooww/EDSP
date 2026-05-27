@@ -10,9 +10,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.core.transform.runtime.FallbackTransformRuntimeClient;
+import com.edsp.core.transform.runtime.LocalTransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformBatchResult;
+import com.edsp.core.transform.runtime.TransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformRuntimeException;
+import com.edsp.core.transform.runtime.TransformRuntimeReport;
 import com.edsp.core.transform.TransformRemoteShadowClient;
 import com.edsp.core.transform.TransformShadowReport;
 import com.edsp.transform.contract.BatchTransformRequest;
+import com.edsp.transform.contract.TransformDraftDto;
 import com.edsp.transform.contract.TransformResponse;
 import com.edsp.transform.standardevent.StandardEventTransformService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -42,6 +49,7 @@ class IngestionPlanSyncOnceServiceTest {
     private IngestionPlanSyncOnceService service;
     private IngestionPlanSyncScheduleService scheduleService;
     private RecordingTransformShadowClient remoteShadowClient;
+    private TransformRuntimeClient runtimeClient;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -71,6 +79,7 @@ class IngestionPlanSyncOnceServiceTest {
         objectMapper = new ObjectMapper();
         var support = new CoreRequestSupport(objectMapper);
         remoteShadowClient = new RecordingTransformShadowClient();
+        runtimeClient = null;
         service = newService(remoteShadowClient);
         scheduleService = new IngestionPlanSyncScheduleService(jdbcTemplate, objectMapper, support, service);
         resetSourceDatabase();
@@ -125,6 +134,142 @@ class IngestionPlanSyncOnceServiceTest {
         ));
         assertEquals("sync_once", report.get("mode"));
         assertEquals("Sync Once writes raw_events and standard_events only; no alerts or notifications", report.get("boundary"));
+        assertFalse(report.containsKey("transformShadow"));
+        assertFalse(report.containsKey("transformRuntime"));
+        assertEquals(0, remoteShadowClient.calls);
+    }
+
+    @Test
+    void remoteRuntimeUsesBatchResultAsMainResultAndDoesNotRunShadow() {
+        remoteShadowClient.nextReport = TransformShadowReport.enabled(2, 2, 0, 0, List.of());
+        runtimeClient = new RecordingTransformRuntimeClient(
+            "remote",
+            List.of(remoteResponse("REMOTE-1", "remote-user-1", "critical", "remote-dedup-1"),
+                remoteResponse("REMOTE-2", "remote-user-2", "low", "remote-dedup-2")),
+            TransformRuntimeReport.remoteSuccess("remote")
+        );
+        service = newService(remoteShadowClient, runtimeClient);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", result.get("status"));
+        assertEquals(2, intValue(result.get("successCount")));
+        assertEquals(2, intValue(result.get("standardCount")));
+        assertEquals(1, ((RecordingTransformRuntimeClient) runtimeClient).calls);
+        assertEquals(2, ((RecordingTransformRuntimeClient) runtimeClient).lastRequest.rows().size());
+        assertEquals(0, remoteShadowClient.calls);
+        assertEquals("remote-user-1", jdbcTemplate.queryForObject(
+            "select actor from standard_events where external_id = 'REMOTE-1'",
+            String.class
+        ));
+        assertEquals("critical", jdbcTemplate.queryForObject(
+            "select severity from standard_events where external_id = 'REMOTE-1'",
+            String.class
+        ));
+
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertFalse(report.containsKey("transformShadow"));
+        var transformRuntime = objectValue(report.get("transformRuntime"));
+        assertEquals("remote", transformRuntime.get("mode"));
+        assertEquals(true, transformRuntime.get("remoteAttempted"));
+        assertEquals(true, transformRuntime.get("remoteSucceeded"));
+        assertEquals(false, transformRuntime.get("fallbackUsed"));
+        assertFalse(String.valueOf(transformRuntime).contains("zhangsan"));
+        assertFalse(String.valueOf(transformRuntime).contains("jdbc:"));
+    }
+
+    @Test
+    void remoteRuntimeUnavailableFailsSyncBeforeRowWritesAndReportsRuntimeFailure() {
+        runtimeClient = new FailingTransformRuntimeClient(
+            "remote",
+            "remote_unavailable",
+            TransformRuntimeReport.remoteFailure("remote", "remote_unavailable", false)
+        );
+        service = newService(remoteShadowClient, runtimeClient);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("failed", result.get("status"));
+        assertEquals(0, intValue(result.get("readCount")));
+        assertEquals(0, intValue(result.get("rawCount")));
+        assertEquals(0, intValue(result.get("standardCount")));
+        assertEquals(1L, count("ingestion_plan_sync_runs"));
+        assertEquals(1L, count("ingestion_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("remote_unavailable")));
+        var transformRuntime = objectValue(report.get("transformRuntime"));
+        assertEquals("remote", transformRuntime.get("mode"));
+        assertEquals(true, transformRuntime.get("remoteAttempted"));
+        assertEquals(false, transformRuntime.get("remoteSucceeded"));
+        assertEquals(false, transformRuntime.get("fallbackUsed"));
+        assertEquals("remote_unavailable", transformRuntime.get("failureType"));
+        assertEquals(0, remoteShadowClient.calls);
+    }
+
+    @Test
+    void fallbackRuntimeUsesLocalResultAfterRemoteFailureAndRecordsFallbackReport() {
+        var failingRemote = new FailingTransformRuntimeClient(
+            "remote",
+            "remote_unavailable",
+            TransformRuntimeReport.remoteFailure("remote", "remote_unavailable", false)
+        );
+        runtimeClient = new FallbackTransformRuntimeClient(
+            failingRemote,
+            new LocalTransformRuntimeClient(new StandardEventTransformService())
+        );
+        service = newService(remoteShadowClient, runtimeClient);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", result.get("status"));
+        assertEquals(2, intValue(result.get("standardCount")));
+        assertEquals(1, failingRemote.calls);
+        assertEquals("zhangsan", jdbcTemplate.queryForObject(
+            "select actor from standard_events where external_id = 'ALERT-1'",
+            String.class
+        ));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        var transformRuntime = objectValue(report.get("transformRuntime"));
+        assertEquals("fallback", transformRuntime.get("mode"));
+        assertEquals(true, transformRuntime.get("remoteAttempted"));
+        assertEquals(false, transformRuntime.get("remoteSucceeded"));
+        assertEquals(true, transformRuntime.get("fallbackUsed"));
+        assertEquals("remote_unavailable", transformRuntime.get("failureType"));
         assertFalse(report.containsKey("transformShadow"));
         assertEquals(0, remoteShadowClient.calls);
     }
@@ -1107,7 +1252,35 @@ class IngestionPlanSyncOnceServiceTest {
         return objectMapper.convertValue(value, new TypeReference<>() {});
     }
 
+    private TransformResponse remoteResponse(String externalId, String actor, String severity, String dedupKey) {
+        return new TransformResponse(
+            new TransformDraftDto(
+                "remote-source",
+                externalId,
+                "Remote event",
+                "2026-05-20T10:30:00+08:00",
+                actor,
+                "REMOTE-ASSET",
+                "event",
+                "REMOTE-ASSET",
+                null,
+                "detected",
+                severity,
+                "critical".equals(severity) ? 95 : ("high".equals(severity) ? 80 : ("medium".equals(severity) ? 55 : 25)),
+                dedupKey,
+                Map.of("sourceTable", "sec_alert_event", "mapped", Map.of("externalId", externalId)),
+                Map.of("syncMode", "sync_once")
+            ),
+            List.of(),
+            List.of()
+        );
+    }
+
     private IngestionPlanSyncOnceService newService(TransformRemoteShadowClient shadowClient) {
+        return newService(shadowClient, runtimeClient);
+    }
+
+    private IngestionPlanSyncOnceService newService(TransformRemoteShadowClient shadowClient, TransformRuntimeClient runtimeClient) {
         var support = new CoreRequestSupport(objectMapper);
         return new IngestionPlanSyncOnceService(
             jdbcTemplate,
@@ -1116,8 +1289,63 @@ class IngestionPlanSyncOnceServiceTest {
             new JdbcShadowSampleService(objectMapper),
             new StandardEventDedupService(jdbcTemplate, support),
             new StandardEventTransformService(),
-            shadowClient
+            shadowClient,
+            runtimeClient
         );
+    }
+
+    private static final class RecordingTransformRuntimeClient implements TransformRuntimeClient {
+        private final String mode;
+        private final List<TransformResponse> responses;
+        private final TransformRuntimeReport report;
+        private int calls;
+        private BatchTransformRequest lastRequest;
+
+        private RecordingTransformRuntimeClient(
+            String mode,
+            List<TransformResponse> responses,
+            TransformRuntimeReport report
+        ) {
+            this.mode = mode;
+            this.responses = responses;
+            this.report = report;
+        }
+
+        @Override
+        public String mode() {
+            return mode;
+        }
+
+        @Override
+        public TransformBatchResult transform(BatchTransformRequest request) {
+            calls++;
+            lastRequest = request;
+            return new TransformBatchResult(responses, report);
+        }
+    }
+
+    private static final class FailingTransformRuntimeClient implements TransformRuntimeClient {
+        private final String mode;
+        private final String failureType;
+        private final TransformRuntimeReport report;
+        private int calls;
+
+        private FailingTransformRuntimeClient(String mode, String failureType, TransformRuntimeReport report) {
+            this.mode = mode;
+            this.failureType = failureType;
+            this.report = report;
+        }
+
+        @Override
+        public String mode() {
+            return mode;
+        }
+
+        @Override
+        public TransformBatchResult transform(BatchTransformRequest request) {
+            calls++;
+            throw new TransformRuntimeException(failureType, "remote transform failed", report);
+        }
     }
 
     private static final class RecordingTransformShadowClient implements TransformRemoteShadowClient {

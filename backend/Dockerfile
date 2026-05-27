@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 COPY pom.xml ./pom.xml
@@ -11,7 +12,10 @@ COPY edsp-core ./edsp-core
 COPY edsp-alert ./edsp-alert
 COPY edsp-report ./edsp-report
 ARG SERVICE_MODULE
-RUN mvn -pl ${SERVICE_MODULE} -am -DskipTests package
+RUN --mount=type=cache,target=/root/.m2,sharing=locked mvn -B -ntp \
+    -Dmaven.wagon.http.retryHandler.count=5 \
+    -Dmaven.wagon.http.retryHandler.requestSentEnabled=true \
+    -pl ${SERVICE_MODULE} -am -DskipTests package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app

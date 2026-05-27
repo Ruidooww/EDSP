@@ -3,7 +3,6 @@ package com.edsp.core.service;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.transform.TransformRemoteShadowClient;
 import com.edsp.core.transform.TransformShadowReport;
-import com.edsp.core.transform.runtime.LocalTransformRuntimeClient;
 import com.edsp.core.transform.runtime.TransformRuntimeClient;
 import com.edsp.core.transform.runtime.TransformRuntimeException;
 import com.edsp.core.transform.runtime.TransformRuntimeReport;
@@ -13,9 +12,6 @@ import com.edsp.transform.contract.TransformDraftDto;
 import com.edsp.transform.contract.TransformMappingPlanDto;
 import com.edsp.transform.contract.TransformOptionsDto;
 import com.edsp.transform.contract.TransformResponse;
-import com.edsp.transform.standardevent.MappingPlan;
-import com.edsp.transform.standardevent.StandardEventTransformService;
-import com.edsp.transform.standardevent.TransformOptions;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -56,26 +52,6 @@ public class IngestionPlanSyncOnceService {
     private final TransformRemoteShadowClient transformRemoteShadowClient;
     private final TransformRuntimeClient transformRuntimeClient;
 
-    public IngestionPlanSyncOnceService(
-        JdbcTemplate jdbcTemplate,
-        ObjectMapper objectMapper,
-        CoreRequestSupport support,
-        JdbcShadowSampleService sampleService,
-        StandardEventDedupService standardEventDedupService,
-        StandardEventTransformService transformService
-    ) {
-        this(
-            jdbcTemplate,
-            objectMapper,
-            support,
-            sampleService,
-            standardEventDedupService,
-            transformService,
-            TransformRemoteShadowClient.disabled(),
-            new LocalTransformRuntimeClient(transformService)
-        );
-    }
-
     @Autowired
     public IngestionPlanSyncOnceService(
         JdbcTemplate jdbcTemplate,
@@ -83,7 +59,6 @@ public class IngestionPlanSyncOnceService {
         CoreRequestSupport support,
         JdbcShadowSampleService sampleService,
         StandardEventDedupService standardEventDedupService,
-        StandardEventTransformService transformService,
         TransformRemoteShadowClient transformRemoteShadowClient,
         TransformRuntimeClient transformRuntimeClient
     ) {
@@ -95,9 +70,10 @@ public class IngestionPlanSyncOnceService {
         this.transformRemoteShadowClient = transformRemoteShadowClient == null
             ? TransformRemoteShadowClient.disabled()
             : transformRemoteShadowClient;
-        this.transformRuntimeClient = transformRuntimeClient == null
-            ? new LocalTransformRuntimeClient(transformService)
-            : transformRuntimeClient;
+        if (transformRuntimeClient == null) {
+            throw new IllegalStateException("TransformRuntimeClient is required");
+        }
+        this.transformRuntimeClient = transformRuntimeClient;
     }
 
     @Transactional
@@ -211,8 +187,8 @@ public class IngestionPlanSyncOnceService {
         List<Map<String, Object>> rows,
         String syncMode
     ) {
-        var mappingPlan = MappingPlan.fromPlan(source.plan());
-        var transformOptions = new TransformOptions(
+        var mappingPlan = transformMappingPlan(source.plan());
+        var transformOptions = new TransformOptionsDto(
             dataSourceId,
             longValue(source.plan().get("schemaTableId")),
             source.tableName(),
@@ -314,19 +290,10 @@ public class IngestionPlanSyncOnceService {
 
     private BatchTransformRequest transformRequest(
         List<Map<String, Object>> rows,
-        MappingPlan mappingPlan,
-        TransformOptions transformOptions
+        TransformMappingPlanDto mappingPlan,
+        TransformOptionsDto transformOptions
     ) {
-        return new BatchTransformRequest(
-            rows,
-            new TransformMappingPlanDto(mappingPlan.fieldMappings(), mappingPlan.dedupFields()),
-            new TransformOptionsDto(
-                transformOptions.dataSourceId(),
-                transformOptions.schemaTableId(),
-                transformOptions.sourceTable(),
-                transformOptions.syncMode()
-            )
-        );
+        return new BatchTransformRequest(rows, mappingPlan, transformOptions);
     }
 
     private void validateTransformResults(
@@ -579,7 +546,7 @@ public class IngestionPlanSyncOnceService {
 
     private List<String> selectedFields(Map<String, Object> plan) {
         var selected = new LinkedHashSet<String>();
-        var mappingPlan = MappingPlan.fromPlan(plan);
+        var mappingPlan = transformMappingPlan(plan);
         selected.addAll(mappingPlan.fieldMappings().keySet());
         selected.addAll(mappingPlan.dedupFields());
         var cursorField = support.stringOrNull(plan.get("cursorField"));
@@ -587,6 +554,60 @@ public class IngestionPlanSyncOnceService {
             selected.add(cursorField);
         }
         return new ArrayList<>(selected);
+    }
+
+    private TransformMappingPlanDto transformMappingPlan(Map<String, Object> plan) {
+        if (plan == null) {
+            return new TransformMappingPlanDto(Map.of(), List.of());
+        }
+        return new TransformMappingPlanDto(fieldMappingSources(plan), dedupFields(plan));
+    }
+
+    private Map<String, String> fieldMappingSources(Map<String, Object> plan) {
+        var mappings = new LinkedHashMap<String, String>();
+        if (plan.get("fieldMappings") instanceof Map<?, ?> fields) {
+            for (var entry : fields.entrySet()) {
+                var sourceField = support.stringOrNull(entry.getKey());
+                var standardField = support.stringOrNull(entry.getValue());
+                if (sourceField != null && standardField != null) {
+                    mappings.put(sourceField, standardField);
+                }
+            }
+        }
+        if (mappings.isEmpty() && plan.get("fieldMappingDetails") instanceof List<?> details) {
+            for (var item : details) {
+                if (item instanceof Map<?, ?> mapping) {
+                    var sourceField = support.stringOrNull(mapping.get("sourceField"));
+                    var standardField = support.stringOrNull(mapping.get("standardField"));
+                    if (sourceField != null && standardField != null) {
+                        mappings.put(sourceField, standardField);
+                    }
+                }
+            }
+        }
+        return mappings;
+    }
+
+    private List<String> dedupFields(Map<String, Object> plan) {
+        if (!(plan.get("dedupStrategy") instanceof Map<?, ?> strategy)) {
+            return List.of();
+        }
+        return stringList(strategy.get("fields"));
+    }
+
+    private List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            var result = new ArrayList<String>();
+            for (var item : list) {
+                var text = support.stringOrNull(item);
+                if (text != null) {
+                    result.add(text);
+                }
+            }
+            return result;
+        }
+        var item = support.stringOrNull(value);
+        return item == null ? List.of() : List.of(item);
     }
 
     private Long insertIngestionRun(Long dataSourceId, String runType) {

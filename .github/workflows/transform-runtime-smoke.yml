@@ -1,0 +1,39 @@
+name: Transform Runtime Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transform-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show tool versions
+        shell: pwsh
+        run: |
+          docker --version
+          docker compose version
+          $PSVersionTable.PSVersion
+
+      - name: Validate Docker Compose config
+        run: docker compose -p edsp config --quiet
+
+      - name: Run transform runtime smoke
+        shell: pwsh
+        run: ./scripts/verify-transform-runtime-smoke.ps1 -CiMode -FrontendPort 18120 -TransformPort 18125 -CollectLogsOnFailure -FinalAction Stop -ReadyAttempts 90
+
+      - name: Upload transform runtime smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transform-runtime-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: logs/transform-runtime-smoke/**
+          retention-days: 7
+          if-no-files-found: warn

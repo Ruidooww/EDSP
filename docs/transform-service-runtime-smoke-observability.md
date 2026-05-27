@@ -9,7 +9,7 @@
 - `runtime-mode=fallback` 且 transform service 不可用时，`edsp-core` 回退到 local transform 并完成写入。
 - 现有 `report_json.transformRuntime` 字段足以观测上述运行行为。
 
-本轮不新增 production observability 代码，不修改默认 `runtime-mode=local`，不修改 transform HTTP API，也不接入 CI。完成 compose project 隔离后，CI 化可以作为后续独立阶段。
+本轮不新增 production observability 代码，不修改默认 `runtime-mode=local`，不修改 transform HTTP API，也不接入自动 CI gate。完成 compose project 隔离后，自动 CI gate 化可以作为后续独立阶段。
 
 ## 前置要求
 
@@ -304,13 +304,13 @@ docker compose -p edsp_smoke logs edsp-transform-service --tail=200
 docker compose -p edsp_smoke exec -T postgres psql -U edsp -d edsp_transform_runtime_smoke
 ```
 
-## 为什么本轮仍不接入 CI
+## 为什么本轮仍不接入自动 CI gate
 
 本轮已通过移除 fixed `container_name` 并使用 compose project 隔离，解决了 runtime/smoke runtime 的基础容器名冲突问题。
 
-但 runtime smoke 仍会启动真实 Docker Compose 服务、改动本次 project 中的 transform service 可用性，并保留容器与数据库现场供人工排查。为了避免在 CI 中引入环境资源竞争、日志保留策略和清理策略风险，本轮仍不接入 CI。
+但 runtime smoke 仍会启动真实 Docker Compose 服务、改动本次 project 中的 transform service 可用性，并保留容器与数据库现场供人工排查。为了避免把这些资源竞争、日志保留策略和清理策略风险直接变成 PR / `master` 合并阻塞，本轮只提供 manual-only workflow，不接入自动 CI gate。
 
-后续 CI 化至少需要：
+后续自动 CI gate 化至少需要：
 
 - 明确 CI 中的 project 命名、host port 分配和并发策略。
 - 明确失败后的 artifact / 日志保留策略。
@@ -319,7 +319,16 @@ docker compose -p edsp_smoke exec -T postgres psql -U edsp -d edsp_transform_run
 
 ## CI Readiness Options
 
-本脚本已经具备 CI 化前置参数，但本轮不新增 GitHub Actions job，也不自动接入 CI。
+本脚本已经具备 CI 化前置参数。本轮提供 manual-only GitHub Actions workflow：`Transform Runtime Smoke`，但它只通过 `workflow_dispatch` 手动触发，不是自动 CI gate。
+
+本轮不做以下接入：
+
+- 不挂 `push` / `pull_request`。
+- 不修改现有 `EDSP CI`。
+- 不设置 required check。
+- 不作为 PR 或 `master` 合并保护条件。
+
+若未来要把 runtime smoke 作为 PR / `master` 合并保护，需要单独阶段设计和实施。
 
 推荐的 CI-ready 手工命令：
 
@@ -375,6 +384,36 @@ summary.json
 
 日志采集仍使用 project-scoped compose 命令，不读取或导出数据库 volume，不执行 destructive cleanup。
 
+### GitHub Actions manual workflow
+
+在 GitHub UI 手动运行：
+
+1. 打开仓库的 `Actions` 页面。
+2. 选择 `Transform Runtime Smoke` workflow。
+3. 点击 `Run workflow`。
+4. 选择要验证的 branch。
+5. 点击 `Run workflow` 启动本次 runtime smoke。
+
+该 workflow 的 artifact：
+
+```text
+Name: transform-runtime-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+Path: logs/transform-runtime-smoke/**
+Retention: 7 days
+```
+
+artifact 包含 `summary.json` 和有限 project-scoped logs。artifact 不包含：
+
+```text
+DB dump
+完整 raw row
+data_sources.config_json
+完整 env
+secret-like 内容
+```
+
+GitHub-hosted runner 结束后，运行环境由 GitHub Actions 平台回收；脚本自身仍只执行 non-destructive cleanup，也就是 `docker compose -p <project> stop`。
+
 `-FinalAction` 支持：
 
 ```text
@@ -394,10 +433,12 @@ docker volume prune
 docker rm
 ```
 
-正式接入 GitHub Actions 前，仍需单独确认：
+正式接入自动 PR / `master` 保护前，仍需单独确认：
 
 - runner 资源是否足够完成 `docker compose build` 与 smoke runtime。
 - host port 是否固定可用，或是否改为 CI 专用端口策略。
-- artifact 保留策略。
+- artifact 保留策略是否需要不同于当前 manual workflow 的 7 days。
 - smoke 失败后是否需要人工保留现场，或只保留 `Stop` 后的日志 artifact。
-- 是否需要把 runtime smoke 拆成独立 workflow，避免影响常规 backend/frontend 快速验证。
+- 是否需要把 runtime smoke 升级为 PR / `master` 合并保护，避免影响常规 backend/frontend 快速验证。
+
+本轮不修改 production runtime 行为，不新增 metrics / structured logging / tracing，也不修改 `report_json` schema。

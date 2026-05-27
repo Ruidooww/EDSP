@@ -4,7 +4,13 @@ param(
     [string]$SmokeDatabase = "edsp_transform_runtime_smoke",
     [string]$SmokeSchema = "transform_runtime_smoke",
     [int]$FrontendPort = 18080,
-    [int]$TransformPort = 18085
+    [int]$TransformPort = 18085,
+    [switch]$CiMode,
+    [switch]$CollectLogsOnFailure,
+    [ValidateSet("Keep", "Stop")]
+    [string]$FinalAction = "Keep",
+    [string]$ArtifactRoot = "logs/transform-runtime-smoke",
+    [int]$ReadyAttempts = 60
 )
 
 Set-StrictMode -Version Latest
@@ -12,9 +18,31 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $runId = "$(Get-Date -Format 'yyyyMMddHHmmss')_$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+if ($CiMode -and -not $PSBoundParameters.ContainsKey("ComposeProject")) {
+    $ComposeProject = "edsp_smoke_ci_$runId"
+}
+if ($CiMode -and -not $PSBoundParameters.ContainsKey("FinalAction")) {
+    $FinalAction = "Stop"
+}
+$collectLogs = $CollectLogsOnFailure.IsPresent -or $CiMode.IsPresent
+$artifactRootPath = if ([System.IO.Path]::IsPathRooted($ArtifactRoot)) {
+    $ArtifactRoot
+} else {
+    Join-Path $repoRoot $ArtifactRoot
+}
+$artifactPath = Join-Path $artifactRootPath $runId
 $runtimeTouched = $false
 $transformStopped = $false
 $failure = $null
+$failureStage = $null
+$failureType = $null
+$warnings = New-Object System.Collections.Generic.List[string]
+$scenarioResults = [ordered]@{
+    remoteSuccess = "NOT_RUN"
+    remoteUnavailable = "NOT_RUN"
+    fallbackUnavailable = "NOT_RUN"
+    transformRuntimeVerification = "NOT_RUN"
+}
 
 function Require-SafeIdentifier {
     param(
@@ -61,6 +89,105 @@ function Invoke-DockerVisible {
     $output = @(Invoke-DockerCapture -Arguments $Arguments)
     if ($output.Count -gt 0) {
         $output | ForEach-Object { Write-Host $_ }
+    }
+}
+
+function Add-SmokeWarning {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    $warnings.Add($Message)
+    Write-Warning $Message
+}
+
+function Assert-ArtifactRootIgnored {
+    if (-not ($CiMode -or $collectLogs)) {
+        return
+    }
+    if ([System.IO.Path]::IsPathRooted($ArtifactRoot)) {
+        $absoluteArtifactRoot = [System.IO.Path]::GetFullPath($ArtifactRoot)
+        $relativeToRepo = [System.IO.Path]::GetRelativePath($repoRoot, $absoluteArtifactRoot).Replace('\', '/')
+        if ($relativeToRepo -eq ".." -or $relativeToRepo.StartsWith("../")) {
+            return
+        }
+    }
+
+    $relativeArtifactRoot = if ([System.IO.Path]::IsPathRooted($ArtifactRoot)) {
+        [System.IO.Path]::GetRelativePath($repoRoot, $ArtifactRoot)
+    } else {
+        $ArtifactRoot
+    }
+    $relativeArtifactRoot = $relativeArtifactRoot.Replace('\', '/')
+    if ($relativeArtifactRoot -eq "logs" -or $relativeArtifactRoot.StartsWith("logs/")) {
+        return
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $repoRoot check-ignore -q -- $relativeArtifactRoot
+        $ignored = $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if (-not $ignored) {
+        throw "ArtifactRoot '$ArtifactRoot' is not ignored by git. Use an ignored path such as logs/transform-runtime-smoke."
+    }
+}
+
+function Save-CommandOutput {
+    param(
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    try {
+        New-Item -ItemType Directory -Force -Path $artifactPath | Out-Null
+        $output = @(Invoke-DockerCapture -Arguments $Arguments)
+        $output | Set-Content -Path (Join-Path $artifactPath $FileName) -Encoding UTF8
+    } catch {
+        Add-SmokeWarning "Unable to collect $FileName`: $($_.Exception.Message)"
+    }
+}
+
+function Collect-SmokeArtifacts {
+    if (-not $collectLogs) {
+        return
+    }
+
+    Save-CommandOutput -FileName "ps.txt" -Arguments @("compose", "-p", $ComposeProject, "ps", "-a")
+    foreach ($service in @("postgres", "edsp-core", "edsp-transform-service", "edsp-gateway", "frontend")) {
+        Save-CommandOutput -FileName "logs-$service.txt" -Arguments @(
+            "compose", "-p", $ComposeProject, "logs", "--tail=300", $service
+        )
+    }
+}
+
+function Write-SmokeSummary {
+    if (-not ($CiMode -or $collectLogs)) {
+        return
+    }
+
+    try {
+        New-Item -ItemType Directory -Force -Path $artifactPath | Out-Null
+        $summary = [ordered]@{
+            runId = $runId
+            composeProject = $ComposeProject
+            frontendPort = $FrontendPort
+            transformPort = $TransformPort
+            ciMode = [bool]$CiMode
+            finalAction = $FinalAction
+            artifactPath = $artifactPath
+            scenarios = $scenarioResults
+            failureStage = $failureStage
+            failureType = $failureType
+            failureMessage = if ($null -eq $failure) { $null } else { $failure.Exception.Message }
+            warnings = @($warnings)
+        }
+        $summary |
+            ConvertTo-Json -Depth 6 |
+            Set-Content -Path (Join-Path $artifactPath "summary.json") -Encoding UTF8
+        Write-Host "Smoke summary artifact: $(Join-Path $artifactPath "summary.json")"
+    } catch {
+        Write-Warning "Unable to write smoke summary artifact: $($_.Exception.Message)"
     }
 }
 
@@ -422,13 +549,16 @@ Require-SafeIdentifier -Value $SmokeSchema -Label "SmokeSchema"
 if ($ComposeProject -notmatch '^[a-zA-Z0-9_-]+$') {
     throw "ComposeProject contains unsupported characters."
 }
+Assert-ArtifactRootIgnored
 
 Push-Location $repoRoot
 try {
+    $failureStage = "preflight"
     Assert-NoExistingEdspContainers
     Assert-PortAvailable -Port $FrontendPort
     Assert-PortAvailable -Port $TransformPort
 
+    $failureStage = "environment"
     $env:POSTGRES_DB = $SmokeDatabase
     $env:POSTGRES_USER = "edsp"
     $env:POSTGRES_PASSWORD = "edsp-transform-smoke-password"
@@ -440,16 +570,19 @@ try {
     $env:EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED = "false"
     $env:EDSP_TRANSFORM_RUNTIME_MODE = "remote"
 
+    $failureStage = "compose_config"
     Write-Host "Validating Docker Compose configuration..."
     Invoke-ComposeVisible -Arguments @("config", "--quiet")
 
+    $failureStage = "runtime_start_remote"
     Write-Host "Starting isolated runtime smoke services in remote mode..."
     $runtimeTouched = $true
     Invoke-ComposeVisible -Arguments @("up", "--build", "-d", "postgres")
     Invoke-ComposeVisible -Arguments @("up", "--build", "-d", "edsp-transform-service", "edsp-core", "edsp-gateway", "frontend")
-    Wait-HttpReady -Uri "http://127.0.0.1:$FrontendPort/api/core/overview" -Label "edsp-core via frontend"
-    Wait-HttpReady -Uri "http://127.0.0.1:$TransformPort/actuator/health" -Label "edsp-transform-service"
+    Wait-HttpReady -Uri "http://127.0.0.1:$FrontendPort/api/core/overview" -Label "edsp-core via frontend" -Attempts $ReadyAttempts
+    Wait-HttpReady -Uri "http://127.0.0.1:$TransformPort/actuator/health" -Label "edsp-transform-service" -Attempts $ReadyAttempts
 
+    $failureStage = "remote_success"
     Write-Host "Running remote success fixture..."
     $remoteSuccess = New-SmokeFixture -Scenario "remote_success"
     $remoteSuccessApi = Invoke-SyncOnce -ActivationId $remoteSuccess.ActivationId
@@ -457,7 +590,9 @@ try {
     Assert-SmokeResult -Label "Remote success" -ApiResult $remoteSuccessApi -Observation $remoteSuccessObservation `
         -Fixture $remoteSuccess -Status "passed" -Mode "remote" -RemoteSucceeded $true -FallbackUsed $false `
         -FailureType $null -RawCount 1 -StandardCount 1
+    $scenarioResults.remoteSuccess = "PASS"
 
+    $failureStage = "remote_unavailable"
     Write-Host "Running remote unavailable fixture..."
     $remoteUnavailable = New-SmokeFixture -Scenario "remote_unavailable"
     Invoke-ComposeVisible -Arguments @("stop", "edsp-transform-service")
@@ -467,26 +602,33 @@ try {
     Assert-SmokeResult -Label "Remote unavailable" -ApiResult $remoteUnavailableApi -Observation $remoteUnavailableObservation `
         -Fixture $remoteUnavailable -Status "failed" -Mode "remote" -RemoteSucceeded $false -FallbackUsed $false `
         -FailureType "remote_unavailable" -RawCount 0 -StandardCount 0
+    $scenarioResults.remoteUnavailable = "PASS"
 
+    $failureStage = "fallback_unavailable"
     Write-Host "Running fallback unavailable fixture..."
     $env:EDSP_TRANSFORM_RUNTIME_MODE = "fallback"
     Invoke-ComposeVisible -Arguments @("up", "--build", "-d", "--force-recreate", "edsp-core")
     Invoke-ComposeVisible -Arguments @("restart", "edsp-gateway", "frontend")
-    Wait-HttpReady -Uri "http://127.0.0.1:$FrontendPort/api/core/overview" -Label "edsp-core fallback mode"
+    Wait-HttpReady -Uri "http://127.0.0.1:$FrontendPort/api/core/overview" -Label "edsp-core fallback mode" -Attempts $ReadyAttempts
     $fallbackUnavailable = New-SmokeFixture -Scenario "fallback_unavailable"
     $fallbackUnavailableApi = Invoke-SyncOnce -ActivationId $fallbackUnavailable.ActivationId
     $fallbackUnavailableObservation = Get-Observation -Fixture $fallbackUnavailable
     Assert-SmokeResult -Label "Fallback unavailable" -ApiResult $fallbackUnavailableApi -Observation $fallbackUnavailableObservation `
         -Fixture $fallbackUnavailable -Status "passed" -Mode "fallback" -RemoteSucceeded $false -FallbackUsed $true `
         -FailureType "remote_unavailable" -RawCount 1 -StandardCount 1
+    $scenarioResults.fallbackUnavailable = "PASS"
 
+    $failureStage = $null
+    $scenarioResults.transformRuntimeVerification = "PASS"
     Write-Host "transformRuntime verification: PASS"
 } catch {
     $failure = $_
+    $failureType = $_.Exception.GetType().Name
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Collect-SmokeArtifacts
     Write-RuntimeDiagnostics
 } finally {
-    if ($runtimeTouched -and $transformStopped) {
+    if ($runtimeTouched -and $transformStopped -and $FinalAction -eq "Keep") {
         Write-Host "Restoring the transform service stopped by this smoke run..."
         try {
             Invoke-ComposeVisible -Arguments @("start", "edsp-transform-service")
@@ -494,8 +636,21 @@ try {
             Write-Warning "Unable to restore edsp-transform-service: $($_.Exception.Message)"
         }
     }
+    if ($runtimeTouched -and $FinalAction -eq "Stop") {
+        Write-Host "Stopping runtime smoke containers without deleting containers or volumes..."
+        try {
+            Invoke-ComposeVisible -Arguments @("stop")
+        } catch {
+            Write-Warning "Unable to stop runtime smoke containers: $($_.Exception.Message)"
+        }
+    }
+    Write-SmokeSummary
     if ($runtimeTouched) {
-        Write-Host "Runtime smoke containers remain available for inspection:"
+        if ($FinalAction -eq "Stop") {
+            Write-Host "Runtime smoke containers were stopped and retained for inspection:"
+        } else {
+            Write-Host "Runtime smoke containers remain available for inspection:"
+        }
         try {
             Invoke-ComposeVisible -Arguments @("ps", "-a")
         } catch {
@@ -516,3 +671,4 @@ if ($null -ne $failure) {
 Write-Host "Remote success: PASS"
 Write-Host "Remote unavailable: PASS"
 Write-Host "Fallback unavailable: PASS"
+Write-Host "transformRuntime verification: PASS"

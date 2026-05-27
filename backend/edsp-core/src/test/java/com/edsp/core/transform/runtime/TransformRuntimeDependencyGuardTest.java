@@ -11,6 +11,20 @@ import org.junit.jupiter.api.Test;
 
 class TransformRuntimeDependencyGuardTest {
     private static final Path CORE_MAIN = locateCoreMain();
+    private static final List<String> TRANSFORM_ENGINE_REFERENCES = List.of(
+        "com.edsp.transform.standardevent",
+        "StandardEventTransformService"
+    );
+    private static final List<String> TRANSFORM_SERVICE_REFERENCES = List.of(
+        "com.edsp.transformservice",
+        "com.edsp.transform.service"
+    );
+    private static final List<String> ALLOWED_ENGINE_BRIDGES = List.of(
+        "config/TransformConfig.java",
+        "config/TransformRuntimeConfig.java",
+        "transform/runtime/LocalTransformRuntimeClient.java",
+        "transform/runtime/TransformContractSupport.java"
+    );
 
     @Test
     void coreBusinessEntrypointsDoNotDependOnStandardEventTransformEngine() throws IOException {
@@ -24,27 +38,65 @@ class TransformRuntimeDependencyGuardTest {
 
         assertTrue(
             violations.isEmpty(),
-            "Only TransformRuntimeConfig and transform/runtime may depend on edsp-transform engine: " + violations
+            "Only explicit transform engine bridge files may depend on edsp-transform engine: " + violations
+        );
+    }
+
+    @Test
+    void coreMainCodeDoesNotDependOnTransformServiceModule() throws IOException {
+        var violations = new ArrayList<String>();
+        try (var paths = Files.walk(CORE_MAIN)) {
+            paths
+                .filter(path -> path.toString().endsWith(".java"))
+                .forEach(path -> inspectForTransformServiceModule(path, violations));
+        }
+
+        assertTrue(
+            violations.isEmpty(),
+            "edsp-core main code must not reference transform-service Java packages: " + violations
+        );
+    }
+
+    @Test
+    void corePomDoesNotDependOnTransformServiceModule() throws IOException {
+        var pom = locateCorePom();
+        var content = Files.readString(pom);
+
+        assertTrue(
+            !content.contains("<artifactId>edsp-transform-service</artifactId>"),
+            "edsp-core must not depend on the edsp-transform-service Maven module"
         );
     }
 
     private static boolean isAllowedEngineBridge(Path path) {
         var relative = CORE_MAIN.relativize(path).toString().replace('\\', '/');
-        return relative.equals("config/TransformConfig.java")
-            || relative.equals("config/TransformRuntimeConfig.java")
-            || relative.startsWith("transform/runtime/");
+        return ALLOWED_ENGINE_BRIDGES.contains(relative);
     }
 
     private static void inspect(Path path, List<String> violations) {
         try {
             var content = Files.readString(path);
-            if (content.contains("com.edsp.transform.standardevent")
-                || content.contains("StandardEventTransformService")) {
+            if (containsAny(content, TRANSFORM_ENGINE_REFERENCES)) {
                 violations.add(CORE_MAIN.relativize(path).toString());
             }
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to inspect " + path, ex);
         }
+    }
+
+    private static void inspectForTransformServiceModule(Path path, List<String> violations) {
+        try {
+            var content = Files.readString(path);
+            if (containsAny(content, TRANSFORM_SERVICE_REFERENCES)) {
+                violations.add(CORE_MAIN.relativize(path).toString());
+            }
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect " + path, ex);
+        }
+    }
+
+    private static boolean containsAny(String content, List<String> references) {
+        return references.stream().anyMatch(content::contains);
     }
 
     private static Path locateCoreMain() {
@@ -53,5 +105,20 @@ class TransformRuntimeDependencyGuardTest {
             return modulePath;
         }
         return Path.of("edsp-core/src/main/java/com/edsp/core");
+    }
+
+    private static Path locateCorePom() {
+        for (var candidate : List.of(
+            Path.of("pom.xml"),
+            Path.of("edsp-core/pom.xml"),
+            Path.of("backend/edsp-core/pom.xml")
+        )) {
+            if (Files.exists(candidate) && Files.exists(candidate.getParent() == null
+                ? Path.of("src/main/java/com/edsp/core")
+                : candidate.getParent().resolve("src/main/java/com/edsp/core"))) {
+                return candidate;
+            }
+        }
+        return Path.of("edsp-core/pom.xml");
     }
 }

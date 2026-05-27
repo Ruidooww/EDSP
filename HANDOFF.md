@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Docker Compose Container Name Hardening MVP`
-- 最新 feature merge commit：`0218d32 merge: docker compose container name hardening mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for docker compose container name hardening mvp`
-- 本轮阶段分支：`codex/docker-compose-container-name-hardening-mvp`
-- 本轮结果：移除 `docker-compose.yml` 中固定 `container_name`，保留 compose service name 与内部 DNS；更新 runtime smoke 脚本和文档，使 smoke 默认使用 `edsp_smoke` project，并只检查当前 `ComposeProject` 下的容器，从而解除日常 runtime / smoke runtime / 后续 CI 化的容器名冲突阻塞。
+- 当前阶段：`Transform Runtime Readiness & Guard MVP`
+- 最新 feature merge commit：`f8f0edd merge: transform runtime readiness guard mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime readiness guard mvp`
+- 本轮阶段分支：`codex/transform-runtime-readiness-guard-mvp`
+- 本轮结果：在不接入 GitHub Actions、不修改 production runtime 语义的前提下，为 runtime smoke 增加 CI-ready 手工参数、失败 artifact 采集和非破坏性结束策略；同时将 transform dependency guard 收紧为显式 engine bridge allowlist，并守卫 `edsp-core` main code / Maven 依赖不得直接耦合 `edsp-transform-service`。
 
 ## 已完成能力
 
@@ -108,8 +108,9 @@
   - `TransformRuntimeConfig` / `LocalTransformRuntimeClient` / `TransformContractSupport` 继续承担 engine bridge 职责。
 - 新增 `TransformRuntimeDependencyGuardTest`：
   - 扫描 `backend/edsp-core/src/main/java/com/edsp/core`。
-  - 允许 `config/TransformConfig.java`、`config/TransformRuntimeConfig.java` 与 `transform/runtime/**` 引用 transform engine。
+  - 仅允许 `config/TransformConfig.java`、`config/TransformRuntimeConfig.java`、`transform/runtime/LocalTransformRuntimeClient.java` 与 `transform/runtime/TransformContractSupport.java` 引用 transform engine。
   - 阻止 `service/**`、`controller/**` 等业务入口重新直接依赖 `StandardEventTransformService` 或 `com.edsp.transform.standardevent.*`。
+  - 阻止 `edsp-core` main code 与 `edsp-core/pom.xml` 依赖 `edsp-transform-service`。
 - remote/fallback runtime verification 已加强：
   - 使用真实 `RemoteTransformRuntimeClient` 与 JDK `HttpServer` 模拟 batch endpoint。
   - 覆盖 remote success / unavailable / non-2xx / invalid response。
@@ -158,6 +159,11 @@
   - 使用 `docker compose -p <project> logs <service>`。
   - 使用 `docker compose -p <project> exec <service> ...`。
   - 不再建议使用固定容器名如 `docker logs edsp-core` / `docker exec edsp-postgres` / `docker stop edsp-core`。
+- runtime smoke 已增加 CI-readiness 参数，但尚未接入 CI：
+  - `-CiMode` 未显式指定 project 时生成唯一 `ComposeProject`。
+  - `-CollectLogsOnFailure` 仅在失败时收集有限、project-scoped 日志 artifact。
+  - `-FinalAction Stop` 仅执行 `docker compose -p <project> stop`，不删除容器或 volume。
+  - 默认 artifact 路径为 `logs/transform-runtime-smoke/<runId>/summary.json`，且 `logs/` 已由 `.gitignore` 忽略。
 
 ## 明确未做 / 禁止误解
 
@@ -193,6 +199,8 @@
 - 本轮不接入 CI。
 - 本轮不新增 metrics / structured logging / tracing。
 - 本轮不修改 `report_json` schema，只验证已有 `transformRuntime` 字段。
+- 本轮不新增 GitHub Actions workflow 或 job。
+- 本轮不修改 `docker-compose.yml` 或 backend production Java。
 
 ## 当前关键边界
 
@@ -234,6 +242,9 @@
 - Sync once / scheduled sync 默认行为必须继续以 local transform 为准。
 - Remote/fallback runtime 必须继续遵守 raw first、standardize_failed、dedup、counts、report 的既有语义。
 - `IngestionPlanSyncOnceService` 等业务入口不得直接依赖 transform engine，必须通过 `TransformRuntimeClient`；该边界由 `TransformRuntimeDependencyGuardTest` 守卫。
+- transform engine bridge allowlist 必须保持显式最小范围，不得恢复为允许整个 `transform/runtime/**` 目录任意引用 engine。
+- `edsp-core` main code 与 `edsp-core/pom.xml` 均不得依赖 `edsp-transform-service`。
+- runtime smoke 的 CI-ready 运行仍是手工 opt-in；`FinalAction=Stop` 仅允许停止本次 project 的容器，不得删除 volume。
 - ShadowRun / Precheck 仍保留原逻辑，未来如需统一 transform 判断口径，应单独规划。
 
 ## 测试和验证结果
@@ -306,6 +317,19 @@
   - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
   - `git diff --check` 通过；仅有 Git line-ending warning，无 whitespace error。
   - `git status --short --branch` clean after branch commit / push。
+- Transform Runtime Readiness & Guard MVP 合并前验证：
+  - `mvn -pl edsp-core -am test` 通过，`146` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `docker compose -p edsp config --quiet` 通过。
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-transform-runtime-smoke.ps1 -CiMode -FrontendPort 18120 -TransformPort 18125 -FinalAction Stop` 通过：
+    - 自动生成唯一 project：`edsp_smoke_ci_20260527233528_25ed9fd3`。
+    - `Remote success: PASS`。
+    - `Remote unavailable: PASS`。
+    - `Fallback unavailable: PASS`。
+    - `transformRuntime verification: PASS`。
+    - `FinalAction=Stop` 仅停止并保留 smoke 容器与 volume。
+  - `git diff --check` 通过。
+  - 范围检查确认仅阶段 test / smoke script / smoke doc 发生代码内容变更，不包含 production Java、frontend、migration、`docker-compose.yml` 或 GitHub Actions 变更。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -315,7 +339,7 @@
 - 本轮没有把 `edsp-core` 默认主链路切换到 remote / fallback transform。
 - Remote shadow 仍默认关闭；如手动开启，可通过 compose 内部地址 `http://edsp-transform-service:8085` 访问 transform service。
 - runtime-mode 仍默认 `local`；如手动切到 `remote` / `fallback`，需要确保 `edsp-transform-service` 在 runtime 中可用。
-- remote/fallback 已通过手工 Docker Compose runtime smoke 脚本验证核心场景，但尚未接入 CI。
+- remote/fallback 已通过手工 Docker Compose runtime smoke 脚本验证核心场景；脚本现具备 CI-ready 参数与有限 artifact 采集能力，但尚未接入 CI。
 - 本轮 runtime verification 使用 JDK `HttpServer` 驱动真实 remote client，未新增 Docker e2e 框架。
 - 固定 `container_name` 已移除，日常 runtime 与 smoke runtime 可通过不同 compose project 并行存在，前提是 host port 不冲突。
 - 当前 runtime smoke 脚本只检查当前 `ComposeProject` 下的容器；不会再全局拦截其他 project 的 EDSP 容器。
@@ -324,18 +348,20 @@
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
 - Runtime smoke 尚未接入 CI，CI 化仍留给后续独立阶段。
+- `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 
 ## 下一轮建议
 
 建议下一阶段优先进入：
 
 ```text
-Transform Runtime Smoke CI Readiness MVP
+Transform Runtime Smoke CI Integration MVP
 ```
 
 目标建议：
 
-- 基于已完成的 compose project 隔离，评估 runtime smoke 纳入 CI 的资源、端口、日志和清理策略。
+- 基于已完成的 compose project 隔离与 CI-ready smoke 参数，单独评估并实现 GitHub Actions runtime smoke job。
+- 明确 runner 资源、端口分配、artifact retention、失败现场保留与非破坏性清理策略。
 - 继续保持 `runtime-mode=local` 默认值。
 - 不新增 Gateway / Nacos / service discovery。
 - 不修改 transform runtime 业务语义。

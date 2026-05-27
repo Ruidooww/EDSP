@@ -23,6 +23,10 @@ public record TransformRuntimeReport(
         return new TransformRuntimeReport(true, mode, true, false, fallbackUsed, failureType);
     }
 
+    public static TransformRuntimeReport noRows(String mode) {
+        return new TransformRuntimeReport(true, mode, false, false, false, null);
+    }
+
     public Map<String, Object> toReportMap() {
         var report = new LinkedHashMap<String, Object>();
         report.put("mode", mode);

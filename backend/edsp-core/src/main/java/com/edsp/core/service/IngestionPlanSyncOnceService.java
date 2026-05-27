@@ -226,6 +226,12 @@ public class IngestionPlanSyncOnceService {
         var duplicateCount = 0;
         var rawCount = 0;
         var standardCount = 0;
+        if (rows.isEmpty()) {
+            warnings.add("no_source_rows");
+            return new SyncResult("warning", readCount, successCount, failedCount, duplicateCount, rawCount,
+                standardCount, new ArrayList<>(warnings), errorsByType, TransformShadowReport.disabled(),
+                noRowsRuntimeReport());
+        }
         var transformRequest = transformRequest(rows, mappingPlan, transformOptions);
         var transformBatch = transformRuntimeClient.transform(transformRequest);
         var transformResults = transformBatch.results();
@@ -259,13 +265,16 @@ public class IngestionPlanSyncOnceService {
             }
             successCount++;
         }
-        if (readCount == 0) {
-            warnings.add("no_source_rows");
-        }
         var status = failedCount > 0 || !warnings.isEmpty() ? "warning" : "passed";
         var transformShadow = transformShadow(transformRequest, transformResults);
         return new SyncResult(status, readCount, successCount, failedCount, duplicateCount, rawCount,
             standardCount, new ArrayList<>(warnings), errorsByType, transformShadow, transformBatch.report());
+    }
+
+    private TransformRuntimeReport noRowsRuntimeReport() {
+        return "local".equals(transformRuntimeClient.mode())
+            ? TransformRuntimeReport.disabled()
+            : TransformRuntimeReport.noRows(transformRuntimeClient.mode());
     }
 
     private List<Map<String, Object>> sampleRows(Source source, int sampleLimit) {
@@ -325,6 +334,12 @@ public class IngestionPlanSyncOnceService {
         int rows,
         TransformRuntimeReport runtimeReport
     ) {
+        if (results == null) {
+            var report = runtimeReport != null && runtimeReport.enabled()
+                ? runtimeReport
+                : TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false);
+            throw new TransformRuntimeException("remote_invalid_response", "Transform runtime returned null results", report);
+        }
         if (results.size() != rows) {
             var report = runtimeReport != null && runtimeReport.enabled()
                 ? runtimeReport

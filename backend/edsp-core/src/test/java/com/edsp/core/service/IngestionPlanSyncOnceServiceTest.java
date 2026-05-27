@@ -275,6 +275,103 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     @Test
+    void remoteRuntimeWithNoRowsKeepsWarningAndDoesNotCallRemote() throws Exception {
+        executeSourceSql("delete from sec_alert_event");
+        remoteShadowClient.nextReport = TransformShadowReport.enabled(0, 0, 0, 0, List.of());
+        runtimeClient = new RecordingTransformRuntimeClient(
+            "remote",
+            List.of(),
+            TransformRuntimeReport.remoteSuccess("remote")
+        );
+        service = newService(remoteShadowClient, runtimeClient);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(0, intValue(result.get("readCount")));
+        assertEquals(0, intValue(result.get("successCount")));
+        assertEquals(0, intValue(result.get("failedCount")));
+        assertEquals(0, intValue(result.get("duplicateCount")));
+        assertEquals(0, intValue(result.get("rawCount")));
+        assertEquals(0, intValue(result.get("standardCount")));
+        assertEquals(0, ((RecordingTransformRuntimeClient) runtimeClient).calls);
+        assertEquals(0, remoteShadowClient.calls);
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertTrue(stringList(report.get("warnings")).contains("no_source_rows"));
+        assertTrue(objectValue(report.get("errorsByType")).isEmpty());
+        assertFalse(report.containsKey("transformShadow"));
+        var transformRuntime = objectValue(report.get("transformRuntime"));
+        assertEquals("remote", transformRuntime.get("mode"));
+        assertEquals(false, transformRuntime.get("remoteAttempted"));
+        assertEquals(false, transformRuntime.get("remoteSucceeded"));
+        assertEquals(false, transformRuntime.get("fallbackUsed"));
+        assertFalse(transformRuntime.containsKey("failureType"));
+    }
+
+    @Test
+    void fallbackRuntimeWithNoRowsKeepsWarningAndDoesNotCallRemoteOrFallback() throws Exception {
+        executeSourceSql("delete from sec_alert_event");
+        var failingRemote = new FailingTransformRuntimeClient(
+            "remote",
+            "remote_unavailable",
+            TransformRuntimeReport.remoteFailure("remote", "remote_unavailable", false)
+        );
+        runtimeClient = new FallbackTransformRuntimeClient(
+            failingRemote,
+            new LocalTransformRuntimeClient(new StandardEventTransformService())
+        );
+        service = newService(remoteShadowClient, runtimeClient);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(0, intValue(result.get("readCount")));
+        assertEquals(0, intValue(result.get("successCount")));
+        assertEquals(0, intValue(result.get("failedCount")));
+        assertEquals(0, intValue(result.get("duplicateCount")));
+        assertEquals(0, intValue(result.get("rawCount")));
+        assertEquals(0, intValue(result.get("standardCount")));
+        assertEquals(0, failingRemote.calls);
+        assertEquals(0, remoteShadowClient.calls);
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        var report = objectValue(jdbcTemplate.queryForObject(
+            "select report_json from ingestion_plan_sync_runs where id = ?",
+            Object.class,
+            result.get("id")
+        ));
+        assertTrue(stringList(report.get("warnings")).contains("no_source_rows"));
+        assertTrue(objectValue(report.get("errorsByType")).isEmpty());
+        assertFalse(report.containsKey("transformShadow"));
+        var transformRuntime = objectValue(report.get("transformRuntime"));
+        assertEquals("fallback", transformRuntime.get("mode"));
+        assertEquals(false, transformRuntime.get("remoteAttempted"));
+        assertEquals(false, transformRuntime.get("remoteSucceeded"));
+        assertEquals(false, transformRuntime.get("fallbackUsed"));
+        assertFalse(transformRuntime.containsKey("failureType"));
+    }
+
+    @Test
     void remoteShadowMatchedReportDoesNotChangeSyncOnceCountsOrWrites() {
         remoteShadowClient.nextReport = TransformShadowReport.enabled(2, 2, 0, 0, List.of());
         var dataSourceId = insertDataSource();

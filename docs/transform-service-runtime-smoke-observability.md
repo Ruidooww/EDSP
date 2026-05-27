@@ -386,6 +386,10 @@ summary.json
 
 ### GitHub Actions manual workflow
 
+注意：GitHub Actions 的 `workflow_dispatch` 手动触发要求 workflow 文件已经存在于 default branch。
+因此，本阶段分支 review 期间不要求真实 Actions 手动运行通过；阶段分支内只验证 YAML、脚本兼容性、本地 smoke 和范围边界。
+合并到 `master` 后，再从 GitHub Actions 页面手动触发 `Transform Runtime Smoke`，并记录 run URL、运行结果和 artifact。
+
 在 GitHub UI 手动运行：
 
 1. 打开仓库的 `Actions` 页面。

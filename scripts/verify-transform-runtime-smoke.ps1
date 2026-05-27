@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ComposeProject = "edsp",
+    [string]$ComposeProject = "edsp_smoke",
     [string]$SmokeDatabase = "edsp_transform_runtime_smoke",
     [string]$SmokeSchema = "transform_runtime_smoke",
     [int]$FrontendPort = 18080,
@@ -10,17 +10,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$blockingContainerNames = @(
-    "edsp-postgres",
-    "edsp-core",
-    "edsp-transform-service",
-    "edsp-gateway",
-    "edsp-auth",
-    "edsp-alert",
-    "edsp-report",
-    "edsp-frontend",
-    "edsp-redis"
-)
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $runId = "$(Get-Date -Format 'yyyyMMddHHmmss')_$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 $runtimeTouched = $false
@@ -163,25 +152,20 @@ function Assert-PortAvailable {
 }
 
 function Assert-NoExistingEdspContainers {
-    Write-Host "Checking existing Docker containers before starting runtime smoke..."
-    $existingNames = @(Invoke-DockerCapture -Arguments @("ps", "-a", "--format", "{{.Names}}"))
+    Write-Host "Checking existing Docker containers for compose project '$ComposeProject' before starting runtime smoke..."
     $projectNames = @(Invoke-DockerCapture -Arguments @(
         "ps", "-a", "--filter", "label=com.docker.compose.project=$ComposeProject", "--format", "{{.Names}}"
     ))
     Invoke-ComposeVisible -Arguments @("ps", "-a")
 
-    $conflicts = @(@(
-        $existingNames | Where-Object { $blockingContainerNames -contains "$_" }
-        $projectNames
-    ) | Sort-Object -Unique)
-
-    if ($conflicts.Count -gt 0) {
-        $names = $conflicts -join ", "
+    if ($projectNames.Count -gt 0) {
+        $names = ($projectNames | Sort-Object -Unique) -join ", "
         throw @"
-Existing EDSP containers were detected: $names
-The runtime smoke script will not reuse, stop, remove, or replace existing containers.
-Please confirm whether the existing EDSP runtime can be stopped and cleaned up manually before rerunning.
-Do not use docker compose down -v, docker volume rm, or docker volume prune.
+Existing runtime smoke containers were detected for compose project '$ComposeProject': $names
+The runtime smoke script will not reuse, stop, remove, or replace existing containers from this project.
+Use a different ComposeProject and host ports for another smoke run, or manually confirm how to handle the old smoke containers.
+A stopped project is still detected by this check, so docker compose -p $ComposeProject stop is not enough to rerun with the same project.
+Do not use docker compose -p $ComposeProject down -v, docker volume rm, docker volume prune, or docker rm.
 "@
     }
 }
@@ -519,7 +503,8 @@ try {
         }
         Write-Host "Validation database: $SmokeDatabase"
         Write-Host "To stop containers without deleting volumes, run: docker compose -p $ComposeProject stop"
-        Write-Host "Do not use docker compose down -v, docker volume rm, or docker volume prune."
+        Write-Host "Stopped containers are retained and will still block rerun with the same ComposeProject; use a new ComposeProject/ports for another smoke run."
+        Write-Host "Do not use docker compose -p $ComposeProject down -v, docker volume rm, docker volume prune, or docker rm."
     }
     Pop-Location
 }

@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: edsp-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-edsp}
       POSTGRES_USER: ${POSTGRES_USER:-edsp}
@@ -21,7 +20,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_MODULE: edsp-auth
-    container_name: edsp-auth
     environment:
       SERVER_PORT: 8081
       NACOS_ENABLED: "false"
@@ -33,7 +31,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_MODULE: edsp-transform-service
-    container_name: edsp-transform-service
     environment:
       SERVER_PORT: 8085
       NACOS_ENABLED: "false"
@@ -47,7 +44,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_MODULE: edsp-core
-    container_name: edsp-core
     environment:
       SERVER_PORT: 8082
       NACOS_ENABLED: "false"
@@ -70,7 +66,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_MODULE: edsp-alert
-    container_name: edsp-alert
     environment:
       SERVER_PORT: 8083
       NACOS_ENABLED: "false"
@@ -90,7 +85,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_MODULE: edsp-report
-    container_name: edsp-report
     environment:
       SERVER_PORT: 8084
       NACOS_ENABLED: "false"
@@ -110,7 +104,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_MODULE: edsp-gateway
-    container_name: edsp-gateway
     environment:
       SERVER_PORT: 8080
       NACOS_ENABLED: "false"
@@ -129,7 +122,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: edsp-frontend
     ports:
       - "${FRONTEND_PORT:-18080}:80"
     depends_on:

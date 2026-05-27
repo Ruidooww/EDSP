@@ -3,6 +3,10 @@ package com.edsp.core.service;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.transform.TransformRemoteShadowClient;
 import com.edsp.core.transform.TransformShadowReport;
+import com.edsp.core.transform.runtime.LocalTransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformRuntimeException;
+import com.edsp.core.transform.runtime.TransformRuntimeReport;
 import com.edsp.core.support.CoreRequestSupport;
 import com.edsp.transform.contract.BatchTransformRequest;
 import com.edsp.transform.contract.TransformDraftDto;
@@ -10,11 +14,8 @@ import com.edsp.transform.contract.TransformMappingPlanDto;
 import com.edsp.transform.contract.TransformOptionsDto;
 import com.edsp.transform.contract.TransformResponse;
 import com.edsp.transform.standardevent.MappingPlan;
-import com.edsp.transform.standardevent.SourceRow;
-import com.edsp.transform.standardevent.StandardEventDraft;
 import com.edsp.transform.standardevent.StandardEventTransformService;
 import com.edsp.transform.standardevent.TransformOptions;
-import com.edsp.transform.standardevent.TransformResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,8 +53,8 @@ public class IngestionPlanSyncOnceService {
     private final CoreRequestSupport support;
     private final JdbcShadowSampleService sampleService;
     private final StandardEventDedupService standardEventDedupService;
-    private final StandardEventTransformService transformService;
     private final TransformRemoteShadowClient transformRemoteShadowClient;
+    private final TransformRuntimeClient transformRuntimeClient;
 
     public IngestionPlanSyncOnceService(
         JdbcTemplate jdbcTemplate,
@@ -70,7 +71,8 @@ public class IngestionPlanSyncOnceService {
             sampleService,
             standardEventDedupService,
             transformService,
-            TransformRemoteShadowClient.disabled()
+            TransformRemoteShadowClient.disabled(),
+            new LocalTransformRuntimeClient(transformService)
         );
     }
 
@@ -82,17 +84,20 @@ public class IngestionPlanSyncOnceService {
         JdbcShadowSampleService sampleService,
         StandardEventDedupService standardEventDedupService,
         StandardEventTransformService transformService,
-        TransformRemoteShadowClient transformRemoteShadowClient
+        TransformRemoteShadowClient transformRemoteShadowClient,
+        TransformRuntimeClient transformRuntimeClient
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.support = support;
         this.sampleService = sampleService;
         this.standardEventDedupService = standardEventDedupService;
-        this.transformService = transformService;
         this.transformRemoteShadowClient = transformRemoteShadowClient == null
             ? TransformRemoteShadowClient.disabled()
             : transformRemoteShadowClient;
+        this.transformRuntimeClient = transformRuntimeClient == null
+            ? new LocalTransformRuntimeClient(transformService)
+            : transformRuntimeClient;
     }
 
     @Transactional
@@ -157,6 +162,17 @@ public class IngestionPlanSyncOnceService {
             var syncRunId = insertSyncRun(planId, activationId, dataSourceId, shadowRunId, ingestionRunId,
                 scheduleId, triggerType, "blocked", sampleLimit, result, startedAt, ex.getMessage(), report);
             return syncRunRow(syncRunId, true);
+        } catch (TransformRuntimeException ex) {
+            var message = support.stringOrDefault(ex.getMessage(), "Transform runtime failed");
+            var result = SyncResult.empty("failed", ex.report());
+            var report = report(planId, activationId, scheduleId, ingestionRunId, sampleLimit, result,
+                triggerType, reportMode);
+            report.put("errorsByType", Map.of(ex.failureType(), 1));
+            report.put("errorMessage", message);
+            finishIngestionRun(ingestionRunId, "failed", result, report, message);
+            var syncRunId = insertSyncRun(planId, activationId, dataSourceId, shadowRunId, ingestionRunId,
+                scheduleId, triggerType, "failed", sampleLimit, result, startedAt, message, report);
+            return syncRunRow(syncRunId, true);
         } catch (RuntimeException ex) {
             var message = support.stringOrDefault(ex.getMessage(), "Sync once failed");
             var result = SyncResult.empty("failed");
@@ -210,12 +226,20 @@ public class IngestionPlanSyncOnceService {
         var duplicateCount = 0;
         var rawCount = 0;
         var standardCount = 0;
-        var localTransformResults = new ArrayList<TransformResponse>();
+        if (rows.isEmpty()) {
+            warnings.add("no_source_rows");
+            return new SyncResult("warning", readCount, successCount, failedCount, duplicateCount, rawCount,
+                standardCount, new ArrayList<>(warnings), errorsByType, TransformShadowReport.disabled(),
+                noRowsRuntimeReport());
+        }
+        var transformRequest = transformRequest(rows, mappingPlan, transformOptions);
+        var transformBatch = transformRuntimeClient.transform(transformRequest);
+        var transformResults = transformBatch.results();
+        validateTransformResults(transformResults, rows.size(), transformBatch.report());
 
-        for (var row : rows) {
-            var transformed = standardRecord(mappingPlan, transformOptions, row);
-            var standard = transformed.standardRecord();
-            localTransformResults.add(transformed.response());
+        for (var index = 0; index < rows.size(); index++) {
+            var row = rows.get(index);
+            var standard = standardRecord(transformResults.get(index));
             var rawId = insertRawEvent(ingestionRunId, dataSourceId, source, standard, row, syncMode);
             rawCount++;
             if (!standard.errors().isEmpty()) {
@@ -241,13 +265,16 @@ public class IngestionPlanSyncOnceService {
             }
             successCount++;
         }
-        if (readCount == 0) {
-            warnings.add("no_source_rows");
-        }
         var status = failedCount > 0 || !warnings.isEmpty() ? "warning" : "passed";
-        var transformShadow = transformShadow(rows, mappingPlan, transformOptions, localTransformResults);
+        var transformShadow = transformShadow(transformRequest, transformResults);
         return new SyncResult(status, readCount, successCount, failedCount, duplicateCount, rawCount,
-            standardCount, new ArrayList<>(warnings), errorsByType, transformShadow);
+            standardCount, new ArrayList<>(warnings), errorsByType, transformShadow, transformBatch.report());
+    }
+
+    private TransformRuntimeReport noRowsRuntimeReport() {
+        return "local".equals(transformRuntimeClient.mode())
+            ? TransformRuntimeReport.disabled()
+            : TransformRuntimeReport.noRows(transformRuntimeClient.mode());
     }
 
     private List<Map<String, Object>> sampleRows(Source source, int sampleLimit) {
@@ -285,72 +312,68 @@ public class IngestionPlanSyncOnceService {
         return null;
     }
 
-    private StandardTransform standardRecord(
+    private BatchTransformRequest transformRequest(
+        List<Map<String, Object>> rows,
         MappingPlan mappingPlan,
-        TransformOptions transformOptions,
-        Map<String, Object> row
+        TransformOptions transformOptions
     ) {
-        var result = transformService.transform(new SourceRow(row), mappingPlan, transformOptions);
-        var draft = result.draft();
-        return new StandardTransform(
-            new StandardRecord(
-                draft.sourceSystem(),
-                draft.externalId(),
-                draft.eventType(),
-                draft.occurredAt(),
-                draft.actor(),
-                draft.assetRef(),
-                draft.subjectType(),
-                draft.subjectRef(),
-                draft.action(),
-                draft.result(),
-                draft.severity(),
-                draft.riskScore(),
-                draft.dedupKey(),
-                toJson(draft.normalized()),
-                toJson(draft.extra()),
-                result.errors()
-            ),
-            transformResponse(result)
+        return new BatchTransformRequest(
+            rows,
+            new TransformMappingPlanDto(mappingPlan.fieldMappings(), mappingPlan.dedupFields()),
+            new TransformOptionsDto(
+                transformOptions.dataSourceId(),
+                transformOptions.schemaTableId(),
+                transformOptions.sourceTable(),
+                transformOptions.syncMode()
+            )
         );
     }
 
-    private TransformShadowReport transformShadow(
-        List<Map<String, Object>> rows,
-        MappingPlan mappingPlan,
-        TransformOptions transformOptions,
-        List<TransformResponse> localTransformResults
+    private void validateTransformResults(
+        List<TransformResponse> results,
+        int rows,
+        TransformRuntimeReport runtimeReport
     ) {
-        if (!transformRemoteShadowClient.enabled()) {
-            return TransformShadowReport.disabled();
+        if (results == null) {
+            var report = runtimeReport != null && runtimeReport.enabled()
+                ? runtimeReport
+                : TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false);
+            throw new TransformRuntimeException("remote_invalid_response", "Transform runtime returned null results", report);
         }
-        try {
-            var request = new BatchTransformRequest(
-                rows,
-                new TransformMappingPlanDto(mappingPlan.fieldMappings(), mappingPlan.dedupFields()),
-                new TransformOptionsDto(
-                    transformOptions.dataSourceId(),
-                    transformOptions.schemaTableId(),
-                    transformOptions.sourceTable(),
-                    transformOptions.syncMode()
-                )
+        if (results.size() != rows) {
+            var report = runtimeReport != null && runtimeReport.enabled()
+                ? runtimeReport
+                : TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false);
+            throw new TransformRuntimeException("remote_invalid_response", "Transform runtime returned invalid result size", report);
+        }
+        for (var response : results) {
+            if (response == null || response.draft() == null) {
+                throw new TransformRuntimeException(
+                    "remote_invalid_response",
+                    "Transform runtime returned empty draft",
+                    runtimeReport != null && runtimeReport.enabled()
+                        ? runtimeReport
+                        : TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false)
+                );
+            }
+            parseOccurredAt(response.draft());
+        }
+    }
+
+    private StandardRecord standardRecord(TransformResponse response) {
+        var draft = response.draft();
+        if (draft == null) {
+            throw new TransformRuntimeException(
+                "remote_invalid_response",
+                "Transform runtime returned empty draft",
+                TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false)
             );
-            return transformRemoteShadowClient.shadow(request, localTransformResults);
-        } catch (RuntimeException ex) {
-            return TransformShadowReport.unavailable(localTransformResults.size());
         }
-    }
-
-    private TransformResponse transformResponse(TransformResult result) {
-        return new TransformResponse(transformDraft(result.draft()), result.errors(), result.warnings());
-    }
-
-    private TransformDraftDto transformDraft(StandardEventDraft draft) {
-        return new TransformDraftDto(
+        return new StandardRecord(
             draft.sourceSystem(),
             draft.externalId(),
             draft.eventType(),
-            draft.occurredAt() == null ? null : draft.occurredAt().toString(),
+            parseOccurredAt(draft),
             draft.actor(),
             draft.assetRef(),
             draft.subjectType(),
@@ -360,9 +383,40 @@ public class IngestionPlanSyncOnceService {
             draft.severity(),
             draft.riskScore(),
             draft.dedupKey(),
-            draft.normalized(),
-            draft.extra()
+            toJson(draft.normalized()),
+            toJson(draft.extra()),
+            response.errors()
         );
+    }
+
+    private OffsetDateTime parseOccurredAt(TransformDraftDto draft) {
+        if (draft.occurredAt() == null || draft.occurredAt().isBlank()) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(draft.occurredAt());
+        } catch (RuntimeException ex) {
+            throw new TransformRuntimeException(
+                "remote_invalid_response",
+                "Transform runtime returned invalid occurredAt",
+                TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false),
+                ex
+            );
+        }
+    }
+
+    private TransformShadowReport transformShadow(
+        BatchTransformRequest request,
+        List<TransformResponse> localTransformResults
+    ) {
+        if (!"local".equals(transformRuntimeClient.mode()) || !transformRemoteShadowClient.enabled()) {
+            return TransformShadowReport.disabled();
+        }
+        try {
+            return transformRemoteShadowClient.shadow(request, localTransformResults);
+        } catch (RuntimeException ex) {
+            return TransformShadowReport.unavailable(localTransformResults.size());
+        }
     }
 
     private Long insertRawEvent(
@@ -627,6 +681,9 @@ public class IngestionPlanSyncOnceService {
         if (result.transformShadowReport().enabled()) {
             report.put("transformShadow", result.transformShadowReport().toReportMap());
         }
+        if (result.transformRuntimeReport().enabled()) {
+            report.put("transformRuntime", result.transformRuntimeReport().toReportMap());
+        }
         return report;
     }
 
@@ -802,12 +859,6 @@ public class IngestionPlanSyncOnceService {
     ) {
     }
 
-    private record StandardTransform(
-        StandardRecord standardRecord,
-        TransformResponse response
-    ) {
-    }
-
     private record SyncResult(
         String status,
         int readCount,
@@ -818,10 +869,27 @@ public class IngestionPlanSyncOnceService {
         int standardCount,
         List<String> warnings,
         Map<String, Integer> errorsByType,
-        TransformShadowReport transformShadowReport
+        TransformShadowReport transformShadowReport,
+        TransformRuntimeReport transformRuntimeReport
     ) {
         private static SyncResult empty(String status) {
-            return new SyncResult(status, 0, 0, 0, 0, 0, 0, List.of(), Map.of(), TransformShadowReport.disabled());
+            return empty(status, TransformRuntimeReport.disabled());
+        }
+
+        private static SyncResult empty(String status, TransformRuntimeReport transformRuntimeReport) {
+            return new SyncResult(
+                status,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                List.of(),
+                Map.of(),
+                TransformShadowReport.disabled(),
+                transformRuntimeReport
+            );
         }
     }
 

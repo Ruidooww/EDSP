@@ -141,7 +141,7 @@ public class HttpTransformRemoteShadowClient implements TransformRemoteShadowCli
     }
 
     private static String trimTrailingSlash(String value) {
-        var text = value == null || value.isBlank() ? "http://edsp-transform-service:8080" : value.trim();
+        var text = value == null || value.isBlank() ? "http://edsp-transform-service:8085" : value.trim();
         while (text.endsWith("/")) {
             text = text.substring(0, text.length() - 1);
         }

@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Service Runtime Smoke Observability MVP`
-- 最新 feature merge commit：`3ada788 merge: transform service runtime smoke observability mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform service runtime smoke observability mvp`
-- 本轮阶段分支：`codex/transform-service-runtime-smoke-observability-mvp`
-- 本轮结果：新增可手工执行的 Docker Compose runtime smoke 脚本和说明文档，用真实 `edsp-core` + `edsp-transform-service` 验证 remote success / remote unavailable / fallback unavailable，并确认既有 `report_json.transformRuntime` 字段可观测 remote/fallback 运行结果。
+- 当前阶段：`Docker Compose Container Name Hardening MVP`
+- 最新 feature merge commit：`0218d32 merge: docker compose container name hardening mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for docker compose container name hardening mvp`
+- 本轮阶段分支：`codex/docker-compose-container-name-hardening-mvp`
+- 本轮结果：移除 `docker-compose.yml` 中固定 `container_name`，保留 compose service name 与内部 DNS；更新 runtime smoke 脚本和文档，使 smoke 默认使用 `edsp_smoke` project，并只检查当前 `ComposeProject` 下的容器，从而解除日常 runtime / smoke runtime / 后续 CI 化的容器名冲突阻塞。
 
 ## 已完成能力
 
@@ -124,10 +124,40 @@
   - `runtime-mode=remote` 且 `edsp-transform-service` 不可用时，sync run `failed`，`raw_events=0`，`standard_events=0`，`transformRuntime.failureType=remote_unavailable`。
   - `runtime-mode=fallback` 且 `edsp-transform-service` 不可用时，sync run `passed`，回退 local transform，`raw_events=1`，`standard_events=1`，`transformRuntime.fallbackUsed=true`。
 - runtime smoke 脚本安全边界：
-  - 启动前检测既有固定名称 EDSP 容器，发现即中止。
-  - 不复用、停止、删除或替换既有 runtime。
+  - 启动前只检测当前 `ComposeProject` 下的容器，发现即中止。
+  - 不复用、停止、删除或替换其他 project 的 runtime。
   - 不执行 `docker compose down -v`、`docker volume rm`、`docker volume prune` 或 `docker rm`。
   - 脚本执行后的 smoke 容器和验证数据库默认保留，便于人工检查。
+- `docker-compose.yml` 已移除所有固定 `container_name`：
+  - `edsp-postgres`
+  - `edsp-auth`
+  - `edsp-transform-service`
+  - `edsp-core`
+  - `edsp-alert`
+  - `edsp-report`
+  - `edsp-gateway`
+  - `edsp-frontend`
+- Compose service key 保持不变：
+  - `postgres`
+  - `edsp-auth`
+  - `edsp-transform-service`
+  - `edsp-core`
+  - `edsp-alert`
+  - `edsp-report`
+  - `edsp-gateway`
+  - `frontend`
+- Compose 内部 DNS 仍使用 service name，不依赖固定容器名。
+- runtime smoke 脚本已改为 project 隔离：
+  - 默认 `ComposeProject=edsp_smoke`。
+  - 只检测当前 `ComposeProject` 下的容器。
+  - 不再全局拦截其他 project 的 EDSP 容器。
+  - 保留 host port 检查，避免端口冲突。
+  - 所有 compose 操作继续显式使用 `docker compose -p <project>`。
+  - 脚本不自动删除容器或 volume；同一 project 复跑会被保留容器拦截，建议使用新的 project / port 或人工确认后处理。
+- `docs/transform-service-runtime-smoke-observability.md` 已更新为 project-scoped 诊断方式：
+  - 使用 `docker compose -p <project> logs <service>`。
+  - 使用 `docker compose -p <project> exec <service> ...`。
+  - 不再建议使用固定容器名如 `docker logs edsp-core` / `docker exec edsp-postgres` / `docker stop edsp-core`。
 
 ## 明确未做 / 禁止误解
 
@@ -156,7 +186,6 @@
 - 本轮不重写 historical data。
 - 本轮不做 cleanup。
 - 本轮不修改 `AGENTS.md`。
-- 本轮不修改 `docker-compose.yml`。
 - 本轮不修改 `edsp-transform-service` HTTP API 或 `edsp-transform-contract` DTO。
 - 本轮不删除 `edsp-core -> edsp-transform` 依赖。
 - 本轮不修改 backend / frontend 业务代码。
@@ -173,6 +202,8 @@
 - `edsp-transform-service` 是独立服务壳，并已接入 Docker Compose runtime。
 - `edsp-transform-service` 仅 localhost-only 暴露 host 端口，不经过 Gateway。
 - `edsp-core` 没有 `depends_on: edsp-transform-service`。
+- `docker-compose.yml` 不再使用固定 `container_name`；多套 runtime 通过 compose project 隔离容器和 compose-managed volume。
+- Compose 内部服务访问必须继续使用 service name，例如 `postgres`、`edsp-core`、`edsp-alert`、`edsp-report`、`edsp-transform-service`。
 - `edsp-core` transform runtime 默认仍是 `local`，remote shadow 仍默认关闭。
 - `edsp-core` 可通过 `edsp.transform.runtime-mode` / `EDSP_TRANSFORM_RUNTIME_MODE` 显式切换 `local` / `remote` / `fallback`。
 - `remote` / `fallback` runtime 依赖 `edsp-transform-service` 可用性，但不会成为默认运行强依赖。
@@ -258,6 +289,23 @@
   - `transformRuntime verification: PASS`。
   - `git diff --check` 通过。
   - `git status --short --branch` clean after branch commit / push。
+- Docker Compose Container Name Hardening MVP 验证：
+  - `docker compose -p edsp config` 通过。
+  - `docker compose -p edsp_smoke config` 通过。
+  - `docker compose -p edsp_smoke_b config` 通过。
+  - `Select-String -Path docker-compose.yml -Pattern "container_name"` 无输出。
+  - `docker compose -p edsp config | findstr /i "container_name"` 无输出。
+  - `docker compose -p edsp_smoke config | findstr /i "container_name"` 无输出。
+  - `docker compose -p edsp_smoke_b config | findstr /i "container_name"` 无输出。
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\verify-transform-runtime-smoke.ps1 -ComposeProject edsp_smoke_verify -FrontendPort 18082 -TransformPort 18087` 通过：
+    - `Remote success: PASS`
+    - `Remote unavailable: PASS`
+    - `Fallback unavailable: PASS`
+    - `transformRuntime verification: PASS`
+  - `mvn -pl edsp-core -am test` 通过，`144` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `git diff --check` 通过；仅有 Git line-ending warning，无 whitespace error。
+  - `git status --short --branch` clean after branch commit / push。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -269,27 +317,29 @@
 - runtime-mode 仍默认 `local`；如手动切到 `remote` / `fallback`，需要确保 `edsp-transform-service` 在 runtime 中可用。
 - remote/fallback 已通过手工 Docker Compose runtime smoke 脚本验证核心场景，但尚未接入 CI。
 - 本轮 runtime verification 使用 JDK `HttpServer` 驱动真实 remote client，未新增 Docker e2e 框架。
-- 当前 `docker-compose.yml` 固定 `container_name` 会导致不同 compose project 无法并行启动同一套 EDSP 容器；如需处理，应单独规划 `Docker Compose Container Name Hardening MVP`。
-- 当前 runtime smoke 脚本发现既有固定名称 EDSP 容器会直接中止，安全性优先于自动复用。
+- 固定 `container_name` 已移除，日常 runtime 与 smoke runtime 可通过不同 compose project 并行存在，前提是 host port 不冲突。
+- 当前 runtime smoke 脚本只检查当前 `ComposeProject` 下的容器；不会再全局拦截其他 project 的 EDSP 容器。
 - runtime smoke 脚本执行后不会自动删除容器或 volume，保留现场用于人工检查。
+- 当前仍不自动删除 volume；如需清理 smoke 容器 / volume，必须单独人工确认，且不得使用默认 destructive 命令。
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
+- Runtime smoke 尚未接入 CI，CI 化仍留给后续独立阶段。
 
 ## 下一轮建议
 
 建议下一阶段优先进入：
 
 ```text
-Docker Compose Container Name Hardening MVP
+Transform Runtime Smoke CI Readiness MVP
 ```
 
 目标建议：
 
-- 移除或条件化 `docker-compose.yml` 中固定 `container_name`。
-- 支持不同 compose project 隔离启动同一套 EDSP runtime。
-- 让 runtime smoke 脚本可以使用独立 project name 运行，减少本地和后续 CI 化冲突。
-- 保持服务间访问仍使用 compose service name，不改变业务语义。
-- 不改 transform runtime 默认值，不接 Gateway / Nacos，不新增业务能力。
+- 基于已完成的 compose project 隔离，评估 runtime smoke 纳入 CI 的资源、端口、日志和清理策略。
+- 继续保持 `runtime-mode=local` 默认值。
+- 不新增 Gateway / Nacos / service discovery。
+- 不修改 transform runtime 业务语义。
+- 不执行 destructive volume cleanup。
 
 如果优先统一转换判断口径，可单独排期：
 

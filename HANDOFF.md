@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Remote Runtime Verification & Dependency Guard MVP`
-- 最新 feature merge commit：`e5b2656 merge: remote transform runtime verification guard mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for remote transform runtime verification guard mvp`
-- 本轮阶段分支：`codex/remote-transform-runtime-verification-guard-mvp`
-- 本轮结果：`IngestionPlanSyncOnceService` 已收缩为只依赖 `TransformRuntimeClient` 执行转换；新增 dependency guard 阻止业务入口重新直连 transform engine；remote/fallback 主链路已用真实 HTTP client 测试验证成功、失败与回退语义。
+- 当前阶段：`Transform Service Runtime Smoke Observability MVP`
+- 最新 feature merge commit：`3ada788 merge: transform service runtime smoke observability mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform service runtime smoke observability mvp`
+- 本轮阶段分支：`codex/transform-service-runtime-smoke-observability-mvp`
+- 本轮结果：新增可手工执行的 Docker Compose runtime smoke 脚本和说明文档，用真实 `edsp-core` + `edsp-transform-service` 验证 remote success / remote unavailable / fallback unavailable，并确认既有 `report_json.transformRuntime` 字段可观测 remote/fallback 运行结果。
 
 ## 已完成能力
 
@@ -116,6 +116,18 @@
   - 覆盖 fallback remote success / unavailable / non-2xx / invalid response。
   - remote failure 已验证在 row-level 写入前终止，`raw_events=0`、`standard_events=0`，且不会 fallback。
   - fallback remote failure 已验证回退 local 后仍保持 dedup、raw first 与 `standardize_failed` 行为。
+- 新增 runtime smoke 手工验证资产：
+  - `scripts/verify-transform-runtime-smoke.ps1`
+  - `docs/transform-service-runtime-smoke-observability.md`
+- runtime smoke 脚本覆盖：
+  - `runtime-mode=remote` 且 `edsp-transform-service` 可用时，sync run `passed`，`raw_events=1`，`standard_events=1`，`transformRuntime.remoteSucceeded=true`。
+  - `runtime-mode=remote` 且 `edsp-transform-service` 不可用时，sync run `failed`，`raw_events=0`，`standard_events=0`，`transformRuntime.failureType=remote_unavailable`。
+  - `runtime-mode=fallback` 且 `edsp-transform-service` 不可用时，sync run `passed`，回退 local transform，`raw_events=1`，`standard_events=1`，`transformRuntime.fallbackUsed=true`。
+- runtime smoke 脚本安全边界：
+  - 启动前检测既有固定名称 EDSP 容器，发现即中止。
+  - 不复用、停止、删除或替换既有 runtime。
+  - 不执行 `docker compose down -v`、`docker volume rm`、`docker volume prune` 或 `docker rm`。
+  - 脚本执行后的 smoke 容器和验证数据库默认保留，便于人工检查。
 
 ## 明确未做 / 禁止误解
 
@@ -147,6 +159,11 @@
 - 本轮不修改 `docker-compose.yml`。
 - 本轮不修改 `edsp-transform-service` HTTP API 或 `edsp-transform-contract` DTO。
 - 本轮不删除 `edsp-core -> edsp-transform` 依赖。
+- 本轮不修改 backend / frontend 业务代码。
+- 本轮不新增 migration。
+- 本轮不接入 CI。
+- 本轮不新增 metrics / structured logging / tracing。
+- 本轮不修改 `report_json` schema，只验证已有 `transformRuntime` 字段。
 
 ## 当前关键边界
 
@@ -232,6 +249,15 @@
   - remote failure 在 row-level DB write 前停止，`raw_events=0`、`standard_events=0`。
   - fallback remote success 使用 remote 主结果；fallback remote failure / invalid response 回退 local。
   - fallback 后仍保持 duplicate detection、raw first 与 `standardize_failed` 语义。
+- 本轮 Docker Compose runtime smoke 验证：
+  - `docker compose -p edsp config --quiet` 通过。
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-transform-runtime-smoke.ps1` 通过。
+  - `Remote success: PASS`。
+  - `Remote unavailable: PASS`。
+  - `Fallback unavailable: PASS`。
+  - `transformRuntime verification: PASS`。
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -241,35 +267,38 @@
 - 本轮没有把 `edsp-core` 默认主链路切换到 remote / fallback transform。
 - Remote shadow 仍默认关闭；如手动开启，可通过 compose 内部地址 `http://edsp-transform-service:8085` 访问 transform service。
 - runtime-mode 仍默认 `local`；如手动切到 `remote` / `fallback`，需要确保 `edsp-transform-service` 在 runtime 中可用。
-- remote/fallback 尚未做完整 Docker runtime sync smoke test；本轮已覆盖单元 / 服务测试和 compose build。
+- remote/fallback 已通过手工 Docker Compose runtime smoke 脚本验证核心场景，但尚未接入 CI。
 - 本轮 runtime verification 使用 JDK `HttpServer` 驱动真实 remote client，未新增 Docker e2e 框架。
 - 当前 `docker-compose.yml` 固定 `container_name` 会导致不同 compose project 无法并行启动同一套 EDSP 容器；如需处理，应单独规划 `Docker Compose Container Name Hardening MVP`。
+- 当前 runtime smoke 脚本发现既有固定名称 EDSP 容器会直接中止，安全性优先于自动复用。
+- runtime smoke 脚本执行后不会自动删除容器或 volume，保留现场用于人工检查。
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
 
 ## 下一轮建议
 
-如果继续推进 transform service 主线，建议下一阶段进入：
+建议下一阶段优先进入：
 
 ```text
-edsp-transform-service Runtime Smoke & Observability MVP
+Docker Compose Container Name Hardening MVP
 ```
 
 目标建议：
 
-- 在 Docker Compose runtime 中用真实 `edsp-core` + `edsp-transform-service` 验证 `remote` / `fallback` sync smoke。
-- 明确 transform runtime report 的最小观测口径。
-- 保持默认仍为 local transform，避免 runtime 服务不可用影响现有 sync。
-- 继续不新增 transform_rule processor。
-- 不改 rule evaluation / alert generation / notification / alert lifecycle。
+- 移除或条件化 `docker-compose.yml` 中固定 `container_name`。
+- 支持不同 compose project 隔离启动同一套 EDSP runtime。
+- 让 runtime smoke 脚本可以使用独立 project name 运行，减少本地和后续 CI 化冲突。
+- 保持服务间访问仍使用 compose service name，不改变业务语义。
+- 不改 transform runtime 默认值，不接 Gateway / Nacos，不新增业务能力。
 
 如果优先统一转换判断口径，可单独排期：
 
 - `Standard Event Transform Shadow/Precheck Alignment MVP`
 
-如果优先处理工程治理，可单独排期：
+如继续推进 transform runtime 观测，可在 compose 隔离完成后单独排期：
 
-- `Docker Compose Container Name Hardening MVP`
+- `Transform Runtime Structured Logging MVP`
+- `Transform Runtime Metrics MVP`
 
 下一阶段仍必须遵守：
 

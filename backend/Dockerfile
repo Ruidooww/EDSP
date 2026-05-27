@@ -2,6 +2,9 @@ FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 COPY pom.xml ./pom.xml
 COPY edsp-common ./edsp-common
+COPY edsp-transform ./edsp-transform
+COPY edsp-transform-contract ./edsp-transform-contract
+COPY edsp-transform-service ./edsp-transform-service
 COPY edsp-gateway ./edsp-gateway
 COPY edsp-auth ./edsp-auth
 COPY edsp-core ./edsp-core

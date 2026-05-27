@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`edsp-transform-service Runtime Deployment MVP`
-- 最新 feature merge commit：`04521c7 merge: edsp transform service runtime deployment mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for edsp transform service runtime deployment mvp`
-- 本轮阶段分支：`codex/edsp-transform-service-runtime-deployment-mvp`
-- 本轮结果：已将 `edsp-transform-service` 接入 Docker Compose runtime，可构建、启动、健康检查和本地 smoke test；`edsp-core` 在 compose runtime 中具备默认关闭的 remote shadow 环境配置，但主链路仍保持 local transform。
+- 当前阶段：`edsp-transform-service Switchable Runtime MVP`
+- 最新 feature merge commit：`44f9d12 merge: edsp transform service switchable runtime mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for edsp transform service switchable runtime mvp`
+- 本轮阶段分支：`codex/edsp-transform-service-switchable-runtime-mvp`
+- 本轮结果：`edsp-core` 已支持可配置 transform runtime：`local` / `remote` / `fallback`。默认仍为 `local`，不切换主链路；remote/fallback 使用独立 `TransformRuntimeClient` 通过 `edsp-transform-service` batch API 作为可选主链路；remote shadow 仅在 local 模式下生效。
 
 ## 已完成能力
 
@@ -78,13 +78,38 @@
   - `spring.application.name=edsp-transform-service`。
   - actuator 暴露 `health,info`。
   - 不配置 datasource / flyway / nacos / gateway / security。
+- `edsp-core` 新增 switchable transform runtime：
+  - `TransformRuntimeClient`
+  - `LocalTransformRuntimeClient`
+  - `RemoteTransformRuntimeClient`
+  - `FallbackTransformRuntimeClient`
+  - `TransformRuntimeConfig`
+  - `TransformRuntimeReport`
+- `edsp.transform.runtime-mode` 默认值为 `local`。
+  - `local`：继续使用本地 `edsp-transform` Java module，默认不写 `transformRuntime` report，保持既有 report JSON 最大兼容。
+  - `remote`：通过 `POST /api/transform/standard-events/batch` 调用 `edsp-transform-service`，remote result 是主结果；remote unavailable / timeout / non-2xx / invalid response 会让本次 sync run `failed`，不会 fallback。
+  - `fallback`：优先 remote batch；remote 失败后回退 local，并在 `report_json.transformRuntime` 中记录 `fallbackUsed=true` 和 `failureType`。
+- `remote` / `fallback` 只使用 batch transform API，不逐行 HTTP 调用。
+- remote transform 调用发生在 row-level DB 写入之前，避免 remote 失败导致半写入。
+- `remote-shadow-enabled` 仅在 `runtime-mode=local` 时生效；remote/fallback 模式不执行 shadow compare，避免重复远程调用和 report 语义混乱。
+- 空 rows 已保持既有 `no_source_rows` warning 语义：
+  - remote/fallback 下不调用 remote API。
+  - 不 fallback。
+  - 不 failed。
+  - 不写 `raw_events` / `standard_events`。
+  - remote/fallback 会写 no-rows `transformRuntime`，其中 `remoteAttempted=false`、`remoteSucceeded=false`、`fallbackUsed=false`、无 `failureType`。
+- `docker-compose.yml` 已为 `edsp-core` 增加：
+  - `EDSP_TRANSFORM_RUNTIME_MODE=${EDSP_TRANSFORM_RUNTIME_MODE:-local}`。
+  - 默认仍为 local，不给 `edsp-core` 增加 `depends_on: edsp-transform-service`。
 
 ## 明确未做 / 禁止误解
 
-- 本轮不把 `edsp-core` 主链路切到 remote transform。
+- 本轮不把 `edsp-core` 默认主链路切到 remote / fallback transform。
 - 本轮不要求 `edsp-transform-service` 在 runtime 中必须可用。
-- 本轮不新增 `edsp.transform.mode=remote`。
-- 本轮不新增 `edsp.transform.mode=fallback`。
+- 本轮不移除 local transform。
+- 本轮不移除 `edsp-core -> edsp-transform` 直接依赖。
+- 本轮不修改 `edsp-transform-service` HTTP API。
+- 本轮不修改 `edsp-transform-contract` DTO。
 - 本轮不新增 database migration。
 - 本轮不新增 Gateway route。
 - 本轮不新增 Nacos 服务。
@@ -113,7 +138,9 @@
 - `edsp-transform-service` 是独立服务壳，并已接入 Docker Compose runtime。
 - `edsp-transform-service` 仅 localhost-only 暴露 host 端口，不经过 Gateway。
 - `edsp-core` 没有 `depends_on: edsp-transform-service`。
-- `edsp-core` 主链路仍是 local transform，remote shadow 仍默认关闭。
+- `edsp-core` transform runtime 默认仍是 `local`，remote shadow 仍默认关闭。
+- `edsp-core` 可通过 `edsp.transform.runtime-mode` / `EDSP_TRANSFORM_RUNTIME_MODE` 显式切换 `local` / `remote` / `fallback`。
+- `remote` / `fallback` runtime 依赖 `edsp-transform-service` 可用性，但不会成为默认运行强依赖。
 - `edsp-transform-service` 不依赖：
   - `edsp-core`
   - `JdbcTemplate`
@@ -137,7 +164,9 @@
   - ingestion run / sync run 写入
   - sync report 构造
 - Remote shadow 只能做 compare，不得改变主链路结果。
-- Sync once / scheduled sync 行为必须继续以 local transform 为准。
+- Remote shadow 只在 `runtime-mode=local` 时生效。
+- Sync once / scheduled sync 默认行为必须继续以 local transform 为准。
+- Remote/fallback runtime 必须继续遵守 raw first、standardize_failed、dedup、counts、report 的既有语义。
 - ShadowRun / Precheck 仍保留原逻辑，未来如需统一 transform 判断口径，应单独规划。
 
 ## 测试和验证结果
@@ -146,7 +175,7 @@
   - `mvn -pl edsp-transform -am test` 通过，`8` tests。
   - `mvn -pl edsp-transform-contract -am test` 通过，`1` test。
   - `mvn -pl edsp-transform-service -am test` 通过，`4` tests。
-  - `mvn -pl edsp-core -am test` 通过，`120` tests。
+  - `mvn -pl edsp-core -am test` 通过，`133` tests。
   - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
   - `mvn -pl edsp-transform dependency:tree -Dscope=compile` 通过。
   - `mvn -pl edsp-transform-contract dependency:tree -Dscope=compile` 通过。
@@ -171,30 +200,39 @@
   - remote shadow matched records report but does not change counts or writes。
   - remote shadow mismatch records mismatch without full raw row / config leak。
   - remote shadow unavailable does not fail sync and does not change duplicate / failed / raw / standard counts。
+  - runtime-mode local 默认不调用 remote runtime，不写 `transformRuntime`。
+  - runtime-mode remote 使用 batch result 作为主结果，且不执行 remote shadow。
+  - runtime-mode remote unavailable 在 row-level DB 写入前失败，sync run status = `failed`，不会 fallback。
+  - runtime-mode fallback 在 remote failure 时回退 local，并记录 `fallbackUsed=true` / `failureType`。
+  - remote runtime 严格校验 batch response size / index / draft / occurredAt。
+  - invalid runtime mode 明确失败，不静默 fallback 到 local。
+  - remote/fallback 空 rows 不调用 remote，不 fallback，不 failed，保留 `no_source_rows` warning。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
 
 - 本轮已新增 `edsp-transform-service` Docker Compose runtime。
 - 本轮没有新增 Gateway / Nacos / service discovery。
-- 本轮没有把 `edsp-core` 主链路切换到 remote transform。
+- 本轮没有把 `edsp-core` 默认主链路切换到 remote / fallback transform。
 - Remote shadow 仍默认关闭；如手动开启，可通过 compose 内部地址 `http://edsp-transform-service:8085` 访问 transform service。
+- runtime-mode 仍默认 `local`；如手动切到 `remote` / `fallback`，需要确保 `edsp-transform-service` 在 runtime 中可用。
+- remote/fallback 尚未做完整 Docker runtime sync smoke test；本轮已覆盖单元 / 服务测试和 compose build。
 - 当前 `docker-compose.yml` 固定 `container_name` 会导致不同 compose project 无法并行启动同一套 EDSP 容器；如需处理，应单独规划 `Docker Compose Container Name Hardening MVP`。
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
-- 后续如果要真正启用 remote transform，需要单独规划 runtime、fallback、观测和回滚边界。
+- 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
 
 ## 下一轮建议
 
 如果继续推进 transform service 主线，建议下一阶段进入：
 
 ```text
-edsp-transform-service Switchable Runtime MVP
+edsp-transform-service Runtime Smoke & Observability MVP
 ```
 
 目标建议：
 
-- 在保持安全默认值的前提下，评估 `local` / `remote` / `fallback` runtime mode。
-- 明确 remote transform 不可用时的失败 / fallback / report 语义。
+- 在 Docker Compose runtime 中用真实 `edsp-core` + `edsp-transform-service` 验证 `remote` / `fallback` sync smoke。
+- 明确 transform runtime report 的最小观测口径。
 - 保持默认仍为 local transform，避免 runtime 服务不可用影响现有 sync。
 - 继续不新增 transform_rule processor。
 - 不改 rule evaluation / alert generation / notification / alert lifecycle。

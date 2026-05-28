@@ -328,6 +328,12 @@ docker compose -p edsp_smoke exec -T postgres psql -U edsp -d edsp_transform_run
 - 不设置 required check。
 - 不作为 PR 或 `master` 合并保护条件。
 
+关于是否将 manual workflow 升级为自动 CI gate，请参考：
+
+```text
+docs/transform-runtime-smoke-ci-gate-evaluation.md
+```
+
 若未来要把 runtime smoke 作为 PR / `master` 合并保护，需要单独阶段设计和实施。
 
 推荐的 CI-ready 手工命令：

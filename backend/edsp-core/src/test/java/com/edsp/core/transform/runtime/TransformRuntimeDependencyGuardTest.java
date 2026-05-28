@@ -68,6 +68,21 @@ class TransformRuntimeDependencyGuardTest {
         );
     }
 
+    @Test
+    void shadowPrecheckServiceDoesNotDependOnTransformRuntimeClient() throws IOException {
+        var precheckService = CORE_MAIN.resolve("service/IngestionPlanPrecheckService.java");
+        var content = Files.readString(precheckService);
+
+        assertTrue(
+            !content.contains("TransformRuntimeClient"),
+            "Shadow Precheck must remain dry-run schema validation and must not inject TransformRuntimeClient"
+        );
+        assertTrue(
+            !content.contains(".transform("),
+            "Shadow Precheck must not call a real transform runtime"
+        );
+    }
+
     private static boolean isAllowedEngineBridge(Path path) {
         var relative = CORE_MAIN.relativize(path).toString().replace('\\', '/');
         return ALLOWED_ENGINE_BRIDGES.contains(relative);

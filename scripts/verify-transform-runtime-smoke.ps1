@@ -271,10 +271,17 @@ function Assert-Equal {
 function Assert-PortAvailable {
     param([Parameter(Mandatory = $true)][int]$Port)
 
-    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($listener) {
-        throw "Port $Port is already listening. Runtime smoke did not start any containers."
+    $listener = $null
+    try {
+        $endpoint = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Parse("127.0.0.1"), $Port)
+        $listener = [System.Net.Sockets.TcpListener]::new($endpoint)
+        $listener.Start()
+    } catch {
+        throw "Port $Port is already listening or cannot be bound on 127.0.0.1. Runtime smoke did not start any containers."
+    } finally {
+        if ($null -ne $listener) {
+            $listener.Stop()
+        }
     }
 }
 

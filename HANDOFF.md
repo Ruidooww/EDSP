@@ -1,16 +1,16 @@
 # 数据安全预警分析平台 Handoff
 
-更新时间：2026-05-28
+更新时间：2026-05-29
 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
 
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Runtime Smoke Required Gate Readiness MVP`
-- 最新 feature merge commit：`0dcb1a1 merge: transform runtime smoke required gate readiness mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime smoke required gate readiness mvp`
-- 本轮阶段分支：`codex/transform-runtime-smoke-required-gate-readiness-mvp`
-- 本轮结果：新增 `docs/transform-runtime-smoke-required-gate-readiness.md`，完成 required gate readiness / docs-only assessment；当前 `Transform Runtime Smoke` evidence 为 `pull_request runs=0`、`workflow_dispatch runs=2`，不满足 required gate 条件；本轮不启用 required check，不修改 branch protection / repository settings，不修改 workflow / scripts / backend / frontend / docker-compose，继续保持 `Transform Runtime Smoke` 为 non-required PR check。
+- 当前阶段：`Precheck Real Runtime Alignment Assessment MVP`
+- 最新 feature merge commit：`7582b97 merge: precheck real runtime alignment assessment mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for precheck real runtime alignment assessment mvp`
+- 本轮阶段分支：`codex/precheck-real-runtime-alignment-assessment-mvp`
+- 本轮结果：新增 `docs/precheck-real-runtime-alignment-assessment.md`，完成 Precheck real runtime alignment docs-only assessment；当前 Precheck 仍保持 dry-run / schema metadata validation，本轮不实现 real runtime Precheck，不注入 `TransformRuntimeClient`，不调用 remote transform service，不改变 activation gate / ShadowRun / sync once / scheduled sync；当前推荐保持 Precheck dry-run，未来如实现优先评估 `Option C: Two-stage Precheck`，并必须单独开 `Precheck Real Runtime Alignment Implementation MVP`。
 
 ## 已完成能力
 
@@ -230,6 +230,24 @@
   - 继续保持 `Transform Runtime Smoke` 为 non-required PR check。
   - 下一阶段建议：`Transform Runtime Smoke PR Check Observation MVP`，收集 3-5 次真实 PR check 样本。
   - `actions/upload-artifact@v4` Node.js 20 deprecation warning 继续作为 P2 跟踪，不阻塞当前 workflow。
+- 新增 Precheck real runtime alignment assessment 文档：
+  - 路径：`docs/precheck-real-runtime-alignment-assessment.md`。
+  - 本轮是 docs-only assessment，不实施 real runtime Precheck。
+  - 当前 `IngestionPlanPrecheckService` 仍保持 dry-run / schema metadata validation。
+  - 本轮不注入 `TransformRuntimeClient` 到 Precheck。
+  - 本轮不调用 `TransformRuntimeClient`。
+  - 本轮不调用 remote transform service。
+  - 本轮不改变 activation gate。
+  - 本轮不改变 ShadowRun。
+  - 本轮不改变 sync once / scheduled sync。
+  - 本轮不修改 `edsp-transform-contract` DTO。
+  - 本轮不修改 `edsp-transform-service` HTTP API。
+  - 本轮不删除 `edsp-core -> edsp-transform`。
+  - 当前推荐保持 Precheck dry-run。
+  - 未来如实现，优先评估 `Option C: Two-stage Precheck`。
+  - 未来实现必须单独开 `Precheck Real Runtime Alignment Implementation MVP`。
+  - PR #1 已触发 `Transform Runtime Smoke` non-required PR check，结果 `success`，可作为 PR run sample #1。
+  - PR #1 的 EDSP CI 也已 `success`。
 
 ## 明确未做 / 禁止误解
 
@@ -276,6 +294,11 @@
 - 本轮不启用 required check。
 - 本轮不修改 branch protection / repository settings。
 - Required Gate Readiness 阶段仅新增评估文档，不修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration 或 runtime 行为。
+- Precheck Real Runtime Alignment Assessment 阶段仅新增评估文档，不修改 backend、frontend、`docker-compose.yml`、`.github/workflows/**`、`scripts/**`、migration 或 runtime 行为。
+- 本轮不实现 real runtime Precheck。
+- 本轮不注入 `TransformRuntimeClient` 到 Precheck。
+- 本轮不调用 remote transform service。
+- 本轮不改变 activation gate / ShadowRun / sync once / scheduled sync。
 
 ## 当前关键边界
 
@@ -516,6 +539,23 @@
   - forbidden files diff 检查通过，未修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration、`AGENTS.md` 或 `HANDOFF.md`。
   - evidence inventory 记录当前 `pull_request runs=0`、`workflow_dispatch runs=2`。
   - review 通过，未发现 P0 / P1。
+- Precheck Real Runtime Alignment Assessment MVP 阶段分支验证：
+  - `mvn -pl edsp-core -am test` 通过，`149` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `git diff --check` 通过。
+  - `git diff --check origin/master...HEAD` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - `git diff --name-only origin/master...HEAD` 确认仅包含 `docs/precheck-real-runtime-alignment-assessment.md`。
+  - forbidden files diff 检查通过，未修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration、`AGENTS.md` 或 `HANDOFF.md`。
+  - review 通过，未发现 P0 / P1 / P2。
+  - PR #1 `Transform Runtime Smoke` non-required PR check 通过：
+    - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26585947892`。
+    - Result：`success`。
+    - Duration：约 `2m25s`。
+    - Artifact：`transform-runtime-smoke-26585947892-1`，`474 Bytes`。
+  - PR #1 EDSP CI 通过：
+    - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26585947803`。
+    - Result：`success`。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -544,6 +584,9 @@
 - Required Gate Readiness 评估已完成；当前 `pull_request runs=0`，仍不满足 required gate 条件。
 - 继续保持 `Transform Runtime Smoke` 为 non-required PR check。
 - 下一阶段建议 `Transform Runtime Smoke PR Check Observation MVP`，收集 3-5 次真实 PR check 样本。
+- Precheck Real Runtime Alignment Assessment 已完成；当前推荐保持 Precheck dry-run / schema metadata validation。
+- 未来如实现 Precheck real runtime，优先评估 `Option C: Two-stage Precheck`，并必须单独开 `Precheck Real Runtime Alignment Implementation MVP`。
+- PR #1 已提供第一条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success。
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 - `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。

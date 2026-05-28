@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Local Dependency Removal Readiness MVP`
-- 最新 feature merge commit：`704d781 merge: transform local dependency removal readiness mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform local dependency removal readiness mvp`
-- 本轮阶段分支：`codex/transform-local-dependency-removal-readiness-mvp`
-- 本轮结果：新增 `docs/transform-local-dependency-removal-readiness.md`，完成 `edsp-core -> edsp-transform` 未来移除前的 readiness / assessment；本轮不实施 dependency removal，当前仍保留 `edsp-core -> edsp-transform`，推荐 `Option C: Keep transitional dependency with strict guard`，下一阶段建议优先做 `Standard Event Transform Shadow/Precheck Alignment MVP`。
+- 当前阶段：`Standard Event Transform Shadow/Precheck Alignment MVP`
+- 最新 feature merge commit：`9ffa4c7 merge: standard event transform shadow precheck alignment mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for standard event transform shadow precheck alignment mvp`
+- 本轮阶段分支：`codex/standard-event-transform-shadow-precheck-alignment-mvp`
+- 本轮结果：`IngestionPlanShadowRunService` 已通过 `TransformRuntimeClient` 执行标准事件 transform；`IngestionPlanPrecheckService` 本轮继续保持 dry-run / schema metadata validation，未注入也未调用 `TransformRuntimeClient`；新增 `TransformPlanSupport` 仅负责 `plan_json` 解析、`fieldMappings` / `dedupFields` / `selectedFields` 提取，以及 `edsp-transform-contract` DTO 构造辅助；本轮未修改 `edsp-transform-contract` DTO、未修改 `edsp-transform-service` HTTP API、未修改 sync once / scheduled sync 主链路语义。
 
 ## 已完成能力
 
@@ -198,6 +198,27 @@
   - 当前不建议直接 `remote-only core`。
   - `Local bridge module` 可以作为后续选项，但不是第一步。
   - 真正 removal 前需要 remote runtime 稳定性证据、fallback 策略、rollback plan 和 Shadow/Precheck alignment。
+- ShadowRun 标准事件转换口径已对齐正式 sync 的 runtime 边界：
+  - `IngestionPlanShadowRunService` 已改为通过 `TransformRuntimeClient` 执行 transform。
+  - ShadowRun 使用现有 `edsp-transform-contract` DTO 构造 batch transform request。
+  - ShadowRun request 包含 sampled rows、mapping plan、dedup fields 和 `syncMode=shadow_run`。
+  - ShadowRun 使用 runtime response 生成 preview、errors、dedup preview 和 summary。
+  - `duplicate_in_sample` 使用 runtime draft `dedupKey` 判定，`dedupKeyPreview` 继续仅展示 SHA-256。
+  - invalid severity 由 runtime 标准化，preview severity 可呈现为 `info`，errors 包含 `severity_unrecognized`。
+  - sample rows 为空时不调用 `TransformRuntimeClient`，继续保留 `no_sample_rows` warning。
+  - runtime failure 只影响本次 shadow run，持久化 `status=failed` 和 sanitized `errorMessage`，不写 `raw_events`、`standard_events`、`alert_decisions` 或 `alerts`。
+- Precheck 本轮保持 dry-run / schema metadata validation 边界：
+  - `IngestionPlanPrecheckService` 未注入 `TransformRuntimeClient`。
+  - `IngestionPlanPrecheckService` 未调用 `TransformRuntimeClient`。
+  - Precheck 不依赖 transform runtime availability。
+  - Precheck 仍不写 `raw_events`、`standard_events`、`alert_decisions` 或 `alerts`。
+- 新增 `TransformPlanSupport`：
+  - 仅负责 `plan_json` 解析辅助。
+  - 仅负责 `fieldMappings` / `dedupFields` / `selectedFields` 提取。
+  - 仅负责 `TransformMappingPlanDto` / `TransformOptionsDto` 构造辅助。
+  - 不做 severity normalize、occurredAt parse、dedupKey 拼接或 transform 业务逻辑复刻。
+  - 不引用 `StandardEventTransformService` 或 `com.edsp.transform.standardevent.*`。
+- `TransformRuntimeDependencyGuardTest` 已继续保持显式 bridge allowlist，并增加 Precheck 不依赖 `TransformRuntimeClient` 的守卫。
 
 ## 明确未做 / 禁止误解
 
@@ -205,19 +226,19 @@
 - 本轮不要求 `edsp-transform-service` 在 runtime 中必须可用。
 - 本轮不移除 local transform。
 - 本轮不移除 `edsp-core -> edsp-transform` 直接依赖。
-- 本轮是 readiness / assessment，不实施 dependency removal。
+- 本轮不实施 dependency removal。
 - 本轮不把 `edsp-core` 改成 remote-only core。
 - 本轮不新增 local bridge module。
 - 本轮不修改 `edsp-transform-service` HTTP API。
 - 本轮不修改 `edsp-transform-contract` DTO。
+- 本轮不修改 sync once / scheduled sync 主链路语义。
 - 本轮不新增 database migration。
 - 本轮不新增 Gateway route。
 - 本轮不新增 Nacos 服务。
 - 本轮不改 frontend。
 - 本轮不改 `SchemaPage`。
 - 本轮不改 `IngestionPlanPanel`。
-- 本轮不改 `IngestionPlanShadowRunService`。
-- 本轮不改 `IngestionPlanPrecheckService`。
+- 本轮不把 Precheck 升级为 real runtime。
 - 本轮不做 transform_rule processor。
 - 本轮不做 Standard Field Catalog。
 - 本轮不做 Mapping Management Hardening。
@@ -231,7 +252,7 @@
 - 本轮不修改 `AGENTS.md`。
 - 本轮不修改 `edsp-transform-service` HTTP API 或 `edsp-transform-contract` DTO。
 - 本轮不删除 `edsp-core -> edsp-transform` 依赖。
-- 本轮不修改 backend / frontend 业务代码。
+- 本轮不修改 frontend 业务代码。
 - 本轮不新增 migration。
 - 本轮不接入自动 CI gate。
 - 本轮不新增 metrics / structured logging / tracing。
@@ -288,7 +309,10 @@
 - 当前不建议直接删除 `edsp-core -> edsp-transform`，除非 remote runtime 稳定性证据、fallback 策略、rollback plan 和 Shadow/Precheck alignment 已明确。
 - `Local bridge module` 可作为后续拆分选项，但不是当前第一步。
 - runtime smoke 的 CI-ready 运行仍是手工 opt-in；`FinalAction=Stop` 仅允许停止本次 project 的容器，不得删除 volume。
-- ShadowRun / Precheck 仍保留原逻辑，未来如需统一 transform 判断口径，应单独规划。
+- ShadowRun 已通过 `TransformRuntimeClient` 对齐正式 sync 的 transform runtime 边界；默认 `runtime-mode=local`，显式配置 `remote` / `fallback` 时按当前 runtime client 行为执行。
+- ShadowRun runtime failure 只能影响本次 shadow run，必须持久化 failed shadow run 和脱敏错误信息，不得写 `raw_events`、`standard_events`、`alert_decisions` 或 `alerts`。
+- Precheck 本轮仍保持 dry-run / schema metadata validation，不注入、不调用、不依赖 `TransformRuntimeClient`。
+- `TransformPlanSupport` 只能作为 request / plan assembly helper，不能复制 transform engine 业务逻辑，也不能引用 `com.edsp.transform.standardevent.*`。
 
 ## 测试和验证结果
 
@@ -454,6 +478,21 @@
   - `git diff --name-only HEAD~1..HEAD` 确认仅包含 `docs/transform-local-dependency-removal-readiness.md`。
   - forbidden files diff 检查通过，未修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、`AGENTS.md` 或 `HANDOFF.md`。
   - review 通过，未发现 P0 / P1 / P2。
+- Standard Event Transform Shadow/Precheck Alignment MVP 阶段分支验证：
+  - `mvn -pl edsp-core -am "-Dtest=IngestionPlanShadowRunServiceTest,IngestionPlanServiceTest,IngestionPlanSyncOnceServiceTest,TransformRuntimeDependencyGuardTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` 通过，`75` tests。
+  - `mvn -pl edsp-core -am test` 通过，`149` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `docker compose -p edsp config --quiet` 通过。
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - `git diff --name-only origin/master...HEAD` 确认仅包含：
+    - `backend/edsp-core/src/main/java/com/edsp/core/service/IngestionPlanShadowRunService.java`
+    - `backend/edsp-core/src/main/java/com/edsp/core/transform/TransformPlanSupport.java`
+    - `backend/edsp-core/src/test/java/com/edsp/core/controller/IngestionPlanShadowRunControllerTest.java`
+    - `backend/edsp-core/src/test/java/com/edsp/core/service/IngestionPlanShadowRunServiceTest.java`
+    - `backend/edsp-core/src/test/java/com/edsp/core/transform/runtime/TransformRuntimeDependencyGuardTest.java`
+  - forbidden files diff 检查通过，未修改 `backend/edsp-transform-service/**`、`backend/edsp-transform-contract/**`、`backend/edsp-transform/**`、frontend、`docker-compose.yml`、`.github/workflows/**`、`scripts/**`、migration、`AGENTS.md` 或 `HANDOFF.md`。
+  - review 通过，未发现 P0 / P1。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -469,7 +508,8 @@
 - 当前 runtime smoke 脚本只检查当前 `ComposeProject` 下的容器；不会再全局拦截其他 project 的 EDSP 容器。
 - runtime smoke 脚本执行后不会自动删除容器或 volume，保留现场用于人工检查。
 - 当前仍不自动删除 volume；如需清理 smoke 容器 / volume，必须单独人工确认，且不得使用默认 destructive 命令。
-- `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
+- `IngestionPlanShadowRunService` 已通过 `TransformRuntimeClient` 执行 transform；默认 `runtime-mode=local`，显式配置 `remote` / `fallback` 时按 runtime client 行为执行。
+- `IngestionPlanPrecheckService` 本轮仍未接入 real runtime，继续保持 dry-run / schema metadata validation。
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
 - Runtime smoke 已提供 `workflow_dispatch` 手动入口，并已挂接 `pull_request` on `master` 作为 non-required PR check；仍未挂接 `push`，也不是 required check。
 - `Transform Runtime Smoke` 已在合并到 `master` 后完成第一次 manual `workflow_dispatch` 验证，结果为 `Success`，artifact 已确认仅包含 `summary.json`。
@@ -481,22 +521,23 @@
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 - `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。
-- 真正进入 Local Dependency Removal MVP 前，需要补齐 remote runtime 稳定性证据、fallback 策略、rollback plan 和 Shadow/Precheck alignment。
-- 下一阶段建议优先做 `Standard Event Transform Shadow/Precheck Alignment MVP`，先统一 ShadowRun / Precheck 与正式 sync 的 transform 判断口径，再决定 remote-only core 或 local bridge module。
+- 真正进入 Local Dependency Removal MVP 前，仍需要补齐 remote runtime 稳定性证据、fallback 策略、rollback plan，并明确 Precheck real runtime alignment 策略。
+- Precheck real runtime alignment 仍未做；如后续需要让 Precheck 与正式 sync 完全同口径，应单独规划。
 
 ## 下一轮建议
 
-建议下一阶段优先进入：
+建议下一阶段优先评估：
 
 ```text
-Standard Event Transform Shadow/Precheck Alignment MVP
+Precheck Real Runtime Alignment Assessment MVP
 ```
 
 目标建议：
 
-- 盘点 `IngestionPlanShadowRunService`、`IngestionPlanPrecheckService` 与正式 sync 的 transform 判断差异。
-- 明确 ShadowRun / Precheck 是否应复用 `TransformRuntimeClient`、`edsp-transform-contract` DTO 或独立轻量 adapter。
-- 对齐字段映射、dedup fields、severity / actor / externalId 等关键转换口径。
+- 评估 `IngestionPlanPrecheckService` 是否需要从 dry-run / schema metadata validation 升级为 real runtime validation。
+- 明确 Precheck 是否应调用 `TransformRuntimeClient`，以及失败时是否只影响 precheck report。
+- 评估 real runtime Precheck 是否需要扩展 `edsp-transform-contract` DTO；如需要，应单独确认 scope。
+- 保持 ShadowRun 已完成的 `TransformRuntimeClient` 对齐结果。
 - 不改变默认 `runtime-mode=local`。
 - 不删除 `edsp-core -> edsp-transform`。
 - 不默认 remote / fallback。

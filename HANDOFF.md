@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Standard Event Transform Shadow/Precheck Alignment MVP`
-- 最新 feature merge commit：`9ffa4c7 merge: standard event transform shadow precheck alignment mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for standard event transform shadow precheck alignment mvp`
-- 本轮阶段分支：`codex/standard-event-transform-shadow-precheck-alignment-mvp`
-- 本轮结果：`IngestionPlanShadowRunService` 已通过 `TransformRuntimeClient` 执行标准事件 transform；`IngestionPlanPrecheckService` 本轮继续保持 dry-run / schema metadata validation，未注入也未调用 `TransformRuntimeClient`；新增 `TransformPlanSupport` 仅负责 `plan_json` 解析、`fieldMappings` / `dedupFields` / `selectedFields` 提取，以及 `edsp-transform-contract` DTO 构造辅助；本轮未修改 `edsp-transform-contract` DTO、未修改 `edsp-transform-service` HTTP API、未修改 sync once / scheduled sync 主链路语义。
+- 当前阶段：`Transform Runtime Smoke Required Gate Readiness MVP`
+- 最新 feature merge commit：`0dcb1a1 merge: transform runtime smoke required gate readiness mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime smoke required gate readiness mvp`
+- 本轮阶段分支：`codex/transform-runtime-smoke-required-gate-readiness-mvp`
+- 本轮结果：新增 `docs/transform-runtime-smoke-required-gate-readiness.md`，完成 required gate readiness / docs-only assessment；当前 `Transform Runtime Smoke` evidence 为 `pull_request runs=0`、`workflow_dispatch runs=2`，不满足 required gate 条件；本轮不启用 required check，不修改 branch protection / repository settings，不修改 workflow / scripts / backend / frontend / docker-compose，继续保持 `Transform Runtime Smoke` 为 non-required PR check。
 
 ## 已完成能力
 
@@ -219,6 +219,17 @@
   - 不做 severity normalize、occurredAt parse、dedupKey 拼接或 transform 业务逻辑复刻。
   - 不引用 `StandardEventTransformService` 或 `com.edsp.transform.standardevent.*`。
 - `TransformRuntimeDependencyGuardTest` 已继续保持显式 bridge allowlist，并增加 Precheck 不依赖 `TransformRuntimeClient` 的守卫。
+- 新增 required gate readiness 文档：
+  - 路径：`docs/transform-runtime-smoke-required-gate-readiness.md`。
+  - 本轮是 docs-only assessment，不实施 required gate。
+  - 记录当前 `Transform Runtime Smoke` 运行证据：`pull_request runs=0`，`workflow_dispatch runs=2`。
+  - 当前不满足 required gate 条件。
+  - 当前不启用 required check。
+  - 当前不修改 branch protection / repository settings。
+  - 当前不修改 workflow / scripts / backend / frontend / docker-compose。
+  - 继续保持 `Transform Runtime Smoke` 为 non-required PR check。
+  - 下一阶段建议：`Transform Runtime Smoke PR Check Observation MVP`，收集 3-5 次真实 PR check 样本。
+  - `actions/upload-artifact@v4` Node.js 20 deprecation warning 继续作为 P2 跟踪，不阻塞当前 workflow。
 
 ## 明确未做 / 禁止误解
 
@@ -262,6 +273,9 @@
 - Auto CI Gate Evaluation 阶段仅新增评估文档，不修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration 或 runtime 行为。
 - 本轮不新增 `push` / `schedule` trigger。
 - 本轮不设置 required check。
+- 本轮不启用 required check。
+- 本轮不修改 branch protection / repository settings。
+- Required Gate Readiness 阶段仅新增评估文档，不修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration 或 runtime 行为。
 
 ## 当前关键边界
 
@@ -493,6 +507,15 @@
     - `backend/edsp-core/src/test/java/com/edsp/core/transform/runtime/TransformRuntimeDependencyGuardTest.java`
   - forbidden files diff 检查通过，未修改 `backend/edsp-transform-service/**`、`backend/edsp-transform-contract/**`、`backend/edsp-transform/**`、frontend、`docker-compose.yml`、`.github/workflows/**`、`scripts/**`、migration、`AGENTS.md` 或 `HANDOFF.md`。
   - review 通过，未发现 P0 / P1。
+- Transform Runtime Smoke Required Gate Readiness MVP 阶段分支验证：
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - `git diff --name-only HEAD~1..HEAD` 确认仅包含：
+    - `docs/transform-runtime-smoke-ci-gate-evaluation.md`
+    - `docs/transform-runtime-smoke-required-gate-readiness.md`
+  - forbidden files diff 检查通过，未修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration、`AGENTS.md` 或 `HANDOFF.md`。
+  - evidence inventory 记录当前 `pull_request runs=0`、`workflow_dispatch runs=2`。
+  - review 通过，未发现 P0 / P1。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -518,6 +541,9 @@
 - 当前不建议直接设置 required check。
 - Non-Required PR Check MVP 已完成；下一步应观察 3-5 次 PR check 运行稳定性、耗时、artifact 安全边界和 runner / Docker / Maven / 网络 flake 风险。
 - required gate 至少等 non-required PR check 稳定运行 3-5 次并完成复盘后再考虑。
+- Required Gate Readiness 评估已完成；当前 `pull_request runs=0`，仍不满足 required gate 条件。
+- 继续保持 `Transform Runtime Smoke` 为 non-required PR check。
+- 下一阶段建议 `Transform Runtime Smoke PR Check Observation MVP`，收集 3-5 次真实 PR check 样本。
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 - `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。
@@ -526,36 +552,35 @@
 
 ## 下一轮建议
 
-建议下一阶段优先评估：
+建议下一阶段优先执行：
 
 ```text
-Precheck Real Runtime Alignment Assessment MVP
+Transform Runtime Smoke PR Check Observation MVP
 ```
 
 目标建议：
 
-- 评估 `IngestionPlanPrecheckService` 是否需要从 dry-run / schema metadata validation 升级为 real runtime validation。
-- 明确 Precheck 是否应调用 `TransformRuntimeClient`，以及失败时是否只影响 precheck report。
-- 评估 real runtime Precheck 是否需要扩展 `edsp-transform-contract` DTO；如需要，应单独确认 scope。
-- 保持 ShadowRun 已完成的 `TransformRuntimeClient` 对齐结果。
-- 不改变默认 `runtime-mode=local`。
-- 不删除 `edsp-core -> edsp-transform`。
-- 不默认 remote / fallback。
-- 不修改 transform-service HTTP API 或 contract DTO。
-- 不新增 migration / Gateway / Nacos / metrics / structured logging / tracing。
-
-如果继续 CI 自动化，可单独排期：
-
-- `Transform Runtime Smoke PR Check Observation MVP`
-  - 观察 `Transform Runtime Smoke` 的 `pull_request` non-required check 运行结果。
-  - 记录至少 3-5 次 PR check 的运行结果、耗时、失败原因、artifact 内容和 flake 情况。
-  - 不设置 required check。
-  - 不挂 `push` trigger。
-  - 保持 manual workflow 作为人工验证入口。
-  - 继续保留 artifact / logs 安全边界。
-  - required gate 需等 non-required PR check 稳定运行后再单独评估。
+- 观察 `Transform Runtime Smoke` 的 `pull_request` non-required check 运行结果。
+- 记录至少 3-5 次 PR check 的运行结果、耗时、失败原因、artifact 内容和 flake 情况。
+- 不设置 required check。
+- 不修改 branch protection / repository settings。
+- 不挂 `push` trigger。
+- 保持 manual `workflow_dispatch` 作为人工验证入口。
+- 继续保留 artifact / logs 安全边界。
+- required gate 需等 non-required PR check 稳定运行后再单独评估。
+- `actions/upload-artifact@v4` Node.js 20 deprecation warning 继续作为 P2 跟踪。
 - 继续保持 `runtime-mode=local` 默认值。
 - 不执行 destructive volume cleanup。
+
+如果优先推进 transform 运行口径，可单独排期：
+
+- `Precheck Real Runtime Alignment Assessment MVP`
+  - 评估 `IngestionPlanPrecheckService` 是否需要从 dry-run / schema metadata validation 升级为 real runtime validation。
+  - 明确 Precheck 是否应调用 `TransformRuntimeClient`，以及失败时是否只影响 precheck report。
+  - 评估 real runtime Precheck 是否需要扩展 `edsp-transform-contract` DTO；如需要，应单独确认 scope。
+  - 不改变默认 `runtime-mode=local`。
+  - 不删除 `edsp-core -> edsp-transform`。
+  - 不修改 transform-service HTTP API 或 contract DTO。
 
 如继续推进 transform runtime 观测，可在 compose 隔离完成后单独排期：
 

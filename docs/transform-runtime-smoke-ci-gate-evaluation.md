@@ -12,6 +12,8 @@ This stage is evaluation-only:
 - It does not modify the existing EDSP CI workflow.
 - It does not modify runtime smoke scripts or production runtime behavior.
 
+Historical note: this document records the Auto CI Gate Evaluation stage before the later non-required PR check stage. The current required gate readiness follow-up is tracked in `docs/transform-runtime-smoke-required-gate-readiness.md`.
+
 ## Current State
 
 The manual workflow already exists:
@@ -214,4 +216,14 @@ Not recommended now:
 ```text
 Required check.
 ```
+
+## Follow-up Evaluation
+
+Required gate readiness is tracked separately:
+
+```text
+docs/transform-runtime-smoke-required-gate-readiness.md
+```
+
+That document evaluates whether the current non-required PR check has enough evidence to become a required gate. It does not enable branch protection or modify workflow triggers.
 

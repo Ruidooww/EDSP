@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Runtime Smoke Non-Required PR Check MVP`
-- 最新 feature merge commit：`4553ef4 merge: transform runtime smoke non-required pr check mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime smoke non-required pr check mvp`
-- 本轮阶段分支：`codex/transform-runtime-smoke-non-required-pr-check-mvp`
-- 本轮结果：`Transform Runtime Smoke` workflow 已从 manual-only 扩展为 `workflow_dispatch` + `pull_request` on `master`；该 PR check 作为 non-required 观察性检查试运行，不修改现有 EDSP CI，不挂 `push` / `schedule`，不设置 required check，不修改 runtime smoke 脚本或 production runtime 行为。
+- 当前阶段：`Transform Local Dependency Removal Readiness MVP`
+- 最新 feature merge commit：`704d781 merge: transform local dependency removal readiness mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform local dependency removal readiness mvp`
+- 本轮阶段分支：`codex/transform-local-dependency-removal-readiness-mvp`
+- 本轮结果：新增 `docs/transform-local-dependency-removal-readiness.md`，完成 `edsp-core -> edsp-transform` 未来移除前的 readiness / assessment；本轮不实施 dependency removal，当前仍保留 `edsp-core -> edsp-transform`，推荐 `Option C: Keep transitional dependency with strict guard`，下一阶段建议优先做 `Standard Event Transform Shadow/Precheck Alignment MVP`。
 
 ## 已完成能力
 
@@ -188,6 +188,16 @@
   - 如继续 CI 自动化，建议下一阶段先做 `Transform Runtime Smoke Non-Required PR Check MVP`；该阶段现已完成。
   - required gate 至少等 non-required PR check 稳定运行 3-5 次后再考虑。
   - `actions/upload-artifact@v4` Node.js 20 deprecation warning 继续作为 P2 跟踪，不影响当前 workflow 成功。
+- 新增 transform local dependency removal readiness 文档：
+  - 路径：`docs/transform-local-dependency-removal-readiness.md`。
+  - 本轮是 readiness / assessment，不实施 dependency removal。
+  - 记录当前依赖状态：`edsp-core -> edsp-transform`、`edsp-core -> edsp-transform-contract`，且 `edsp-core` 不依赖 `edsp-transform-service`。
+  - 记录当前允许引用 transform engine 的显式 bridge allowlist：`TransformConfig.java`、`TransformRuntimeConfig.java`、`LocalTransformRuntimeClient.java`、`TransformContractSupport.java`。
+  - 记录 `TransformRuntimeDependencyGuardTest` 当前守卫范围：业务 service/controller 不得直接依赖 `StandardEventTransformService` 或 `com.edsp.transform.standardevent.*`，`edsp-core` 不得依赖 `edsp-transform-service`。
+  - 当前推荐 `Option C: Keep transitional dependency with strict guard`。
+  - 当前不建议直接 `remote-only core`。
+  - `Local bridge module` 可以作为后续选项，但不是第一步。
+  - 真正 removal 前需要 remote runtime 稳定性证据、fallback 策略、rollback plan 和 Shadow/Precheck alignment。
 
 ## 明确未做 / 禁止误解
 
@@ -195,6 +205,9 @@
 - 本轮不要求 `edsp-transform-service` 在 runtime 中必须可用。
 - 本轮不移除 local transform。
 - 本轮不移除 `edsp-core -> edsp-transform` 直接依赖。
+- 本轮是 readiness / assessment，不实施 dependency removal。
+- 本轮不把 `edsp-core` 改成 remote-only core。
+- 本轮不新增 local bridge module。
 - 本轮不修改 `edsp-transform-service` HTTP API。
 - 本轮不修改 `edsp-transform-contract` DTO。
 - 本轮不新增 database migration。
@@ -271,6 +284,9 @@
 - `IngestionPlanSyncOnceService` 等业务入口不得直接依赖 transform engine，必须通过 `TransformRuntimeClient`；该边界由 `TransformRuntimeDependencyGuardTest` 守卫。
 - transform engine bridge allowlist 必须保持显式最小范围，不得恢复为允许整个 `transform/runtime/**` 目录任意引用 engine。
 - `edsp-core` main code 与 `edsp-core/pom.xml` 均不得依赖 `edsp-transform-service`。
+- `edsp-core -> edsp-transform` 仍是过渡期依赖，当前用于支撑 `local` / `fallback` runtime 以及本地 transform bridge。
+- 当前不建议直接删除 `edsp-core -> edsp-transform`，除非 remote runtime 稳定性证据、fallback 策略、rollback plan 和 Shadow/Precheck alignment 已明确。
+- `Local bridge module` 可作为后续拆分选项，但不是当前第一步。
 - runtime smoke 的 CI-ready 运行仍是手工 opt-in；`FinalAction=Stop` 仅允许停止本次 project 的容器，不得删除 volume。
 - ShadowRun / Precheck 仍保留原逻辑，未来如需统一 transform 判断口径，应单独规划。
 
@@ -431,6 +447,13 @@
     - `docs/transform-service-runtime-smoke-observability.md`
   - workflow 静态检查确认仅包含 `workflow_dispatch` 和 `pull_request`，未新增 `push` / `schedule`。
   - 确认未修改现有 `.github/workflows/ci.yml`。
+- Transform Local Dependency Removal Readiness MVP 阶段分支验证：
+  - `mvn -pl edsp-core -am "-Dtest=TransformRuntimeDependencyGuardTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` 通过，`TransformRuntimeDependencyGuardTest` 3 tests。
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - `git diff --name-only HEAD~1..HEAD` 确认仅包含 `docs/transform-local-dependency-removal-readiness.md`。
+  - forbidden files diff 检查通过，未修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、`AGENTS.md` 或 `HANDOFF.md`。
+  - review 通过，未发现 P0 / P1 / P2。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -457,33 +480,41 @@
 - required gate 至少等 non-required PR check 稳定运行 3-5 次并完成复盘后再考虑。
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
+- `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。
+- 真正进入 Local Dependency Removal MVP 前，需要补齐 remote runtime 稳定性证据、fallback 策略、rollback plan 和 Shadow/Precheck alignment。
+- 下一阶段建议优先做 `Standard Event Transform Shadow/Precheck Alignment MVP`，先统一 ShadowRun / Precheck 与正式 sync 的 transform 判断口径，再决定 remote-only core 或 local bridge module。
 
 ## 下一轮建议
 
-建议下一阶段如继续 CI 自动化，优先进入：
+建议下一阶段优先进入：
 
 ```text
-Transform Runtime Smoke PR Check Observation MVP
+Standard Event Transform Shadow/Precheck Alignment MVP
 ```
 
 目标建议：
 
-- 观察 `Transform Runtime Smoke` 的 `pull_request` non-required check 运行结果。
-- 记录至少 3-5 次 PR check 的运行结果、耗时、失败原因、artifact 内容和 flake 情况。
-- 不设置 required check。
-- 不挂 `push` trigger。
-- 保持 manual workflow 作为人工验证入口。
-- 继续保留 artifact / logs 安全边界。
-- 观察 3-5 次运行稳定性、耗时、runner / Docker / Maven / 网络 flake 风险。
-- required gate 需等 non-required PR check 稳定运行后再单独评估。
+- 盘点 `IngestionPlanShadowRunService`、`IngestionPlanPrecheckService` 与正式 sync 的 transform 判断差异。
+- 明确 ShadowRun / Precheck 是否应复用 `TransformRuntimeClient`、`edsp-transform-contract` DTO 或独立轻量 adapter。
+- 对齐字段映射、dedup fields、severity / actor / externalId 等关键转换口径。
+- 不改变默认 `runtime-mode=local`。
+- 不删除 `edsp-core -> edsp-transform`。
+- 不默认 remote / fallback。
+- 不修改 transform-service HTTP API 或 contract DTO。
+- 不新增 migration / Gateway / Nacos / metrics / structured logging / tracing。
+
+如果继续 CI 自动化，可单独排期：
+
+- `Transform Runtime Smoke PR Check Observation MVP`
+  - 观察 `Transform Runtime Smoke` 的 `pull_request` non-required check 运行结果。
+  - 记录至少 3-5 次 PR check 的运行结果、耗时、失败原因、artifact 内容和 flake 情况。
+  - 不设置 required check。
+  - 不挂 `push` trigger。
+  - 保持 manual workflow 作为人工验证入口。
+  - 继续保留 artifact / logs 安全边界。
+  - required gate 需等 non-required PR check 稳定运行后再单独评估。
 - 继续保持 `runtime-mode=local` 默认值。
-- 不新增 Gateway / Nacos / service discovery。
-- 不修改 transform runtime 业务语义。
 - 不执行 destructive volume cleanup。
-
-如果优先统一转换判断口径，可单独排期：
-
-- `Standard Event Transform Shadow/Precheck Alignment MVP`
 
 如继续推进 transform runtime 观测，可在 compose 隔离完成后单独排期：
 

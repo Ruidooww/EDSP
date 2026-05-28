@@ -3,6 +3,13 @@ package com.edsp.core.service;
 import com.edsp.core.dto.IngestionPlanShadowRunRequest;
 import com.edsp.core.dto.IngestionPlanShadowValidationRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.core.transform.TransformPlanSupport;
+import com.edsp.core.transform.runtime.TransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformRuntimeException;
+import com.edsp.core.transform.runtime.TransformRuntimeReport;
+import com.edsp.transform.contract.BatchTransformRequest;
+import com.edsp.transform.contract.TransformDraftDto;
+import com.edsp.transform.contract.TransformResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,43 +44,31 @@ public class IngestionPlanShadowRunService {
     private static final Set<String> RUN_ALLOWED_PLAN_STATUSES = Set.of("approved", "shadow_ready");
     private static final List<String> EXCLUDED_SEMANTICS = List.of("detail");
     private static final List<String> EXCLUDED_FIELD_PATTERNS = List.of("payload", "raw", "content", "body");
-    private static final Map<String, String> NORMALIZED_SEVERITIES = Map.ofEntries(
-        Map.entry("critical", "critical"),
-        Map.entry("严重", "critical"),
-        Map.entry("1", "critical"),
-        Map.entry("high", "high"),
-        Map.entry("高", "high"),
-        Map.entry("2", "high"),
-        Map.entry("medium", "medium"),
-        Map.entry("中", "medium"),
-        Map.entry("一般", "medium"),
-        Map.entry("warning", "medium"),
-        Map.entry("3", "medium"),
-        Map.entry("low", "low"),
-        Map.entry("低", "low"),
-        Map.entry("4", "low"),
-        Map.entry("info", "info"),
-        Map.entry("提示", "info")
-    );
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final CoreRequestSupport support;
     private final IngestionPlanPrecheckService precheckService;
     private final JdbcShadowSampleService sampleService;
+    private final TransformPlanSupport planSupport;
+    private final TransformRuntimeClient transformRuntimeClient;
 
     public IngestionPlanShadowRunService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
         CoreRequestSupport support,
         IngestionPlanPrecheckService precheckService,
-        JdbcShadowSampleService sampleService
+        JdbcShadowSampleService sampleService,
+        TransformPlanSupport planSupport,
+        TransformRuntimeClient transformRuntimeClient
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.support = support;
         this.precheckService = precheckService;
         this.sampleService = sampleService;
+        this.planSupport = planSupport;
+        this.transformRuntimeClient = transformRuntimeClient;
     }
 
     public Map<String, Object> createShadowRun(long planId, IngestionPlanShadowRunRequest request) {
@@ -98,7 +93,7 @@ public class IngestionPlanShadowRunService {
         }
 
         try {
-            var plan = parsePlan(planRow.get("plan_json"));
+            var plan = planSupport.parsePlan(planRow.get("plan_json"));
             var source = loadSource(planRow, plan);
             var rows = sampleService.sample(
                 source.sourceType(),
@@ -145,7 +140,7 @@ public class IngestionPlanShadowRunService {
                 startedAt, error, report);
             return runRow(runId, true);
         } catch (RuntimeException ex) {
-            var error = support.stringOrDefault(ex.getMessage(), "Shadow run failed");
+            var error = sanitizedError(ex, "Shadow run failed");
             var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
             report.put("status", "failed");
             report.put("summary", summary("failed", sampleLimit, 0, 0, 0, 0, 0));
@@ -194,10 +189,8 @@ public class IngestionPlanShadowRunService {
         Source source,
         List<Map<String, Object>> rows
     ) {
-        var fieldMappings = fieldMappingSources(source.plan());
-        var dedupFields = dedupFields(source.plan());
-        var occurredAtField = sourceFieldForStandardField(fieldMappings, "occurredAt");
-        var severityField = sourceFieldForStandardField(fieldMappings, "severity");
+        var mappingPlan = planSupport.mappingPlan(source.plan());
+        var fieldMappings = mappingPlan.fieldMappings();
         var seenDedupKeys = new LinkedHashSet<String>();
         var samples = new ArrayList<Map<String, Object>>();
         var errorsByType = new LinkedHashMap<String, Integer>();
@@ -207,61 +200,51 @@ public class IngestionPlanShadowRunService {
         var duplicateCount = 0;
         var missingRequiredCount = 0;
 
-        for (var sourceRow : rows) {
-            var errors = new ArrayList<String>();
-            var sampleWarnings = new ArrayList<String>();
-            OffsetDateTime parsedOccurredAt = null;
-            String normalizedSeverity = null;
-            var missingRequired = false;
-            if (occurredAtField == null || blank(sourceRow.get(occurredAtField))) {
-                errors.add("missing_occurred_at");
-                increment(errorsByType, "missing_occurred_at");
-                missingRequired = true;
-            } else {
-                try {
-                    parsedOccurredAt = support.parseTime(String.valueOf(sourceRow.get(occurredAtField)));
-                    if (parsedOccurredAt == null) {
-                        errors.add("missing_occurred_at");
-                        increment(errorsByType, "missing_occurred_at");
-                        missingRequired = true;
-                    }
-                } catch (RuntimeException ex) {
-                    errors.add("invalid_time_format");
-                    increment(errorsByType, "invalid_time_format");
-                }
-            }
-            if (severityField != null) {
-                normalizedSeverity = normalizeSeverity(sourceRow.get(severityField));
-                if (normalizedSeverity == null) {
-                    errors.add("severity_unrecognized");
-                    increment(errorsByType, "severity_unrecognized");
-                }
-            }
-            var dedupKey = dedupKey(sourceRow, dedupFields);
-            if (dedupKey == null) {
-                errors.add("dedup_key_missing");
-                increment(errorsByType, "dedup_key_missing");
-                missingRequired = true;
-            } else if (!seenDedupKeys.add(dedupKey)) {
-                duplicateCount++;
-                sampleWarnings.add("duplicate_in_sample");
-                warnings.add("duplicate_in_sample");
-            }
-            if (errors.isEmpty()) {
-                successCount++;
-            } else {
-                failedCount++;
-                if (missingRequired) {
-                    missingRequiredCount++;
-                }
-            }
-            samples.add(samplePreview(sourceRow, source.selectedFields(), fieldMappings,
-                source.fieldMetadata(), dedupKey == null ? null : sha256(dedupKey), parsedOccurredAt,
-                normalizedSeverity, errors, sampleWarnings));
-        }
-
         if (rows.isEmpty()) {
             warnings.add("no_sample_rows");
+        } else {
+            var request = new BatchTransformRequest(
+                rows,
+                mappingPlan,
+                planSupport.options(dataSourceId, source.schemaTableId(), source.tableName(), "shadow_run")
+            );
+            var transformBatch = transformRuntimeClient.transform(request);
+            var transformResults = transformBatch.results();
+            validateTransformResults(transformResults, rows.size());
+
+            for (var index = 0; index < rows.size(); index++) {
+                var sourceRow = rows.get(index);
+                var response = transformResults.get(index);
+                var errors = new ArrayList<>(response.errors());
+                var sampleWarnings = new ArrayList<>(response.warnings());
+                errors.forEach(error -> increment(errorsByType, error));
+                warnings.addAll(sampleWarnings);
+
+                var draft = response.draft();
+                var dedupKey = draft.dedupKey();
+                if (dedupKey == null || dedupKey.isBlank()) {
+                    if (!errors.contains("dedup_key_missing")) {
+                        errors.add("dedup_key_missing");
+                        increment(errorsByType, "dedup_key_missing");
+                    }
+                } else if (!seenDedupKeys.add(dedupKey)) {
+                    duplicateCount++;
+                    sampleWarnings.add("duplicate_in_sample");
+                    warnings.add("duplicate_in_sample");
+                }
+
+                if (errors.isEmpty()) {
+                    successCount++;
+                } else {
+                    failedCount++;
+                    if (hasMissingRequiredError(errors)) {
+                        missingRequiredCount++;
+                    }
+                }
+                samples.add(samplePreview(sourceRow, source.selectedFields(), fieldMappings,
+                    source.fieldMetadata(), response, dedupKey == null || dedupKey.isBlank() ? null : sha256(dedupKey),
+                    errors, sampleWarnings));
+            }
         }
         var precheckResult = support.stringOrDefault(precheck.get("result"), "passed");
         var status = failedCount > 0 || duplicateCount > 0 || !warnings.isEmpty() || "warning".equals(precheckResult)
@@ -282,19 +265,75 @@ public class IngestionPlanShadowRunService {
         return new Analysis(status, successCount, failedCount, duplicateCount, missingRequiredCount, report);
     }
 
+    private void validateTransformResults(List<TransformResponse> results, int expectedRows) {
+        if (results == null || results.size() != expectedRows) {
+            throw invalidRuntimeResponse("Transform runtime returned invalid result size");
+        }
+        for (var response : results) {
+            if (response == null || response.draft() == null) {
+                throw invalidRuntimeResponse("Transform runtime returned empty draft");
+            }
+        }
+    }
+
+    private TransformRuntimeException invalidRuntimeResponse(String message) {
+        return new TransformRuntimeException(
+            "remote_invalid_response",
+            message,
+            TransformRuntimeReport.remoteFailure(transformRuntimeClient.mode(), "remote_invalid_response", false)
+        );
+    }
+
+    private boolean hasMissingRequiredError(List<String> errors) {
+        return errors.contains("missing_occurred_at") || errors.contains("dedup_key_missing");
+    }
+
+    private Object runtimeMappedValue(TransformDraftDto draft, String standardField) {
+        var mapped = runtimeMappedValues(draft);
+        if (mapped.containsKey(standardField)) {
+            return mapped.get(standardField);
+        }
+        return switch (standardField) {
+            case "externalId" -> draft.externalId();
+            case "eventType" -> draft.eventType();
+            case "actor" -> draft.actor();
+            case "assetRef" -> draft.assetRef();
+            case "subjectType" -> draft.subjectType();
+            case "subjectRef" -> draft.subjectRef();
+            case "action" -> draft.action();
+            case "result" -> draft.result();
+            case "riskScore" -> draft.riskScore();
+            default -> null;
+        };
+    }
+
+    private Map<String, Object> runtimeMappedValues(TransformDraftDto draft) {
+        if (draft.normalized().get("mapped") instanceof Map<?, ?> mapped) {
+            var values = new LinkedHashMap<String, Object>();
+            for (var entry : mapped.entrySet()) {
+                var key = support.stringOrNull(entry.getKey());
+                if (key != null) {
+                    values.put(key, entry.getValue());
+                }
+            }
+            return values;
+        }
+        return Map.of();
+    }
+
     private Map<String, Object> samplePreview(
         Map<String, Object> sourceRow,
         List<String> selectedFields,
         Map<String, String> fieldMappings,
         Map<String, FieldMetadata> metadata,
+        TransformResponse response,
         String dedupKeyPreview,
-        OffsetDateTime parsedOccurredAt,
-        String normalizedSeverity,
         List<String> errors,
         List<String> warnings
     ) {
         var sourcePreview = new LinkedHashMap<String, Object>();
         var standardPreview = new LinkedHashMap<String, Object>();
+        var draft = response.draft();
         for (var sourceField : selectedFields) {
             var value = sourceRow.get(sourceField);
             var fieldMetadata = metadata.getOrDefault(sourceField, new FieldMetadata(sourceField, ""));
@@ -305,16 +344,16 @@ public class IngestionPlanShadowRunService {
             if ("occurredAt".equals(standardField) || "severity".equals(standardField)) {
                 continue;
             }
-            var value = sourceRow.get(entry.getKey());
+            var value = runtimeMappedValue(draft, standardField);
             var fieldMetadata = metadata.getOrDefault(entry.getKey(), new FieldMetadata(entry.getKey(), ""));
             standardPreview.put(standardField, standardPreviewValue(standardField, entry.getKey(),
                 fieldMetadata.semanticType(), value));
         }
-        if (parsedOccurredAt != null) {
-            standardPreview.put("occurredAt", parsedOccurredAt.toString());
+        if (draft.occurredAt() != null && !draft.occurredAt().isBlank()) {
+            standardPreview.put("occurredAt", draft.occurredAt());
         }
-        if (normalizedSeverity != null) {
-            standardPreview.put("severity", normalizedSeverity);
+        if (draft.severity() != null && !draft.severity().isBlank()) {
+            standardPreview.put("severity", draft.severity());
         }
         var sample = new LinkedHashMap<String, Object>();
         sample.put("sourcePreview", sourcePreview);
@@ -378,7 +417,7 @@ public class IngestionPlanShadowRunService {
             throw new PlanBlockerException("source_table_missing", "source_table", "Plan source table is not active");
         }
         var tableRow = tableRows.get(0);
-        var selectedFields = selectedFields(plan);
+        var selectedFields = planSupport.selectedFields(plan);
         var metadata = loadFieldMetadata(schemaTableId, selectedFields);
         var activeFields = metadata.keySet();
         var missing = selectedFields.stream().filter(field -> !activeFields.contains(field)).toList();
@@ -394,6 +433,7 @@ public class IngestionPlanShadowRunService {
             tableRow.get("config_json"),
             support.stringOrNull(tableRow.get("schema_name")),
             support.stringOrDefault(tableRow.get("table_name"), support.stringOrDefault(plan.get("mainTable"), "")),
+            schemaTableId,
             selectedFields,
             metadata,
             plan
@@ -417,81 +457,6 @@ public class IngestionPlanShadowRunService {
             }
         }
         return metadata;
-    }
-
-    private List<String> selectedFields(Map<String, Object> plan) {
-        var selected = new LinkedHashSet<String>();
-        selected.addAll(fieldMappingSources(plan).keySet());
-        selected.addAll(dedupFields(plan));
-        var cursorField = support.stringOrNull(plan.get("cursorField"));
-        if (cursorField != null) {
-            selected.add(cursorField);
-        }
-        return new ArrayList<>(selected);
-    }
-
-    private Map<String, String> fieldMappingSources(Map<String, Object> plan) {
-        var mappings = new LinkedHashMap<String, String>();
-        if (plan.get("fieldMappings") instanceof Map<?, ?> fields) {
-            for (var entry : fields.entrySet()) {
-                var sourceField = support.stringOrNull(entry.getKey());
-                var standardField = support.stringOrNull(entry.getValue());
-                if (sourceField != null && standardField != null) {
-                    mappings.put(sourceField, standardField);
-                }
-            }
-        }
-        if (mappings.isEmpty() && plan.get("fieldMappingDetails") instanceof List<?> details) {
-            for (var item : details) {
-                if (!(item instanceof Map<?, ?> mapping)) {
-                    continue;
-                }
-                var sourceField = support.stringOrNull(mapping.get("sourceField"));
-                var standardField = support.stringOrNull(mapping.get("standardField"));
-                if (sourceField != null && standardField != null) {
-                    mappings.put(sourceField, standardField);
-                }
-            }
-        }
-        return mappings;
-    }
-
-    private String sourceFieldForStandardField(Map<String, String> fieldMappings, String standardField) {
-        for (var entry : fieldMappings.entrySet()) {
-            if (standardField.equals(entry.getValue())) {
-                return entry.getKey();
-            }
-        }
-        return null;
-    }
-
-    private List<String> dedupFields(Map<String, Object> plan) {
-        if (!(plan.get("dedupStrategy") instanceof Map<?, ?> strategy)) {
-            return List.of();
-        }
-        return stringList(strategy.get("fields"));
-    }
-
-    private String dedupKey(Map<String, Object> row, List<String> fields) {
-        if (fields.isEmpty()) {
-            return null;
-        }
-        var values = new ArrayList<String>();
-        for (var field : fields) {
-            if (blank(row.get(field))) {
-                return null;
-            }
-            values.add(String.valueOf(row.get(field)));
-        }
-        return String.join("|", values);
-    }
-
-    private String normalizeSeverity(Object value) {
-        var text = support.stringOrNull(value);
-        if (text == null) {
-            return null;
-        }
-        return NORMALIZED_SEVERITIES.get(text.toLowerCase(Locale.ROOT));
     }
 
     private Map<String, Object> reportSkeleton(
@@ -542,6 +507,20 @@ public class IngestionPlanShadowRunService {
         check.put("message", message);
         check.put("blockers", ex.blockers());
         return check;
+    }
+
+    private String sanitizedError(RuntimeException ex, String fallback) {
+        if (ex instanceof TransformRuntimeException runtimeException) {
+            var failureType = support.stringOrDefault(runtimeException.failureType(), "execution_failed");
+            return "Transform runtime failed: " + failureType;
+        }
+        var message = support.stringOrDefault(ex.getMessage(), fallback);
+        var sanitized = message
+            .replaceAll("(?i)(password|pwd|token|secret|credential|authorization|cookie)\\s*[:=]\\s*[^,;\\s}\\]]+", "$1=******")
+            .replaceAll("(?i)(jdbcUrl|jdbc_url)\\s*[:=]\\s*[^,;\\s}\\]]+", "$1=******")
+            .replaceAll("(?i)jdbc:[^,;\\s}\\]]+", "jdbc:******")
+            .replaceAll("(?i)(raw_payload|payload|raw|detail)\\s*[:=]\\s*[^,;\\s}\\]]+", "$1=******");
+        return sanitized.length() > MAX_VALUE_LENGTH ? sanitized.substring(0, MAX_VALUE_LENGTH) : sanitized;
     }
 
     private Map<String, Object> previewPolicy() {
@@ -675,10 +654,6 @@ public class IngestionPlanShadowRunService {
         return key.longValue();
     }
 
-    private Map<String, Object> parsePlan(Object value) {
-        return parseJson(value);
-    }
-
     private Map<String, Object> parseJson(Object value) {
         if (value == null) {
             return Map.of();
@@ -733,10 +708,6 @@ public class IngestionPlanShadowRunService {
         }
     }
 
-    private boolean blank(Object value) {
-        return support.stringOrNull(value) == null;
-    }
-
     private boolean excludedFieldPattern(String fieldName) {
         var normalized = fieldName == null ? "" : fieldName.toLowerCase(Locale.ROOT);
         return EXCLUDED_FIELD_PATTERNS.stream().anyMatch(normalized::contains);
@@ -760,6 +731,7 @@ public class IngestionPlanShadowRunService {
         Object configJson,
         String schemaName,
         String tableName,
+        Long schemaTableId,
         List<String> selectedFields,
         Map<String, FieldMetadata> fieldMetadata,
         Map<String, Object> plan

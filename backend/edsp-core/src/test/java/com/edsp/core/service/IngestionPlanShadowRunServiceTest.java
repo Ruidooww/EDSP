@@ -8,13 +8,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.core.dto.IngestionPlanShadowRunRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.core.transform.TransformPlanSupport;
+import com.edsp.core.transform.runtime.LocalTransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformBatchResult;
+import com.edsp.core.transform.runtime.TransformRuntimeClient;
+import com.edsp.core.transform.runtime.TransformRuntimeException;
+import com.edsp.core.transform.runtime.TransformRuntimeReport;
+import com.edsp.transform.contract.BatchTransformRequest;
+import com.edsp.transform.contract.TransformDraftDto;
+import com.edsp.transform.contract.TransformResponse;
+import com.edsp.transform.standardevent.StandardEventTransformService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.sql.DriverManager;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import org.flywaydb.core.Flyway;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +42,7 @@ class IngestionPlanShadowRunServiceTest {
     private JdbcTemplate jdbcTemplate;
     private ObjectMapper objectMapper;
     private IngestionPlanShadowRunService service;
+    private RecordingTransformRuntimeClient transformRuntimeClient;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -60,7 +73,19 @@ class IngestionPlanShadowRunServiceTest {
         var support = new CoreRequestSupport(objectMapper);
         var precheckService = new IngestionPlanPrecheckService(jdbcTemplate, objectMapper, support);
         var sampleService = new JdbcShadowSampleService(objectMapper);
-        service = new IngestionPlanShadowRunService(jdbcTemplate, objectMapper, support, precheckService, sampleService);
+        var planSupport = new TransformPlanSupport(objectMapper, support);
+        transformRuntimeClient = new RecordingTransformRuntimeClient(
+            new LocalTransformRuntimeClient(new StandardEventTransformService())
+        );
+        service = new IngestionPlanShadowRunService(
+            jdbcTemplate,
+            objectMapper,
+            support,
+            precheckService,
+            sampleService,
+            planSupport,
+            transformRuntimeClient
+        );
         resetSourceDatabase();
     }
 
@@ -81,6 +106,15 @@ class IngestionPlanShadowRunServiceTest {
 
         var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(5000));
 
+        assertEquals(1, transformRuntimeClient.calls);
+        assertEquals(2, transformRuntimeClient.lastRequest.rows().size());
+        assertEquals("externalId", transformRuntimeClient.lastRequest.mappingPlan().fieldMappings().get("id"));
+        assertEquals("occurredAt", transformRuntimeClient.lastRequest.mappingPlan().fieldMappings().get("create_time"));
+        assertEquals(List.of("id"), transformRuntimeClient.lastRequest.mappingPlan().dedupFields());
+        assertEquals(dataSourceId, transformRuntimeClient.lastRequest.options().dataSourceId());
+        assertEquals(tableId, transformRuntimeClient.lastRequest.options().schemaTableId());
+        assertEquals("sec_alert_event", transformRuntimeClient.lastRequest.options().sourceTable());
+        assertEquals("shadow_run", transformRuntimeClient.lastRequest.options().syncMode());
         assertEquals("passed", run.get("status"));
         assertEquals(100, ((Number) run.get("sampleLimit")).intValue());
         assertEquals(2, ((Number) run.get("readCount")).intValue());
@@ -152,7 +186,7 @@ class IngestionPlanShadowRunServiceTest {
     void createShadowRunWarnsOnInvalidTimeAndSeverityWhileNormalizingValidPreview() throws Exception {
         executeSourceSql("""
             update sec_alert_event
-            set risk_level = case id when 'ALERT-1' then '高' else 'unknown-level' end,
+            set risk_level = case id when 'ALERT-1' then 'high' else 'unknown-level' end,
                 create_time = case id when 'ALERT-1' then '2026-05-20 10:30:00' else 'not-a-time' end
             """);
         var dataSourceId = insertDataSource(SOURCE_URL);
@@ -184,7 +218,7 @@ class IngestionPlanShadowRunServiceTest {
         assertTrue(stringList(failedSample.get("errors")).contains("severity_unrecognized"));
         var failedStandardPreview = objectValue(failedSample.get("standardEventPreview"));
         assertFalse(failedStandardPreview.containsKey("occurredAt"));
-        assertFalse(failedStandardPreview.containsKey("severity"));
+        assertEquals("info", failedStandardPreview.get("severity"));
         var validSample = samples.stream()
             .filter(sample -> "ALERT-1".equals(objectValue(sample.get("sourcePreview")).get("id")))
             .findFirst()
@@ -207,12 +241,11 @@ class IngestionPlanShadowRunServiceTest {
         insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
         insertField(tableId, scanRunId, "risk_level", "varchar", 6, null);
         var planId = insertSeverityPlan(dataSourceId, scanRunId, tableId);
-
         for (var entry : Map.of(
             "warning", "medium",
             "1", "critical",
-            "严重", "critical",
-            "提示", "info"
+            "2", "high",
+            "4", "low"
         ).entrySet()) {
             updateSourceSeverity(entry.getKey());
 
@@ -248,6 +281,40 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals(0, ((Number) run.get("failedCount")).intValue());
         var report = objectValue(run.get("report"));
         assertTrue(stringList(report.get("warnings")).contains("no_sample_rows"));
+        assertEquals(0, transformRuntimeClient.calls);
+    }
+
+    @Test
+    void createShadowRunUsesRuntimeDraftDedupKeyForDuplicatePreview() {
+        transformRuntimeClient.handler = request -> new TransformBatchResult(List.of(
+            response("runtime-dedup-key", "ALERT-1", "high", "2026-05-20T10:30+08:00", Map.of()),
+            response("runtime-dedup-key", "ALERT-2", "high", "2026-05-20T10:31+08:00", Map.of())
+        ), TransformRuntimeReport.disabled());
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        insertField(tableId, scanRunId, "user_account", "varchar", 4, null);
+        insertField(tableId, scanRunId, "phone", "varchar", 6, "sensitive_value");
+        insertField(tableId, scanRunId, "raw_payload", "json", 7, "detail");
+        insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId, "approved");
+
+        var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
+
+        assertEquals("warning", run.get("status"));
+        assertEquals(2, ((Number) run.get("successCount")).intValue());
+        assertEquals(1, ((Number) run.get("duplicateCount")).intValue());
+        var report = objectValue(run.get("report"));
+        assertTrue(stringList(report.get("warnings")).contains("duplicate_in_sample"));
+        var duplicateSample = objectList(report.get("samples")).stream()
+            .filter(sample -> stringList(sample.get("warnings")).contains("duplicate_in_sample"))
+            .findFirst()
+            .orElseThrow();
+        assertEquals(64, String.valueOf(duplicateSample.get("dedupKeyPreview")).length());
+        assertFalse(String.valueOf(duplicateSample.get("dedupKeyPreview")).contains("runtime-dedup-key"));
     }
 
     @Test
@@ -354,6 +421,42 @@ class IngestionPlanShadowRunServiceTest {
         assertFalse(String.valueOf(run.get("errorMessage")).contains("super-secret"));
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         assertEquals(0L, count("standard_events"));
+    }
+
+    @Test
+    void createShadowRunPersistsFailedRunWhenRuntimeFailsWithoutWritingBusinessTables() {
+        transformRuntimeClient.failure = new TransformRuntimeException(
+            "remote_unavailable",
+            "remote failed password=super-secret jdbcUrl=" + SOURCE_URL + " raw_payload=raw secret payload",
+            TransformRuntimeReport.remoteFailure("remote", "remote_unavailable", false)
+        );
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        insertField(tableId, scanRunId, "user_account", "varchar", 4, null);
+        insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
+        insertField(tableId, scanRunId, "phone", "varchar", 6, "sensitive_value");
+        insertField(tableId, scanRunId, "raw_payload", "json", 7, "detail");
+        var planId = insertPlan(dataSourceId, scanRunId, tableId, "approved");
+
+        var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
+
+        assertEquals("failed", run.get("status"));
+        assertEquals(1, transformRuntimeClient.calls);
+        var errorMessage = String.valueOf(run.get("errorMessage"));
+        assertTrue(errorMessage.contains("remote_unavailable"));
+        assertFalse(errorMessage.contains("super-secret"));
+        assertFalse(errorMessage.contains(SOURCE_URL));
+        assertFalse(errorMessage.contains("raw secret payload"));
+        assertEquals("approved", planStatus(planId));
+        assertEquals(1L, count("ingestion_plan_shadow_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
     }
 
     private void resetSourceDatabase() throws Exception {
@@ -675,6 +778,73 @@ class IngestionPlanShadowRunServiceTest {
             return objectMapper.convertValue(node, new TypeReference<>() {});
         } catch (JsonProcessingException ex) {
             return Map.of();
+        }
+    }
+
+    private TransformResponse response(
+        String dedupKey,
+        String externalId,
+        String severity,
+        String occurredAt,
+        Map<String, Object> mapped
+    ) {
+        var normalized = new LinkedHashMap<String, Object>();
+        normalized.put("mapped", mapped.isEmpty()
+            ? Map.of(
+                "externalId", externalId,
+                "occurredAt", occurredAt,
+                "title", "runtime title",
+                "actor", "runtime actor",
+                "assetRef", "runtime asset",
+                "severity", severity
+            )
+            : mapped);
+        return new TransformResponse(new TransformDraftDto(
+            "ds:1:st:1",
+            externalId,
+            "ingestion_plan_event",
+            occurredAt,
+            "runtime actor",
+            "runtime asset",
+            "event",
+            "runtime asset",
+            null,
+            "detected",
+            severity,
+            80,
+            dedupKey,
+            normalized,
+            Map.of("syncMode", "shadow_run")
+        ), List.of(), List.of());
+    }
+
+    private static final class RecordingTransformRuntimeClient implements TransformRuntimeClient {
+        private final TransformRuntimeClient delegate;
+        private int calls;
+        private BatchTransformRequest lastRequest;
+        private RuntimeException failure;
+        private Function<BatchTransformRequest, TransformBatchResult> handler;
+
+        private RecordingTransformRuntimeClient(TransformRuntimeClient delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String mode() {
+            return delegate.mode();
+        }
+
+        @Override
+        public TransformBatchResult transform(BatchTransformRequest request) {
+            calls++;
+            lastRequest = request;
+            if (failure != null) {
+                throw failure;
+            }
+            if (handler != null) {
+                return handler.apply(request);
+            }
+            return delegate.transform(request);
         }
     }
 }

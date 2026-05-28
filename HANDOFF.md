@@ -357,6 +357,7 @@
   - 阶段分支 review 期间不要求真实 `workflow_dispatch` run，因为新增 workflow 文件需先进入 default branch。
 - Transform Runtime Smoke Manual Workflow MVP post-merge 手动验证：
   - GitHub Actions workflow：`Transform Runtime Smoke`。
+  - Run：`#1`。
   - 触发方式：manual `workflow_dispatch`。
   - 运行分支：`master`。
   - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26549739874`。
@@ -365,16 +366,27 @@
   - 运行结果：`Success`。
   - 运行环境：`ubuntu-24.04` / `ubuntu-latest`。
   - 总耗时：`3m21s`。
+  - GitHub token 权限：`contents: read` / `metadata: read`。
+  - Checkout 成功。
+  - Docker / Docker Compose / PowerShell 版本输出成功。
+  - `docker compose -p edsp config --quiet` 成功。
+  - `Run transform runtime smoke` 成功。
+  - `Upload transform runtime smoke logs` 成功。
   - Artifact：`transform-runtime-smoke-26549739874-1`。
   - Artifact ID：`7256068684`。
   - Artifact size：`474 Bytes`。
   - Artifact expires：`2026-06-04`。
+  - Artifact 上传成功。
   - Artifact 内容确认：仅包含 `summary.json`。
   - `summary.json` 验证结果：
     - `remoteSuccess=PASS`。
     - `remoteUnavailable=PASS`。
     - `fallbackUnavailable=PASS`。
     - `transformRuntimeVerification=PASS`。
+    - `failureStage=null`。
+    - `failureType=null`。
+    - `failureMessage=null`。
+    - `warnings=[]`。
   - Artifact 安全边界确认：未包含 DB dump、完整 raw row、`data_sources.config_json`、完整 env 或 secret-like 内容。
   - 当前 warning：`actions/upload-artifact@v4` 存在 GitHub 平台 Node.js 20 deprecation warning，不影响本次成功，后续可作为 P2 跟踪。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。

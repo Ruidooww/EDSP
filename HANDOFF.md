@@ -1,16 +1,16 @@
 # 数据安全预警分析平台 Handoff
 
-更新时间：2026-05-27
+更新时间：2026-05-28
 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
 
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Runtime Readiness & Guard MVP`
-- 最新 feature merge commit：`f8f0edd merge: transform runtime readiness guard mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime readiness guard mvp`
-- 本轮阶段分支：`codex/transform-runtime-readiness-guard-mvp`
-- 本轮结果：在不接入 GitHub Actions、不修改 production runtime 语义的前提下，为 runtime smoke 增加 CI-ready 手工参数、失败 artifact 采集和非破坏性结束策略；同时将 transform dependency guard 收紧为显式 engine bridge allowlist，并守卫 `edsp-core` main code / Maven 依赖不得直接耦合 `edsp-transform-service`。
+- 当前阶段：`Transform Runtime Smoke Manual Workflow MVP`
+- 最新 feature merge commit：`3a7d3aa merge: transform runtime smoke manual workflow mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime smoke manual workflow mvp`
+- 本轮阶段分支：`codex/transform-runtime-smoke-manual-workflow-mvp`
+- 本轮结果：新增 manual-only GitHub Actions workflow，为 runtime smoke 提供 `workflow_dispatch` 手动触发入口；不修改现有 EDSP CI，不挂接 `push` / `pull_request`，不作为自动 CI gate；同时将 runtime smoke 端口检测改为跨平台 `TcpListener`，便于 GitHub-hosted `ubuntu-latest` runner 执行。
 
 ## 已完成能力
 
@@ -159,11 +159,23 @@
   - 使用 `docker compose -p <project> logs <service>`。
   - 使用 `docker compose -p <project> exec <service> ...`。
   - 不再建议使用固定容器名如 `docker logs edsp-core` / `docker exec edsp-postgres` / `docker stop edsp-core`。
-- runtime smoke 已增加 CI-readiness 参数，但尚未接入 CI：
+- runtime smoke 已增加 CI-readiness 参数：
   - `-CiMode` 未显式指定 project 时生成唯一 `ComposeProject`。
   - `-CollectLogsOnFailure` 仅在失败时收集有限、project-scoped 日志 artifact。
   - `-FinalAction Stop` 仅执行 `docker compose -p <project> stop`，不删除容器或 volume。
   - 默认 artifact 路径为 `logs/transform-runtime-smoke/<runId>/summary.json`，且 `logs/` 已由 `.gitignore` 忽略。
+- 新增 manual-only GitHub Actions workflow：
+  - 路径：`.github/workflows/transform-runtime-smoke.yml`。
+  - 只支持 `workflow_dispatch` 手动触发。
+  - 使用 `ubuntu-latest` 和 PowerShell `pwsh` 执行 runtime smoke。
+  - 使用 `-CiMode`、`-CollectLogsOnFailure`、`-FinalAction Stop` 和 `-ReadyAttempts 90`。
+  - 上传 `logs/transform-runtime-smoke/**` artifact，retention 为 7 天。
+  - 不修改现有 `.github/workflows/ci.yml`。
+  - 不挂接 `push` / `pull_request`，不作为自动 CI gate，不设置 required check。
+- runtime smoke 脚本端口检测已改为跨平台 `System.Net.Sockets.TcpListener` 探测：
+  - 空闲端口允许继续执行。
+  - 占用或不可绑定端口会在启动容器前失败。
+  - 不再依赖 Windows-only `Get-NetTCPConnection`。
 
 ## 明确未做 / 禁止误解
 
@@ -196,10 +208,10 @@
 - 本轮不删除 `edsp-core -> edsp-transform` 依赖。
 - 本轮不修改 backend / frontend 业务代码。
 - 本轮不新增 migration。
-- 本轮不接入 CI。
+- 本轮不接入自动 CI gate。
 - 本轮不新增 metrics / structured logging / tracing。
 - 本轮不修改 `report_json` schema，只验证已有 `transformRuntime` 字段。
-- 本轮不新增 GitHub Actions workflow 或 job。
+- 本轮仅新增 manual-only GitHub Actions workflow，不修改现有 EDSP CI，不挂接 `push` / `pull_request`。
 - 本轮不修改 `docker-compose.yml` 或 backend production Java。
 
 ## 当前关键边界
@@ -330,6 +342,19 @@
     - `FinalAction=Stop` 仅停止并保留 smoke 容器与 volume。
   - `git diff --check` 通过。
   - 范围检查确认仅阶段 test / smoke script / smoke doc 发生代码内容变更，不包含 production Java、frontend、migration、`docker-compose.yml` 或 GitHub Actions 变更。
+- Transform Runtime Smoke Manual Workflow MVP 合并前验证：
+  - workflow 静态检查通过：`.github/workflows/transform-runtime-smoke.yml` 只包含 `workflow_dispatch`，不包含 `push` / `pull_request` / `schedule`。
+  - 确认未修改现有 `.github/workflows/ci.yml`。
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-transform-runtime-smoke.ps1 -CiMode -FrontendPort 18140 -TransformPort 18145 -FinalAction Stop` 通过：
+    - `Remote success: PASS`。
+    - `Remote unavailable: PASS`。
+    - `Fallback unavailable: PASS`。
+    - `transformRuntime verification: PASS`。
+  - `mvn -pl edsp-core -am test` 通过，`146` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `docker compose -p edsp config --quiet` 通过。
+  - `git diff --check` 通过。
+  - 阶段分支 review 期间不要求真实 `workflow_dispatch` run，因为新增 workflow 文件需先进入 default branch。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -339,7 +364,7 @@
 - 本轮没有把 `edsp-core` 默认主链路切换到 remote / fallback transform。
 - Remote shadow 仍默认关闭；如手动开启，可通过 compose 内部地址 `http://edsp-transform-service:8085` 访问 transform service。
 - runtime-mode 仍默认 `local`；如手动切到 `remote` / `fallback`，需要确保 `edsp-transform-service` 在 runtime 中可用。
-- remote/fallback 已通过手工 Docker Compose runtime smoke 脚本验证核心场景；脚本现具备 CI-ready 参数与有限 artifact 采集能力，但尚未接入 CI。
+- remote/fallback 已通过手工 Docker Compose runtime smoke 脚本验证核心场景；脚本现具备 CI-ready 参数与有限 artifact 采集能力，并已提供 manual-only GitHub Actions 入口。
 - 本轮 runtime verification 使用 JDK `HttpServer` 驱动真实 remote client，未新增 Docker e2e 框架。
 - 固定 `container_name` 已移除，日常 runtime 与 smoke runtime 可通过不同 compose project 并行存在，前提是 host port 不冲突。
 - 当前 runtime smoke 脚本只检查当前 `ComposeProject` 下的容器；不会再全局拦截其他 project 的 EDSP 容器。
@@ -347,25 +372,32 @@
 - 当前仍不自动删除 volume；如需清理 smoke 容器 / volume，必须单独人工确认，且不得使用默认 destructive 命令。
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
-- Runtime smoke 尚未接入 CI，CI 化仍留给后续独立阶段。
+- Runtime smoke 已提供 `workflow_dispatch` 手动入口，但仍不是自动 CI gate；未挂接 `push` / `pull_request`，也不是 required check。
+- 因 GitHub Actions 的 `workflow_dispatch` 手动触发要求 workflow 文件已存在于 default branch，本阶段分支 review 期间不要求真实 Actions run；合并到 `master` 后，需要手动触发 `Transform Runtime Smoke`，并记录 run URL、result、artifact。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 
 ## 下一轮建议
 
-建议下一阶段优先进入：
+建议下一阶段优先完成 post-merge 验证：
 
 ```text
-Transform Runtime Smoke CI Integration MVP
+Transform Runtime Smoke Manual Workflow Post-Merge Verification
 ```
 
 目标建议：
 
-- 基于已完成的 compose project 隔离与 CI-ready smoke 参数，单独评估并实现 GitHub Actions runtime smoke job。
-- 明确 runner 资源、端口分配、artifact retention、失败现场保留与非破坏性清理策略。
+- 在 GitHub Actions 页面手动触发 `Transform Runtime Smoke`。
+- 记录 Actions run URL、result 和 artifact。
+- 确认输出包含 `Remote success: PASS`、`Remote unavailable: PASS`、`Fallback unavailable: PASS` 和 `transformRuntime verification: PASS`。
+- 确认 artifact 至少包含 `summary.json`，且不包含 DB dump、完整 raw row、`data_sources.config_json`、完整 env 或 secret-like 内容。
 - 继续保持 `runtime-mode=local` 默认值。
 - 不新增 Gateway / Nacos / service discovery。
 - 不修改 transform runtime 业务语义。
 - 不执行 destructive volume cleanup。
+
+如需继续推进自动化，再单独规划：
+
+- `Transform Runtime Smoke Auto CI Gate Evaluation MVP`
 
 如果优先统一转换判断口径，可单独排期：
 

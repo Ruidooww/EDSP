@@ -452,3 +452,15 @@ docker rm
 - 是否需要把 runtime smoke 升级为 PR / `master` 合并保护，避免影响常规 backend/frontend 快速验证。
 
 本轮不修改 production runtime 行为，不新增 metrics / structured logging / tracing，也不修改 `report_json` schema。
+
+## Stage update: Non-required PR check
+
+Current workflow state after `Transform Runtime Smoke Non-Required PR Check MVP`:
+
+- `.github/workflows/transform-runtime-smoke.yml` now supports:
+  - `workflow_dispatch`
+  - `pull_request` on `master`
+- This remains a non-required check (repository branch protection is unchanged).
+- `push` and `schedule` triggers are still not enabled.
+- Existing `.github/workflows/ci.yml` remains unchanged.
+- Runtime smoke command, artifact scope, and non-destructive cleanup policy remain unchanged.

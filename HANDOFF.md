@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Runtime Smoke Manual Workflow MVP`
-- 最新 feature merge commit：`3a7d3aa merge: transform runtime smoke manual workflow mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime smoke manual workflow mvp`
-- 本轮阶段分支：`codex/transform-runtime-smoke-manual-workflow-mvp`
-- 本轮结果：新增 manual-only GitHub Actions workflow，为 runtime smoke 提供 `workflow_dispatch` 手动触发入口；不修改现有 EDSP CI，不挂接 `push` / `pull_request`，不作为自动 CI gate；同时将 runtime smoke 端口检测改为跨平台 `TcpListener`，便于 GitHub-hosted `ubuntu-latest` runner 执行。
+- 当前阶段：`Transform Runtime Smoke Auto CI Gate Evaluation MVP`
+- 最新 feature merge commit：`b744293 merge: transform runtime smoke ci gate evaluation mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform runtime smoke ci gate evaluation mvp`
+- 本轮阶段分支：`codex/transform-runtime-smoke-auto-ci-gate-evaluation-mvp`
+- 本轮结果：新增 docs-only CI gate evaluation 文档，评估 `Transform Runtime Smoke` 是否适合从 manual-only workflow 扩展为自动 CI gate；本轮不修改 workflow、不挂接 `push` / `pull_request`、不设置 required check，当前建议继续保持 manual-only，如继续 CI 自动化则下一阶段先做 non-required PR check。
 
 ## 已完成能力
 
@@ -176,6 +176,17 @@
   - 空闲端口允许继续执行。
   - 占用或不可绑定端口会在启动容器前失败。
   - 不再依赖 Windows-only `Get-NetTCPConnection`。
+- 新增 CI gate evaluation 文档：
+  - 路径：`docs/transform-runtime-smoke-ci-gate-evaluation.md`。
+  - 本轮是 docs-only evaluation，不实施自动 CI gate。
+  - 文档记录 manual workflow 当前状态和 post-merge 成功结果。
+  - 文档评估 `push` trigger、`pull_request` trigger、required check、artifact retention、失败日志策略和 runner / Docker Compose / Maven / 网络 flake 风险。
+  - 当前建议保持 manual-only workflow。
+  - 当前不建议直接挂 `push` trigger。
+  - 当前不建议直接设置 required check。
+  - 如继续 CI 自动化，建议下一阶段先做 `Transform Runtime Smoke Non-Required PR Check MVP`。
+  - required gate 至少等 non-required PR check 稳定运行 3-5 次后再考虑。
+  - `actions/upload-artifact@v4` Node.js 20 deprecation warning 继续作为 P2 跟踪，不影响当前 workflow 成功。
 
 ## 明确未做 / 禁止误解
 
@@ -213,6 +224,9 @@
 - 本轮不修改 `report_json` schema，只验证已有 `transformRuntime` 字段。
 - 本轮仅新增 manual-only GitHub Actions workflow，不修改现有 EDSP CI，不挂接 `push` / `pull_request`。
 - 本轮不修改 `docker-compose.yml` 或 backend production Java。
+- 本轮 Auto CI Gate Evaluation 仅新增评估文档，不修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、migration 或 runtime 行为。
+- 本轮不新增 `push` / `pull_request` / `schedule` trigger。
+- 本轮不设置 required check。
 
 ## 当前关键边界
 
@@ -389,6 +403,17 @@
     - `warnings=[]`。
   - Artifact 安全边界确认：未包含 DB dump、完整 raw row、`data_sources.config_json`、完整 env 或 secret-like 内容。
   - 当前 warning：`actions/upload-artifact@v4` 存在 GitHub 平台 Node.js 20 deprecation warning，不影响本次成功，后续可作为 P2 跟踪。
+- Transform Runtime Smoke Auto CI Gate Evaluation MVP 合并前验证：
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - `git diff --name-only` 确认仅包含：
+    - `docs/transform-runtime-smoke-ci-gate-evaluation.md`
+    - `docs/transform-service-runtime-smoke-observability.md`
+  - forbidden files diff 检查通过，未修改 `.github/workflows/**`、`scripts/**`、backend、frontend、`docker-compose.yml`、`AGENTS.md` 或 `HANDOFF.md`。
+  - 文档内容检查确认 destructive cleanup 仅作为禁止项出现。
+  - 文档内容检查确认 `required check` 被明确标记为当前不建议。
+  - 文档内容检查确认 `push` trigger 被明确标记为当前不建议。
+  - 文档内容检查确认 `pull_request` non-required check 仅作为下一阶段候选，不是本轮实施项。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -408,21 +433,31 @@
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
 - Runtime smoke 已提供 `workflow_dispatch` 手动入口，但仍不是自动 CI gate；未挂接 `push` / `pull_request`，也不是 required check。
 - `Transform Runtime Smoke` 已在合并到 `master` 后完成第一次 manual `workflow_dispatch` 验证，结果为 `Success`，artifact 已确认仅包含 `summary.json`。
+- Auto CI Gate Evaluation 已完成，当前建议保持 manual-only workflow。
+- 当前不建议直接挂 `push` trigger。
+- 当前不建议直接设置 required check。
+- 如果继续 CI 自动化，建议下一阶段先做 `Transform Runtime Smoke Non-Required PR Check MVP`。
+- required gate 至少等 non-required PR check 稳定运行 3-5 次后再考虑。
+- `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 
 ## 下一轮建议
 
-建议下一阶段按需评估自动化 CI gate：
+建议下一阶段如继续 CI 自动化，优先进入：
 
 ```text
-Transform Runtime Smoke Auto CI Gate Evaluation MVP
+Transform Runtime Smoke Non-Required PR Check MVP
 ```
 
 目标建议：
 
-- 评估是否将 manual-only runtime smoke 扩展为 `push` / `pull_request` 自动 CI gate。
-- 明确是否作为 required check，以及 runner 资源、端口分配、artifact retention、失败现场保留与非破坏性清理策略。
-- 如果暂不设置 required check，继续保持 manual workflow 作为人工验证入口。
+- 将 `Transform Runtime Smoke` 作为 `pull_request` non-required check 试运行。
+- 不设置 required check。
+- 不挂 `push` trigger。
+- 保持 manual workflow 作为人工验证入口。
+- 继续保留 artifact / logs 安全边界。
+- 观察 3-5 次运行稳定性、耗时、runner / Docker / Maven / 网络 flake 风险。
+- required gate 需等 non-required PR check 稳定运行后再单独评估。
 - 继续保持 `runtime-mode=local` 默认值。
 - 不新增 Gateway / Nacos / service discovery。
 - 不修改 transform runtime 业务语义。

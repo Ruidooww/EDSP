@@ -355,6 +355,28 @@
   - `docker compose -p edsp config --quiet` 通过。
   - `git diff --check` 通过。
   - 阶段分支 review 期间不要求真实 `workflow_dispatch` run，因为新增 workflow 文件需先进入 default branch。
+- Transform Runtime Smoke Manual Workflow MVP post-merge 手动验证：
+  - GitHub Actions workflow：`Transform Runtime Smoke`。
+  - 触发方式：manual `workflow_dispatch`。
+  - 运行分支：`master`。
+  - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26549739874`。
+  - Job URL：`https://github.com/Ruidooww/EDSP/actions/runs/26549739874/job/78209198316`。
+  - 运行 commit：`6266964`。
+  - 运行结果：`Success`。
+  - 运行环境：`ubuntu-24.04` / `ubuntu-latest`。
+  - 总耗时：`3m21s`。
+  - Artifact：`transform-runtime-smoke-26549739874-1`。
+  - Artifact ID：`7256068684`。
+  - Artifact size：`474 Bytes`。
+  - Artifact expires：`2026-06-04`。
+  - Artifact 内容确认：仅包含 `summary.json`。
+  - `summary.json` 验证结果：
+    - `remoteSuccess=PASS`。
+    - `remoteUnavailable=PASS`。
+    - `fallbackUnavailable=PASS`。
+    - `transformRuntimeVerification=PASS`。
+  - Artifact 安全边界确认：未包含 DB dump、完整 raw row、`data_sources.config_json`、完整 env 或 secret-like 内容。
+  - 当前 warning：`actions/upload-artifact@v4` 存在 GitHub 平台 Node.js 20 deprecation warning，不影响本次成功，后续可作为 P2 跟踪。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -373,31 +395,26 @@
 - `IngestionPlanShadowRunService` 和 `IngestionPlanPrecheckService` 暂未接入 `edsp-transform` / remote shadow。
 - 后续如果要让 remote/fallback 成为推荐运行模式，需要单独规划 runtime smoke、观测、回滚和运维边界。
 - Runtime smoke 已提供 `workflow_dispatch` 手动入口，但仍不是自动 CI gate；未挂接 `push` / `pull_request`，也不是 required check。
-- 因 GitHub Actions 的 `workflow_dispatch` 手动触发要求 workflow 文件已存在于 default branch，本阶段分支 review 期间不要求真实 Actions run；合并到 `master` 后，需要手动触发 `Transform Runtime Smoke`，并记录 run URL、result、artifact。
+- `Transform Runtime Smoke` 已在合并到 `master` 后完成第一次 manual `workflow_dispatch` 验证，结果为 `Success`，artifact 已确认仅包含 `summary.json`。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 
 ## 下一轮建议
 
-建议下一阶段优先完成 post-merge 验证：
+建议下一阶段按需评估自动化 CI gate：
 
 ```text
-Transform Runtime Smoke Manual Workflow Post-Merge Verification
+Transform Runtime Smoke Auto CI Gate Evaluation MVP
 ```
 
 目标建议：
 
-- 在 GitHub Actions 页面手动触发 `Transform Runtime Smoke`。
-- 记录 Actions run URL、result 和 artifact。
-- 确认输出包含 `Remote success: PASS`、`Remote unavailable: PASS`、`Fallback unavailable: PASS` 和 `transformRuntime verification: PASS`。
-- 确认 artifact 至少包含 `summary.json`，且不包含 DB dump、完整 raw row、`data_sources.config_json`、完整 env 或 secret-like 内容。
+- 评估是否将 manual-only runtime smoke 扩展为 `push` / `pull_request` 自动 CI gate。
+- 明确是否作为 required check，以及 runner 资源、端口分配、artifact retention、失败现场保留与非破坏性清理策略。
+- 如果暂不设置 required check，继续保持 manual workflow 作为人工验证入口。
 - 继续保持 `runtime-mode=local` 默认值。
 - 不新增 Gateway / Nacos / service discovery。
 - 不修改 transform runtime 业务语义。
 - 不执行 destructive volume cleanup。
-
-如需继续推进自动化，再单独规划：
-
-- `Transform Runtime Smoke Auto CI Gate Evaluation MVP`
 
 如果优先统一转换判断口径，可单独排期：
 

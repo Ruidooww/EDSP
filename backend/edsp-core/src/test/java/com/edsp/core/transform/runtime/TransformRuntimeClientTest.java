@@ -9,6 +9,7 @@ import com.edsp.core.config.TransformRuntimeConfig;
 import com.edsp.transform.contract.BatchTransformRequest;
 import com.edsp.transform.contract.BatchTransformResponse;
 import com.edsp.transform.contract.TransformDraftDto;
+import com.edsp.transform.contract.TransformFieldMappingDto;
 import com.edsp.transform.contract.TransformMappingPlanDto;
 import com.edsp.transform.contract.TransformOptionsDto;
 import com.edsp.transform.contract.TransformResponse;
@@ -210,6 +211,22 @@ class TransformRuntimeClientTest {
         );
 
         assertFalse(shadow.enabled());
+    }
+
+    @Test
+    void contractSupportCarriesFieldMappingDetailsWithoutParsingRules() {
+        var mappingPlan = TransformContractSupport.mappingPlan(new TransformMappingPlanDto(
+            Map.of("user_account", "actor"),
+            List.of("id"),
+            List.of(new TransformFieldMappingDto("user_account", "actor", " lower "))
+        ));
+
+        assertEquals(Map.of("user_account", "actor"), mappingPlan.fieldMappings());
+        assertEquals(List.of("id"), mappingPlan.dedupFields());
+        assertEquals(1, mappingPlan.fieldMappingDetails().size());
+        assertEquals("user_account", mappingPlan.fieldMappingDetails().get(0).sourceField());
+        assertEquals("actor", mappingPlan.fieldMappingDetails().get(0).standardField());
+        assertEquals(" lower ", mappingPlan.fieldMappingDetails().get(0).transformRule());
     }
 
     private HttpServer startServer(int status, String body) throws IOException {

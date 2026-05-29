@@ -6,19 +6,31 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public record MappingPlan(Map<String, String> fieldMappings, List<String> dedupFields) {
+public record MappingPlan(
+    Map<String, String> fieldMappings,
+    List<String> dedupFields,
+    List<FieldMappingDetail> fieldMappingDetails
+) {
+    public record FieldMappingDetail(String sourceField, String standardField, String transformRule) {
+    }
+
+    public MappingPlan(Map<String, String> fieldMappings, List<String> dedupFields) {
+        this(fieldMappings, dedupFields, List.of());
+    }
+
     public MappingPlan {
         fieldMappings = fieldMappings == null
             ? Map.of()
             : Collections.unmodifiableMap(new LinkedHashMap<>(fieldMappings));
         dedupFields = dedupFields == null ? List.of() : List.copyOf(dedupFields);
+        fieldMappingDetails = fieldMappingDetails == null ? List.of() : List.copyOf(fieldMappingDetails);
     }
 
     public static MappingPlan fromPlan(Map<String, Object> plan) {
         if (plan == null) {
             return new MappingPlan(Map.of(), List.of());
         }
-        return new MappingPlan(fieldMappingSources(plan), dedupFields(plan));
+        return new MappingPlan(fieldMappingSources(plan), dedupFields(plan), fieldMappingDetails(plan));
     }
 
     private static Map<String, String> fieldMappingSources(Map<String, Object> plan) {
@@ -44,6 +56,24 @@ public record MappingPlan(Map<String, String> fieldMappings, List<String> dedupF
             }
         }
         return mappings;
+    }
+
+    private static List<FieldMappingDetail> fieldMappingDetails(Map<String, Object> plan) {
+        if (!(plan.get("fieldMappingDetails") instanceof List<?> details)) {
+            return List.of();
+        }
+        var result = new ArrayList<FieldMappingDetail>();
+        for (var item : details) {
+            if (!(item instanceof Map<?, ?> mapping)) {
+                continue;
+            }
+            var sourceField = stringOrNull(mapping.get("sourceField"));
+            var standardField = stringOrNull(mapping.get("standardField"));
+            if (sourceField != null && standardField != null) {
+                result.add(new FieldMappingDetail(sourceField, standardField, rawStringOrNull(mapping.get("transformRule"))));
+            }
+        }
+        return result;
     }
 
     private static List<String> dedupFields(Map<String, Object> plan) {
@@ -74,5 +104,9 @@ public record MappingPlan(Map<String, String> fieldMappings, List<String> dedupF
         }
         var text = String.valueOf(value).trim();
         return text.isEmpty() || "null".equalsIgnoreCase(text) ? null : text;
+    }
+
+    private static String rawStringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 }

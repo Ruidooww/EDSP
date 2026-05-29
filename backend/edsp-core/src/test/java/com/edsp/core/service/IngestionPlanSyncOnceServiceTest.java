@@ -170,6 +170,12 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(2, intValue(result.get("standardCount")));
         assertEquals(1, ((RecordingTransformRuntimeClient) runtimeClient).calls);
         assertEquals(2, ((RecordingTransformRuntimeClient) runtimeClient).lastRequest.rows().size());
+        var mappingDetails = ((RecordingTransformRuntimeClient) runtimeClient).lastRequest.mappingPlan().fieldMappingDetails();
+        assertEquals(1, mappingDetails.size());
+        assertEquals("user_account", mappingDetails.get(0).sourceField());
+        assertEquals("actor", mappingDetails.get(0).standardField());
+        assertEquals("lower", mappingDetails.get(0).transformRule());
+        assertEquals("sync_once", ((RecordingTransformRuntimeClient) runtimeClient).lastRequest.options().syncMode());
         assertEquals(0, remoteShadowClient.calls);
         assertEquals("remote-user-1", jdbcTemplate.queryForObject(
             "select actor from standard_events where external_id = 'REMOTE-1'",
@@ -1569,6 +1575,13 @@ class IngestionPlanSyncOnceServiceTest {
                 "host_name": "assetRef",
                 "risk_level": "severity"
               },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "user_account",
+                  "standardField": "actor",
+                  "transformRule": "lower"
+                }
+              ],
               "dedupStrategy": {"type": "external_id", "fields": %s, "fallback": "composite"},
               "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
               "risks": [],

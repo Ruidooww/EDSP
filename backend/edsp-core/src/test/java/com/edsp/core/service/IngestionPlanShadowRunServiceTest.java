@@ -111,6 +111,11 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals("externalId", transformRuntimeClient.lastRequest.mappingPlan().fieldMappings().get("id"));
         assertEquals("occurredAt", transformRuntimeClient.lastRequest.mappingPlan().fieldMappings().get("create_time"));
         assertEquals(List.of("id"), transformRuntimeClient.lastRequest.mappingPlan().dedupFields());
+        var mappingDetails = transformRuntimeClient.lastRequest.mappingPlan().fieldMappingDetails();
+        assertEquals(1, mappingDetails.size());
+        assertEquals("user_account", mappingDetails.get(0).sourceField());
+        assertEquals("actor", mappingDetails.get(0).standardField());
+        assertEquals("lower", mappingDetails.get(0).transformRule());
         assertEquals(dataSourceId, transformRuntimeClient.lastRequest.options().dataSourceId());
         assertEquals(tableId, transformRuntimeClient.lastRequest.options().schemaTableId());
         assertEquals("sec_alert_event", transformRuntimeClient.lastRequest.options().sourceTable());
@@ -617,6 +622,13 @@ class IngestionPlanShadowRunServiceTest {
                 "phone": "subjectRef",
                 "raw_payload": "detail"
               },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "user_account",
+                  "standardField": "actor",
+                  "transformRule": "lower"
+                }
+              ],
               "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
               "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
               "risks": [],

@@ -9,6 +9,7 @@ import com.edsp.core.transform.runtime.TransformRuntimeReport;
 import com.edsp.core.support.CoreRequestSupport;
 import com.edsp.transform.contract.BatchTransformRequest;
 import com.edsp.transform.contract.TransformDraftDto;
+import com.edsp.transform.contract.TransformFieldMappingDto;
 import com.edsp.transform.contract.TransformMappingPlanDto;
 import com.edsp.transform.contract.TransformOptionsDto;
 import com.edsp.transform.contract.TransformResponse;
@@ -560,7 +561,7 @@ public class IngestionPlanSyncOnceService {
         if (plan == null) {
             return new TransformMappingPlanDto(Map.of(), List.of());
         }
-        return new TransformMappingPlanDto(fieldMappingSources(plan), dedupFields(plan));
+        return new TransformMappingPlanDto(fieldMappingSources(plan), dedupFields(plan), fieldMappingDetails(plan));
     }
 
     private Map<String, String> fieldMappingSources(Map<String, Object> plan) {
@@ -588,6 +589,27 @@ public class IngestionPlanSyncOnceService {
         return mappings;
     }
 
+    private List<TransformFieldMappingDto> fieldMappingDetails(Map<String, Object> plan) {
+        if (!(plan.get("fieldMappingDetails") instanceof List<?> details)) {
+            return List.of();
+        }
+        var result = new ArrayList<TransformFieldMappingDto>();
+        for (var item : details) {
+            if (item instanceof Map<?, ?> mapping) {
+                var sourceField = support.stringOrNull(mapping.get("sourceField"));
+                var standardField = support.stringOrNull(mapping.get("standardField"));
+                if (sourceField != null && standardField != null) {
+                    result.add(new TransformFieldMappingDto(
+                        sourceField,
+                        standardField,
+                        rawStringOrNull(mapping.get("transformRule"))
+                    ));
+                }
+            }
+        }
+        return result;
+    }
+
     private List<String> dedupFields(Map<String, Object> plan) {
         if (!(plan.get("dedupStrategy") instanceof Map<?, ?> strategy)) {
             return List.of();
@@ -608,6 +630,10 @@ public class IngestionPlanSyncOnceService {
         }
         var item = support.stringOrNull(value);
         return item == null ? List.of() : List.of(item);
+    }
+
+    private String rawStringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     private Long insertIngestionRun(Long dataSourceId, String runType) {

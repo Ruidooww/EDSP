@@ -178,6 +178,59 @@ class StandardEventTransformServiceTest {
         assertEquals(List.of("id"), detailPlan.dedupFields());
     }
 
+    @Test
+    void mappingPlanCarriesDetailsButFieldMappingsRemainAuthoritative() {
+        var plan = MappingPlan.fromPlan(Map.of(
+            "fieldMappings", Map.of("id", "externalId"),
+            "fieldMappingDetails", List.of(Map.of(
+                "sourceField", "id",
+                "standardField", "actor",
+                "transformRule", "lower"
+            )),
+            "dedupStrategy", Map.of("fields", List.of("id"))
+        ));
+
+        assertEquals(Map.of("id", "externalId"), plan.fieldMappings());
+        assertEquals(List.of("id"), plan.dedupFields());
+        assertEquals(1, plan.fieldMappingDetails().size());
+        assertEquals("id", plan.fieldMappingDetails().get(0).sourceField());
+        assertEquals("actor", plan.fieldMappingDetails().get(0).standardField());
+        assertEquals("lower", plan.fieldMappingDetails().get(0).transformRule());
+    }
+
+    @Test
+    void transformRulesInMappingDetailsDoNotChangeCurrentOutput() {
+        var row = new SourceRow(Map.of(
+            "id", "ALERT-1",
+            "create_time", "2026-05-20 10:30:00",
+            "event_name", "Sensitive file export",
+            "user_account", "USER_A",
+            "risk_level", "HIGH"
+        ));
+        var baseline = service.transform(
+            row,
+            new MappingPlan(defaultMappings(), List.of("id")),
+            defaultOptions()
+        );
+        var withRulePayload = service.transform(
+            row,
+            new MappingPlan(
+                defaultMappings(),
+                List.of("id"),
+                List.of(
+                    new MappingPlan.FieldMappingDetail("user_account", "actor", "lower"),
+                    new MappingPlan.FieldMappingDetail("risk_level", "actor", "lower")
+                )
+            ),
+            defaultOptions()
+        );
+
+        assertEquals(baseline.errors(), withRulePayload.errors());
+        assertEquals(baseline.warnings(), withRulePayload.warnings());
+        assertEquals(baseline.draft(), withRulePayload.draft());
+        assertEquals("USER_A", withRulePayload.draft().actor());
+    }
+
     private void assertSeverity(String raw, String expectedSeverity, Integer expectedRisk, List<String> expectedErrors) {
         var result = service.transform(rowWith("risk_level", raw), defaultPlan(), defaultOptions());
 

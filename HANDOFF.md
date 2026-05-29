@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Rule Runtime Verification MVP`
-- 最新 feature merge commit：`184b1e3 merge: transform rule runtime verification mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule runtime verification mvp`
-- 本轮阶段分支：`codex/transform-rule-runtime-verification-mvp`
-- 本轮结果：`Configurable Transform Rule Processor MVP` 已完成，新增 package-private `TransformRuleApplier`，`StandardEventTransformRuleProcessor` 已在 `edsp-transform` 内部执行 basic `transformRule`，支持 `trim` / `lower` / `upper` / `defaultIfBlank` 以及 legacy `trim(sourceField)` / `lower(sourceField)` / `upper(sourceField)`；`fieldMappings` 仍是唯一 authoritative mapping source，`fieldMappingDetails` 必须与 `{sourceField, standardField}` 精确匹配才执行，non-authoritative `fieldMappingDetails` 被忽略；unsupported / invalid / mismatch 只进入 warnings，不导致 row failed / sync failed / ShadowRun failed；规则只作用于 mapped value，不修改 raw source row，`dedupFields` 仍按 raw source row 既有语义；Precheck 仍保持 dry-run / schema metadata validation，不执行 rules；未实现 `valueMap` / JSON rule schema / script / expression / DB / HTTP / filesystem 能力。`Transform Rule Runtime Verification MVP` 已完成，只修改 `scripts/verify-transform-runtime-smoke.ps1`；runtime smoke fixture 已加入 `fieldMappingDetails` transform rules；remote success 验证 `upper` / `lower` / `trim` / `defaultIfBlank` 通过真实 remote `edsp-transform-service` runtime 生效；fallback unavailable 验证 remote unavailable 后 local fallback runtime 也执行 basic transform rules；remote unavailable 保持 `failed` / `remote_unavailable` / `raw_events=0` / `standard_events=0` 语义；新增 `transformRuleRuntimeVerification` summary 字段；artifact 仅包含 `summary.json`，无 DB dump、完整 raw row、source config、完整 env 或 secret-like 内容；PR runtime smoke sample #6 success。下一阶段建议 `Transform Rule Structured Payload / valueMap Readiness MVP`。
+- 当前阶段：`Transform Rule Structured Payload / valueMap Readiness MVP`
+- 最新 feature merge commit：`d5615c2 merge: transform rule value map payload readiness mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule value map payload readiness mvp`
+- 本轮阶段分支：`codex/transform-rule-structured-payload-value-map-readiness-mvp`
+- 本轮结果：新增 `docs/transform-rule-structured-payload-value-map-readiness.md`；本轮为 docs-only / assessment-first；本轮未实现 `valueMap`，未新增 `transformRulePayload` DTO 字段，未修改 DTO / API / backend / frontend / migration / workflow / scripts；文档明确不建议把 `valueMap` 扩展为复杂 string DSL；文档推荐未来 additive structured payload 字段候选名 `transformRulePayload`；推荐 minimal `valueMap` schema 为 `type` / `values` / `onMissing` / `defaultValue`，其中 `values` 为 `string -> string`；推荐 missing key 默认 `keepOriginal + warning`；推荐 invalid payload keep original + warning，不 hard fail；推荐 warning code：`transform_rule_value_map_miss` / `transform_rule_value_map_invalid_payload` / `transform_rule_value_map_invalid_values` / `transform_rule_structured_payload_unsupported`；明确不支持 chaining / nested rules / ordered rule lists / `trim -> lower -> valueMap` 组合；明确不支持 script / expression / SQL / HTTP / filesystem；明确 future `valueMap` 只应在 `edsp-transform` 内执行，不在 `edsp-core` / ShadowRun / Precheck / frontend / transform-service controller / mapper 中执行；Precheck 仍保持 dry-run / schema metadata validation；下一阶段建议 `Transform Rule Structured Contract MVP`。
 
 ## 已完成能力
 
@@ -713,6 +713,22 @@
 - 新增 `transformRuleRuntimeVerification` summary 字段。
 - Artifact 仅包含 `summary.json`，无 DB dump、完整 raw row、source config、完整 env 或 secret-like 内容。
 - PR #6 已提供第六条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success；artifact 为 `transform-runtime-smoke-26638115381-1`。
+- Transform Rule Structured Payload / valueMap Readiness MVP 已完成；新增 `docs/transform-rule-structured-payload-value-map-readiness.md`。
+- 本轮为 docs-only / assessment-first。
+- 本轮未实现 `valueMap`。
+- 本轮未修改 DTO / API / backend / frontend / migration / workflow / scripts。
+- 文档明确不建议把 `valueMap` 扩展为复杂 string DSL。
+- 文档推荐未来 additive structured payload 字段，候选名 `transformRulePayload`。
+- 推荐 minimal `valueMap` schema：`type` / `values` / `onMissing` / `defaultValue`。
+- 推荐 `values` 为 `string -> string`。
+- 推荐 missing key 默认 `keepOriginal + warning`。
+- 推荐 invalid payload keep original + warning，不 hard fail。
+- 推荐 warning code：`transform_rule_value_map_miss` / `transform_rule_value_map_invalid_payload` / `transform_rule_value_map_invalid_values` / `transform_rule_structured_payload_unsupported`。
+- 明确不支持 chaining / nested rules / ordered rule lists / `trim -> lower -> valueMap` 组合。
+- 明确不支持 script / expression / SQL / HTTP / filesystem。
+- 明确 future `valueMap` 只应在 `edsp-transform` 内执行，不在 `edsp-core` / ShadowRun / Precheck / frontend / transform-service controller / mapper 中执行。
+- Precheck 仍保持 dry-run / schema metadata validation。
+- PR #7 已提供第七条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success；artifact 为 `transform-runtime-smoke-26643107043-1`。
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 - `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。
@@ -724,19 +740,19 @@
 建议下一阶段优先执行：
 
 ```text
-Transform Rule Structured Payload / valueMap Readiness MVP
+Transform Rule Structured Contract MVP
 ```
 
 目标建议：
 
-- 先做 docs-only / assessment-first，定义 structured transform rule payload 与 `valueMap` 后续 contract 方向。
-- 不在本轮实现 `valueMap`。
-- 不在本轮修改 `TransformFieldMappingDto` / `TransformMappingPlanDto` / `MappingPlan`。
-- 不在本轮修改 `TransformRuleApplier` / `StandardEventTransformRuleProcessor`。
-- 不新增 JSON rule schema 到生产代码。
-- 继续保持 `fieldMappings` 的 authoritative mapping 语义。
-- 明确 `valueMap` 的 payload shape、missing-key policy、invalid payload warning、兼容策略和 runtime 边界。
-- 继续拒绝 scripts / Groovy / JS / SpEL / SQL / HTTP / filesystem / arbitrary expressions / external process execution。
+- 做 additive DTO / contract extension。
+- 推荐新增 optional `transformRulePayload`。
+- 保持既有 string `transformRule` 兼容。
+- `TransformPlanSupport` passthrough structured payload。
+- `MappingPlan` passthrough structured payload。
+- 不执行 `valueMap`。
+- 不修改 `TransformRuleApplier` / `StandardEventTransformRuleProcessor` 的 rule execution 语义。
+- 不新增 script / expression / SQL / HTTP / filesystem 能力。
 - 不改变 ShadowRun / Precheck / sync once / scheduled sync 语义。
 - 不默认 remote / fallback。
 - 不删除 `edsp-core -> edsp-transform`。
@@ -777,9 +793,9 @@ Clean master before continuing.
 ```
 ## Current Stage Status (latest)
 - Current stable branch: `master`
-- Current stage: `Transform Rule Runtime Verification MVP`
-- Latest feature merge commit: `184b1e3 merge: transform rule runtime verification mvp`
-- Latest HANDOFF docs commit: this commit `docs: update handoff for transform rule runtime verification mvp`
-- Stage branch: `codex/transform-rule-runtime-verification-mvp`
-- Stage result: only `scripts/verify-transform-runtime-smoke.ps1` was modified; the runtime smoke fixture now includes `fieldMappingDetails` transform rules; the remote success scenario verifies `upper`, `lower`, `trim`, and `defaultIfBlank` through the real remote `edsp-transform-service` runtime; the fallback unavailable scenario verifies that local fallback runtime also executes the basic transform rules after remote unavailable; the remote unavailable scenario preserves `failed` / `remote_unavailable` / `raw_events=0` / `standard_events=0` semantics; `summary.json` now includes additive `transformRuleRuntimeVerification`; this stage added no transformRule production behavior and only strengthened runtime verification; this stage did not implement `valueMap`, JSON rule schema, script, expression, DB, HTTP, or filesystem capabilities; artifact safety was confirmed with only `summary.json` and no DB dump, full raw row, source config, full env, or secret-like content; PR #6 triggered EDSP CI and Transform Runtime Smoke, both success; Transform Runtime Smoke artifact `transform-runtime-smoke-26638115381-1` is PR runtime smoke sample #6.
-- Recommended next stage: `Transform Rule Structured Payload / valueMap Readiness MVP`.
+- Current stage: `Transform Rule Structured Payload / valueMap Readiness MVP`
+- Latest feature merge commit: `d5615c2 merge: transform rule value map payload readiness mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for transform rule value map payload readiness mvp`
+- Stage branch: `codex/transform-rule-structured-payload-value-map-readiness-mvp`
+- Stage result: added `docs/transform-rule-structured-payload-value-map-readiness.md`; this stage was docs-only / assessment-first; it did not implement `valueMap`; it did not modify DTOs, APIs, backend, frontend, migration, workflow, or scripts; the document recommends not extending `valueMap` into a complex string DSL; it recommends a future additive structured payload field candidate named `transformRulePayload`; it recommends minimal `valueMap` schema `type` / `values` / `onMissing` / `defaultValue`, with `values` as `string -> string`; missing keys should default to `keepOriginal + warning`; invalid payload should keep original with warning and not hard fail; proposed warnings are `transform_rule_value_map_miss`, `transform_rule_value_map_invalid_payload`, `transform_rule_value_map_invalid_values`, and `transform_rule_structured_payload_unsupported`; chaining, nested rules, ordered rule lists, and `trim -> lower -> valueMap` composition remain out of scope; script, expression, SQL, HTTP, and filesystem capabilities remain rejected; future `valueMap` execution should live only in `edsp-transform`, not in `edsp-core`, ShadowRun, Precheck, frontend, transform-service controller, or mapper; Precheck remains dry-run / schema metadata validation; PR #7 triggered EDSP CI and Transform Runtime Smoke, both success; Transform Runtime Smoke artifact `transform-runtime-smoke-26643107043-1` is PR runtime smoke sample #7.
+- Recommended next stage: `Transform Rule Structured Contract MVP`.

@@ -42,6 +42,7 @@ $scenarioResults = [ordered]@{
     remoteUnavailable = "NOT_RUN"
     fallbackUnavailable = "NOT_RUN"
     transformRuntimeVerification = "NOT_RUN"
+    transformRuleRuntimeVerification = "NOT_RUN"
 }
 
 function Require-SafeIdentifier {
@@ -356,10 +357,11 @@ create table $schemaIdentifier.$tableIdentifier (
     event_name varchar(200) not null,
     user_account varchar(100) not null,
     host_name varchar(100) not null,
+    action_raw varchar(100) null,
     risk_level varchar(32) not null
 );
-insert into $schemaIdentifier.$tableIdentifier(id, create_time, event_name, user_account, host_name, risk_level)
-values ($(Quote-SqlText -Value $externalId), '2026-05-20 10:30:00', 'Runtime transform smoke', 'runtime-smoke-user', 'SMOKE-HOST-01', 'high');
+insert into $schemaIdentifier.$tableIdentifier(id, create_time, event_name, user_account, host_name, action_raw, risk_level)
+values ($(Quote-SqlText -Value $externalId), '2026-05-20 10:30:00', 'runtime transform smoke', 'RUNTIME-SMOKE-USER', ' SMOKE-HOST-01 ', '', 'high');
 "@
 
     $dataSourceId = Invoke-PsqlScalar -Sql @"
@@ -380,7 +382,7 @@ returning id;
 insert into schema_scan_runs(
     data_source_id, status, total_tables, scanned_tables, failed_tables, total_fields, scanned_fields
 )
-values ($dataSourceId, 'success', 1, 1, 0, 6, 6)
+values ($dataSourceId, 'success', 1, 1, 0, 7, 7)
 returning id;
 "@
 
@@ -399,10 +401,11 @@ insert into schema_fields(
 values
     ($tableId, $scanRunId, 'id', 'varchar', $(Quote-SqlText -Value $externalId), 1, 95, 'active'),
     ($tableId, $scanRunId, 'create_time', 'timestamp', '2026-05-20 10:30:00', 2, 95, 'active'),
-    ($tableId, $scanRunId, 'event_name', 'varchar', 'Runtime transform smoke', 3, 95, 'active'),
-    ($tableId, $scanRunId, 'user_account', 'varchar', 'runtime-smoke-user', 4, 95, 'active'),
-    ($tableId, $scanRunId, 'host_name', 'varchar', 'SMOKE-HOST-01', 5, 95, 'active'),
-    ($tableId, $scanRunId, 'risk_level', 'varchar', 'high', 6, 95, 'active');
+    ($tableId, $scanRunId, 'event_name', 'varchar', 'runtime transform smoke', 3, 95, 'active'),
+    ($tableId, $scanRunId, 'user_account', 'varchar', 'RUNTIME-SMOKE-USER', 4, 95, 'active'),
+    ($tableId, $scanRunId, 'host_name', 'varchar', ' SMOKE-HOST-01 ', 5, 95, 'active'),
+    ($tableId, $scanRunId, 'action_raw', 'varchar', '', 6, 95, 'active'),
+    ($tableId, $scanRunId, 'risk_level', 'varchar', 'high', 7, 95, 'active');
 "@
 
     $plan = [ordered]@{
@@ -417,8 +420,31 @@ values
             event_name = "title"
             user_account = "actor"
             host_name = "assetRef"
+            action_raw = "action"
             risk_level = "severity"
         }
+        fieldMappingDetails = @(
+            [ordered]@{
+                sourceField = "event_name"
+                standardField = "title"
+                transformRule = "upper"
+            },
+            [ordered]@{
+                sourceField = "user_account"
+                standardField = "actor"
+                transformRule = "lower"
+            },
+            [ordered]@{
+                sourceField = "host_name"
+                standardField = "assetRef"
+                transformRule = "trim"
+            },
+            [ordered]@{
+                sourceField = "action_raw"
+                standardField = "action"
+                transformRule = "defaultIfBlank:LOGIN"
+            }
+        )
         dedupStrategy = [ordered]@{
             type = "external_id"
             fields = @("id")
@@ -491,8 +517,17 @@ select json_build_object(
     'rawCount', (select count(*) from raw_events where external_id = $externalIdLiteral),
     'standardCount', (select count(*) from standard_events where external_id = $externalIdLiteral),
     'externalId', (select external_id from standard_events where external_id = $externalIdLiteral order by id desc limit 1),
+    'eventType', (select event_type from standard_events where external_id = $externalIdLiteral order by id desc limit 1),
     'severity', (select severity from standard_events where external_id = $externalIdLiteral order by id desc limit 1),
-    'actor', (select actor from standard_events where external_id = $externalIdLiteral order by id desc limit 1)
+    'actor', (select actor from standard_events where external_id = $externalIdLiteral order by id desc limit 1),
+    'assetRef', (select asset_ref from standard_events where external_id = $externalIdLiteral order by id desc limit 1),
+    'action', (select action from standard_events where external_id = $externalIdLiteral order by id desc limit 1),
+    'rawUserAccountOriginal', exists(
+        select 1
+        from raw_events
+        where external_id = $externalIdLiteral
+          and payload_json #>> '{fields,user_account}' = 'RUNTIME-SMOKE-USER'
+    )
 )::text
 from ingestion_plan_sync_runs sync
 where sync.activation_id = $($Fixture.ActivationId)
@@ -530,10 +565,16 @@ function Assert-SmokeResult {
     Assert-Equal -Actual $Observation.failureType -Expected $expectedFailureType -Label "$Label failureType"
     Assert-Equal -Actual ([long]$Observation.rawCount) -Expected $RawCount -Label "$Label raw_events count"
     Assert-Equal -Actual ([long]$Observation.standardCount) -Expected $StandardCount -Label "$Label standard_events count"
+    if ($RawCount -eq 1) {
+        Assert-Equal -Actual $Observation.rawUserAccountOriginal -Expected $true -Label "$Label raw payload keeps original user_account"
+    }
     if ($StandardCount -eq 1) {
         Assert-Equal -Actual $Observation.externalId -Expected $Fixture.ExternalId -Label "$Label external_id"
+        Assert-Equal -Actual $Observation.eventType -Expected "RUNTIME TRANSFORM SMOKE" -Label "$Label event_type upper rule"
         Assert-Equal -Actual $Observation.severity -Expected "high" -Label "$Label severity"
-        Assert-Equal -Actual $Observation.actor -Expected "runtime-smoke-user" -Label "$Label actor"
+        Assert-Equal -Actual $Observation.actor -Expected "runtime-smoke-user" -Label "$Label actor lower rule"
+        Assert-Equal -Actual $Observation.assetRef -Expected "SMOKE-HOST-01" -Label "$Label asset_ref trim rule"
+        Assert-Equal -Actual $Observation.action -Expected "LOGIN" -Label "$Label action defaultIfBlank rule"
     }
     Write-Host "$Label`: PASS"
 }
@@ -627,7 +668,9 @@ try {
 
     $failureStage = $null
     $scenarioResults.transformRuntimeVerification = "PASS"
+    $scenarioResults.transformRuleRuntimeVerification = "PASS"
     Write-Host "transformRuntime verification: PASS"
+    Write-Host "transformRule runtime verification: PASS"
 } catch {
     $failure = $_
     $failureType = $_.Exception.GetType().Name

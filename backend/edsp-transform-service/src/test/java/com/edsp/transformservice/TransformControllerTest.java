@@ -29,7 +29,7 @@ class TransformControllerTest {
     private ObjectMapper objectMapper;
 
     @Test
-    void mapperCarriesFieldMappingDetailsWithoutExecutingRules() {
+    void mapperCarriesFieldMappingDetailsAndLeavesExecutionToTransformModule() {
         var mappingPlan = TransformContractMapper.mappingPlan(new TransformMappingPlanDto(
             Map.of("risk_level", "severity"),
             List.of(),
@@ -87,7 +87,7 @@ class TransformControllerTest {
     }
 
     @Test
-    void transformsSingleRowWithFieldMappingDetailsAndUnchangedOutput() throws Exception {
+    void transformsSingleRowWithFieldMappingDetailsAndAppliesBasicRules() throws Exception {
         mockMvc.perform(post("/api/transform/standard-events")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
@@ -95,14 +95,20 @@ class TransformControllerTest {
                       "row": {
                         "id": "ALERT-1",
                         "create_time": "2026-05-20 10:30:00",
+                        "event_name": "sensitive file export",
                         "user_account": "USER_A",
-                        "risk_level": "HIGH"
+                        "host_name": " WIN-01 ",
+                        "risk_level": "HIGH",
+                        "action_raw": ""
                       },
                       "mappingPlan": {
                         "fieldMappings": {
                           "id": "externalId",
                           "create_time": "occurredAt",
+                          "event_name": "title",
                           "user_account": "actor",
+                          "host_name": "assetRef",
+                          "action_raw": "action",
                           "risk_level": "severity"
                         },
                         "dedupFields": ["id"],
@@ -111,6 +117,21 @@ class TransformControllerTest {
                             "sourceField": "user_account",
                             "standardField": "actor",
                             "transformRule": "lower"
+                          },
+                          {
+                            "sourceField": "host_name",
+                            "standardField": "assetRef",
+                            "transformRule": "trim"
+                          },
+                          {
+                            "sourceField": "event_name",
+                            "standardField": "title",
+                            "transformRule": "upper"
+                          },
+                          {
+                            "sourceField": "action_raw",
+                            "standardField": "action",
+                            "transformRule": "defaultIfBlank:LOGIN"
                           }
                         ]
                       },
@@ -124,8 +145,14 @@ class TransformControllerTest {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.draft.externalId").value("ALERT-1"))
-            .andExpect(jsonPath("$.draft.actor").value("USER_A"))
+            .andExpect(jsonPath("$.draft.eventType").value("SENSITIVE FILE EXPORT"))
+            .andExpect(jsonPath("$.draft.actor").value("user_a"))
+            .andExpect(jsonPath("$.draft.assetRef").value("WIN-01"))
+            .andExpect(jsonPath("$.draft.action").value("LOGIN"))
             .andExpect(jsonPath("$.draft.severity").value("high"))
+            .andExpect(jsonPath("$.draft.normalized.mapped.actor").value("user_a"))
+            .andExpect(jsonPath("$.draft.normalized.mapped.assetRef").value("WIN-01"))
+            .andExpect(jsonPath("$.draft.normalized.mapped.action").value("LOGIN"))
             .andExpect(jsonPath("$.errors.length()").value(0));
     }
 
@@ -166,13 +193,62 @@ class TransformControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.results[0].index").value(0))
             .andExpect(jsonPath("$.results[0].draft.externalId").value("ALERT-1"))
-            .andExpect(jsonPath("$.results[0].draft.actor").value("USER_A"))
+            .andExpect(jsonPath("$.results[0].draft.actor").value("user_a"))
             .andExpect(jsonPath("$.results[0].draft.severity").value("high"))
             .andExpect(jsonPath("$.results[1].index").value(1))
             .andExpect(jsonPath("$.results[1].draft.externalId").value("ALERT-2"))
-            .andExpect(jsonPath("$.results[1].draft.actor").value("USER_B"))
+            .andExpect(jsonPath("$.results[1].draft.actor").value("user_b"))
             .andExpect(jsonPath("$.results[1].draft.severity").value("low"))
             .andExpect(jsonPath("$.errors.length()").value(0));
+    }
+
+    @Test
+    void unsupportedAndInvalidTransformRulesReturnWarningsWithoutHttpFailure() throws Exception {
+        mockMvc.perform(post("/api/transform/standard-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "row": {
+                        "id": "ALERT-1",
+                        "create_time": "2026-05-20 10:30:00",
+                        "user_account": "USER_A",
+                        "risk_level": "HIGH"
+                      },
+                      "mappingPlan": {
+                        "fieldMappings": {
+                          "id": "externalId",
+                          "create_time": "occurredAt",
+                          "user_account": "actor",
+                          "risk_level": "severity"
+                        },
+                        "dedupFields": ["id"],
+                        "fieldMappingDetails": [
+                          {
+                            "sourceField": "user_account",
+                            "standardField": "actor",
+                            "transformRule": "valueMap"
+                          },
+                          {
+                            "sourceField": "risk_level",
+                            "standardField": "severity",
+                            "transformRule": "defaultIfBlank"
+                          }
+                        ]
+                      },
+                      "options": {
+                        "dataSourceId": 7,
+                        "schemaTableId": 11,
+                        "sourceTable": "sec_alert_event",
+                        "syncMode": "sync_once"
+                      }
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.draft.actor").value("USER_A"))
+            .andExpect(jsonPath("$.draft.severity").value("high"))
+            .andExpect(jsonPath("$.errors.length()").value(0))
+            .andExpect(jsonPath("$.warnings[0]").value("transform_rule_unsupported"))
+            .andExpect(jsonPath("$.warnings[1]").value("transform_rule_invalid"));
     }
 
     @Test

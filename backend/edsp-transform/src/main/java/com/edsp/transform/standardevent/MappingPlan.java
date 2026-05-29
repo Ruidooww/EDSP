@@ -44,17 +44,6 @@ public record MappingPlan(
                 }
             }
         }
-        if (mappings.isEmpty() && plan.get("fieldMappingDetails") instanceof List<?> details) {
-            for (var item : details) {
-                if (item instanceof Map<?, ?> mapping) {
-                    var sourceField = stringOrNull(mapping.get("sourceField"));
-                    var standardField = stringOrNull(mapping.get("standardField"));
-                    if (sourceField != null && standardField != null) {
-                        mappings.put(sourceField, standardField);
-                    }
-                }
-            }
-        }
         return mappings;
     }
 

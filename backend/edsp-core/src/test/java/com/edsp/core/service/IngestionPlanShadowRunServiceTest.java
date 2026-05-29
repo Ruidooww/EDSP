@@ -91,6 +91,7 @@ class IngestionPlanShadowRunServiceTest {
 
     @Test
     void createShadowRunSamplesApprovedPlanAndPersistsSafePreviewReport() throws Exception {
+        executeSourceSql("update sec_alert_event set user_account = 'USER_A' where id = 'ALERT-1'");
         var dataSourceId = insertDataSource(SOURCE_URL);
         var scanRunId = insertCompleteScan(dataSourceId);
         var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
@@ -153,6 +154,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals("ALERT-1", standardPreview.get("externalId"));
         assertEquals("2026-05-20T10:30+08:00", standardPreview.get("occurredAt"));
         assertEquals("Sensitive file export", standardPreview.get("title"));
+        assertEquals("user_a", standardPreview.get("actor"));
         assertEquals("******", standardPreview.get("subjectRef"));
         assertTrue(objectValue(standardPreview.get("detail")).containsKey("sha256"));
         assertFalse(String.valueOf(standardPreview.get("detail")).contains("raw secret payload"));
@@ -373,6 +375,7 @@ class IngestionPlanShadowRunServiceTest {
         var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
 
         assertEquals("blocked", run.get("status"));
+        assertEquals(0, transformRuntimeClient.calls);
         assertEquals(0, ((Number) run.get("readCount")).intValue());
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         var report = objectValue(run.get("report"));
@@ -394,6 +397,7 @@ class IngestionPlanShadowRunServiceTest {
         var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(20));
 
         assertEquals("blocked", run.get("status"));
+        assertEquals(0, transformRuntimeClient.calls);
         assertEquals(0, ((Number) run.get("readCount")).intValue());
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         assertNotNull(run.get("errorMessage"));

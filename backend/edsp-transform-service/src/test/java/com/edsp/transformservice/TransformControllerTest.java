@@ -33,12 +33,18 @@ class TransformControllerTest {
         var mappingPlan = TransformContractMapper.mappingPlan(new TransformMappingPlanDto(
             Map.of("risk_level", "severity"),
             List.of(),
-            List.of(new TransformFieldMappingDto("risk_level", "severity", "lower"))
+            List.of(new TransformFieldMappingDto(
+                "risk_level",
+                "severity",
+                "lower",
+                Map.of("type", "valueMap", "values", Map.of("critical", "high"))
+            ))
         ));
 
         assertEquals(Map.of("risk_level", "severity"), mappingPlan.fieldMappings());
         assertEquals(1, mappingPlan.fieldMappingDetails().size());
         assertEquals("lower", mappingPlan.fieldMappingDetails().get(0).transformRule());
+        assertEquals("valueMap", mappingPlan.fieldMappingDetails().get(0).transformRulePayload().get("type"));
     }
 
     @Test
@@ -62,7 +68,14 @@ class TransformControllerTest {
                 {
                   "sourceField": "user_account",
                   "standardField": "actor",
-                  "transformRule": " lower "
+                  "transformRule": " lower ",
+                  "transformRulePayload": {
+                    "type": "valueMap",
+                    "values": {
+                      "ADMIN": "admin"
+                    },
+                    "onMissing": "keepOriginal"
+                  }
                 }
               ]
             }
@@ -72,6 +85,8 @@ class TransformControllerTest {
         assertEquals(List.of("id"), newPlan.dedupFields());
         assertEquals(1, newPlan.fieldMappingDetails().size());
         assertEquals(" lower ", newPlan.fieldMappingDetails().get(0).transformRule());
+        assertEquals("valueMap", newPlan.fieldMappingDetails().get(0).transformRulePayload().get("type"));
+        assertEquals(Map.of("ADMIN", "admin"), newPlan.fieldMappingDetails().get(0).transformRulePayload().get("values"));
 
         var explicitNullJson = """
             {
@@ -116,12 +131,24 @@ class TransformControllerTest {
                           {
                             "sourceField": "user_account",
                             "standardField": "actor",
-                            "transformRule": "lower"
+                            "transformRule": "lower",
+                            "transformRulePayload": {
+                              "type": "valueMap",
+                              "values": {
+                                "USER_A": "ignored"
+                              }
+                            }
                           },
                           {
                             "sourceField": "host_name",
                             "standardField": "assetRef",
-                            "transformRule": "trim"
+                            "transformRule": "trim",
+                            "transformRulePayload": {
+                              "type": "valueMap",
+                              "values": {
+                                " WIN-01 ": "ignored"
+                              }
+                            }
                           },
                           {
                             "sourceField": "event_name",
@@ -178,7 +205,13 @@ class TransformControllerTest {
                           {
                             "sourceField": "user_account",
                             "standardField": "actor",
-                            "transformRule": "lower"
+                            "transformRule": "lower",
+                            "transformRulePayload": {
+                              "type": "valueMap",
+                              "values": {
+                                "USER_A": "ignored"
+                              }
+                            }
                           }
                         ]
                       },
@@ -226,7 +259,14 @@ class TransformControllerTest {
                           {
                             "sourceField": "user_account",
                             "standardField": "actor",
-                            "transformRule": "valueMap"
+                            "transformRule": "valueMap",
+                            "transformRulePayload": {
+                              "type": "valueMap",
+                              "values": {
+                                "USER_A": "mapped-user"
+                              },
+                              "onMissing": "keepOriginal"
+                            }
                           },
                           {
                             "sourceField": "risk_level",

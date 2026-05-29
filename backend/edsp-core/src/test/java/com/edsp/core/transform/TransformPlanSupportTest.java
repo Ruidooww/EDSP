@@ -22,17 +22,29 @@ class TransformPlanSupportTest {
             "fieldMappings", Map.of("id", "externalId"),
             "fieldMappingDetails", List.of(
                 Map.of("sourceField", "id", "standardField", "actor", "transformRule", "lower"),
-                Map.of("sourceField", "name", "standardField", "actor", "transformRule", " ")
+                Map.of("sourceField", "name", "standardField", "actor", "transformRule", " "),
+                Map.of(
+                    "sourceField", "risk_level",
+                    "standardField", "severity",
+                    "transformRule", "valueMap",
+                    "transformRulePayload", Map.of(
+                        "type", "valueMap",
+                        "values", Map.of("critical", "high"),
+                        "onMissing", "keepOriginal"
+                    )
+                )
             ),
             "dedupStrategy", Map.of("fields", List.of("id"))
         ));
 
         assertEquals(Map.of("id", "externalId"), mappingPlan.fieldMappings());
         assertEquals(List.of("id"), mappingPlan.dedupFields());
-        assertEquals(2, mappingPlan.fieldMappingDetails().size());
+        assertEquals(3, mappingPlan.fieldMappingDetails().size());
         assertEquals("actor", mappingPlan.fieldMappingDetails().get(0).standardField());
         assertEquals("lower", mappingPlan.fieldMappingDetails().get(0).transformRule());
         assertEquals(" ", mappingPlan.fieldMappingDetails().get(1).transformRule());
+        assertEquals("valueMap", mappingPlan.fieldMappingDetails().get(2).transformRulePayload().get("type"));
+        assertEquals(Map.of("critical", "high"), mappingPlan.fieldMappingDetails().get(2).transformRulePayload().get("values"));
     }
 
     @Test
@@ -49,5 +61,6 @@ class TransformPlanSupportTest {
         assertEquals(Map.of("id", "externalId"), mappingPlan.fieldMappings());
         assertEquals(1, mappingPlan.fieldMappingDetails().size());
         assertNull(mappingPlan.fieldMappingDetails().get(0).transformRule());
+        assertEquals(Map.of(), mappingPlan.fieldMappingDetails().get(0).transformRulePayload());
     }
 }

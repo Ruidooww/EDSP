@@ -117,6 +117,8 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals("user_account", mappingDetails.get(0).sourceField());
         assertEquals("actor", mappingDetails.get(0).standardField());
         assertEquals("lower", mappingDetails.get(0).transformRule());
+        assertEquals("valueMap", mappingDetails.get(0).transformRulePayload().get("type"));
+        assertEquals(Map.of("USER_A", "ignored"), mappingDetails.get(0).transformRulePayload().get("values"));
         assertEquals(dataSourceId, transformRuntimeClient.lastRequest.options().dataSourceId());
         assertEquals(tableId, transformRuntimeClient.lastRequest.options().schemaTableId());
         assertEquals("sec_alert_event", transformRuntimeClient.lastRequest.options().sourceTable());
@@ -630,7 +632,14 @@ class IngestionPlanShadowRunServiceTest {
                 {
                   "sourceField": "user_account",
                   "standardField": "actor",
-                  "transformRule": "lower"
+                  "transformRule": "lower",
+                  "transformRulePayload": {
+                    "type": "valueMap",
+                    "values": {
+                      "USER_A": "ignored"
+                    },
+                    "onMissing": "keepOriginal"
+                  }
                 }
               ],
               "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},

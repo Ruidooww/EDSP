@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -177,6 +179,24 @@ class StandardEventTransformServiceTest {
         assertEquals(Map.of(), detailPlan.fieldMappings());
         assertEquals(1, detailPlan.fieldMappingDetails().size());
         assertEquals(List.of("id"), detailPlan.dedupFields());
+
+        var payloadPlan = MappingPlan.fromPlan(Map.of(
+            "fieldMappings", Map.of("risk_level", "severity"),
+            "fieldMappingDetails", List.of(Map.of(
+                "sourceField", "risk_level",
+                "standardField", "severity",
+                "transformRule", "valueMap",
+                "transformRulePayload", Map.of(
+                    "type", "valueMap",
+                    "values", Map.of("critical", "high"),
+                    "onMissing", "keepOriginal"
+                )
+            ))
+        ));
+        var detail = payloadPlan.fieldMappingDetails().get(0);
+        assertEquals("valueMap", detail.transformRule());
+        assertEquals("valueMap", detail.transformRulePayload().get("type"));
+        assertEquals(Map.of("critical", "high"), detail.transformRulePayload().get("values"));
     }
 
     @Test
@@ -226,6 +246,79 @@ class StandardEventTransformServiceTest {
         assertEquals("id", plan.fieldMappingDetails().get(0).sourceField());
         assertEquals("actor", plan.fieldMappingDetails().get(0).standardField());
         assertEquals("lower", plan.fieldMappingDetails().get(0).transformRule());
+    }
+
+    @Test
+    void mappingPlanCarriesTransformRulePayloadWithTopLevelDefensiveCopy() {
+        var payload = new LinkedHashMap<String, Object>();
+        payload.put("type", "valueMap");
+        payload.put("values", Map.of("critical", "high"));
+
+        var detail = new MappingPlan.FieldMappingDetail("risk_level", "severity", "valueMap", payload);
+        payload.put("onMissing", "useDefault");
+
+        assertEquals("valueMap", detail.transformRulePayload().get("type"));
+        assertEquals(Map.of("critical", "high"), detail.transformRulePayload().get("values"));
+        assertFalse(detail.transformRulePayload().containsKey("onMissing"));
+        assertThrows(UnsupportedOperationException.class, () -> detail.transformRulePayload().put("x", "y"));
+        assertEquals(Map.of(), new MappingPlan.FieldMappingDetail("risk_level", "severity", "valueMap", null).transformRulePayload());
+        assertEquals(Map.of(), new MappingPlan.FieldMappingDetail("risk_level", "severity", "valueMap").transformRulePayload());
+    }
+
+    @Test
+    void transformRulePayloadDoesNotExecuteValueMapOrChangeOutput() {
+        var row = rowWith("risk_level", "critical");
+        var baseline = service.transform(
+            row,
+            new MappingPlan(
+                defaultMappings(),
+                List.of("id"),
+                List.of(new MappingPlan.FieldMappingDetail("risk_level", "severity", "valueMap"))
+            ),
+            defaultOptions()
+        );
+        var withPayload = service.transform(
+            row,
+            new MappingPlan(
+                defaultMappings(),
+                List.of("id"),
+                List.of(new MappingPlan.FieldMappingDetail(
+                    "risk_level",
+                    "severity",
+                    "valueMap",
+                    Map.of("type", "valueMap", "values", Map.of("critical", "high"))
+                ))
+            ),
+            defaultOptions()
+        );
+
+        assertEquals(baseline.errors(), withPayload.errors());
+        assertEquals(baseline.warnings(), withPayload.warnings());
+        assertEquals(baseline.draft().severity(), withPayload.draft().severity());
+        assertEquals(baseline.draft().riskScore(), withPayload.draft().riskScore());
+    }
+
+    @Test
+    void nonAuthoritativeDetailPayloadDoesNotChangeOutput() {
+        var row = rowWith("risk_level", "critical");
+        var result = service.transform(
+            row,
+            new MappingPlan(
+                defaultMappings(),
+                List.of("id"),
+                List.of(new MappingPlan.FieldMappingDetail(
+                    "risk_level",
+                    "actor",
+                    "valueMap",
+                    Map.of("type", "valueMap", "values", Map.of("critical", "zhangsan"))
+                ))
+            ),
+            defaultOptions()
+        );
+
+        assertEquals(List.of(), result.warnings());
+        assertEquals("critical", result.draft().severity());
+        assertEquals("zhangsan", result.draft().actor());
     }
 
     @Test

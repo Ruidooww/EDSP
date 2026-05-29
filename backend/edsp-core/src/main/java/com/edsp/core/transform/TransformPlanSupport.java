@@ -1,6 +1,7 @@
 package com.edsp.core.transform;
 
 import com.edsp.core.support.CoreRequestSupport;
+import com.edsp.transform.contract.TransformFieldMappingDto;
 import com.edsp.transform.contract.TransformMappingPlanDto;
 import com.edsp.transform.contract.TransformOptionsDto;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -48,7 +49,7 @@ public class TransformPlanSupport {
         if (plan == null) {
             return new TransformMappingPlanDto(Map.of(), List.of());
         }
-        return new TransformMappingPlanDto(fieldMappingSources(plan), dedupFields(plan));
+        return new TransformMappingPlanDto(fieldMappingSources(plan), dedupFields(plan), fieldMappingDetails(plan));
     }
 
     public TransformOptionsDto options(Long dataSourceId, Long schemaTableId, String sourceTable, String syncMode) {
@@ -103,6 +104,28 @@ public class TransformPlanSupport {
         return stringList(strategy.get("fields"));
     }
 
+    private List<TransformFieldMappingDto> fieldMappingDetails(Map<String, Object> plan) {
+        if (plan == null || !(plan.get("fieldMappingDetails") instanceof List<?> details)) {
+            return List.of();
+        }
+        var result = new ArrayList<TransformFieldMappingDto>();
+        for (var item : details) {
+            if (!(item instanceof Map<?, ?> mapping)) {
+                continue;
+            }
+            var sourceField = support.stringOrNull(mapping.get("sourceField"));
+            var standardField = support.stringOrNull(mapping.get("standardField"));
+            if (sourceField != null && standardField != null) {
+                result.add(new TransformFieldMappingDto(
+                    sourceField,
+                    standardField,
+                    rawStringOrNull(mapping.get("transformRule"))
+                ));
+            }
+        }
+        return result;
+    }
+
     private List<String> stringList(Object value) {
         if (value instanceof List<?> list) {
             var result = new ArrayList<String>();
@@ -116,5 +139,9 @@ public class TransformPlanSupport {
         }
         var item = support.stringOrNull(value);
         return item == null ? List.of() : List.of(item);
+    }
+
+    private String rawStringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 }

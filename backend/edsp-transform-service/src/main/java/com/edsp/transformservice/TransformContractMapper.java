@@ -8,6 +8,7 @@ import com.edsp.transform.standardevent.MappingPlan;
 import com.edsp.transform.standardevent.StandardEventDraft;
 import com.edsp.transform.standardevent.TransformOptions;
 import com.edsp.transform.standardevent.TransformResult;
+import java.util.List;
 
 final class TransformContractMapper {
     private TransformContractMapper() {
@@ -17,7 +18,17 @@ final class TransformContractMapper {
         if (dto == null) {
             return new MappingPlan(null, null);
         }
-        return new MappingPlan(dto.fieldMappings(), dto.dedupFields());
+        return new MappingPlan(dto.fieldMappings(), dto.dedupFields(), fieldMappingDetails(dto));
+    }
+
+    private static List<MappingPlan.FieldMappingDetail> fieldMappingDetails(TransformMappingPlanDto dto) {
+        return dto.fieldMappingDetails().stream()
+            .map(detail -> new MappingPlan.FieldMappingDetail(
+                detail.sourceField(),
+                detail.standardField(),
+                detail.transformRule()
+            ))
+            .toList();
     }
 
     static TransformOptions options(TransformOptionsDto dto) {

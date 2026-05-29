@@ -11,7 +11,19 @@ public record MappingPlan(
     List<String> dedupFields,
     List<FieldMappingDetail> fieldMappingDetails
 ) {
-    public record FieldMappingDetail(String sourceField, String standardField, String transformRule) {
+    public record FieldMappingDetail(
+        String sourceField,
+        String standardField,
+        String transformRule,
+        Map<String, Object> transformRulePayload
+    ) {
+        public FieldMappingDetail(String sourceField, String standardField, String transformRule) {
+            this(sourceField, standardField, transformRule, Map.of());
+        }
+
+        public FieldMappingDetail {
+            transformRulePayload = immutablePayload(transformRulePayload);
+        }
     }
 
     public MappingPlan(Map<String, String> fieldMappings, List<String> dedupFields) {
@@ -59,7 +71,12 @@ public record MappingPlan(
             var sourceField = stringOrNull(mapping.get("sourceField"));
             var standardField = stringOrNull(mapping.get("standardField"));
             if (sourceField != null && standardField != null) {
-                result.add(new FieldMappingDetail(sourceField, standardField, rawStringOrNull(mapping.get("transformRule"))));
+                result.add(new FieldMappingDetail(
+                    sourceField,
+                    standardField,
+                    rawStringOrNull(mapping.get("transformRule")),
+                    objectMap(mapping.get("transformRulePayload"))
+                ));
             }
         }
         return result;
@@ -97,5 +114,22 @@ public record MappingPlan(
 
     private static String rawStringOrNull(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private static Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        var result = new LinkedHashMap<String, Object>();
+        for (var entry : map.entrySet()) {
+            if (entry.getKey() != null) {
+                result.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    private static Map<String, Object> immutablePayload(Map<String, Object> payload) {
+        return payload == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(payload));
     }
 }

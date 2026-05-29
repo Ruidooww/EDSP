@@ -1,6 +1,7 @@
 package com.edsp.transform.contract;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -66,7 +67,13 @@ class TransformContractDtoTest {
     void mappingPlanCarriesFieldMappingDetailsWithoutParsingRules() {
         var details = List.of(
             new TransformFieldMappingDto("id", "externalId", null),
-            new TransformFieldMappingDto("name", "actor", "  ")
+            new TransformFieldMappingDto("name", "actor", "  "),
+            new TransformFieldMappingDto(
+                "risk_level",
+                "severity",
+                "valueMap",
+                Map.of("type", "valueMap", "values", Map.of("critical", "high"))
+            )
         );
 
         var mappingPlan = new TransformMappingPlanDto(
@@ -75,9 +82,10 @@ class TransformContractDtoTest {
             details
         );
 
-        assertEquals(2, mappingPlan.fieldMappingDetails().size());
+        assertEquals(3, mappingPlan.fieldMappingDetails().size());
         assertNull(mappingPlan.fieldMappingDetails().get(0).transformRule());
         assertEquals("  ", mappingPlan.fieldMappingDetails().get(1).transformRule());
+        assertEquals("valueMap", mappingPlan.fieldMappingDetails().get(2).transformRulePayload().get("type"));
     }
 
     @Test
@@ -116,5 +124,30 @@ class TransformContractDtoTest {
         assertThrows(UnsupportedOperationException.class, () -> mappingPlan.fieldMappingDetails().add(
             new TransformFieldMappingDto("x", "y", "upper")
         ));
+    }
+
+    @Test
+    void fieldMappingDtoKeepsOldConstructorAndNormalizesMissingPayload() {
+        var oldDetail = new TransformFieldMappingDto("id", "externalId", "trim");
+        var nullPayloadDetail = new TransformFieldMappingDto("id", "externalId", "trim", null);
+
+        assertEquals("trim", oldDetail.transformRule());
+        assertEquals(Map.of(), oldDetail.transformRulePayload());
+        assertEquals(Map.of(), nullPayloadDetail.transformRulePayload());
+    }
+
+    @Test
+    void fieldMappingDtoCarriesPayloadWithTopLevelDefensiveCopy() {
+        var payload = new LinkedHashMap<String, Object>();
+        payload.put("type", "valueMap");
+        payload.put("values", Map.of("critical", "high"));
+
+        var detail = new TransformFieldMappingDto("risk_level", "severity", "valueMap", payload);
+        payload.put("onMissing", "useDefault");
+
+        assertEquals("valueMap", detail.transformRulePayload().get("type"));
+        assertEquals(Map.of("critical", "high"), detail.transformRulePayload().get("values"));
+        assertFalse(detail.transformRulePayload().containsKey("onMissing"));
+        assertThrows(UnsupportedOperationException.class, () -> detail.transformRulePayload().put("x", "y"));
     }
 }

@@ -60,7 +60,8 @@ final class TransformContractSupport {
             .map(detail -> new MappingPlan.FieldMappingDetail(
                 detail.sourceField(),
                 detail.standardField(),
-                detail.transformRule()
+                detail.transformRule(),
+                detail.transformRulePayload()
             ))
             .toList();
     }

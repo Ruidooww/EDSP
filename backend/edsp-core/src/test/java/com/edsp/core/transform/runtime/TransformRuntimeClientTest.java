@@ -218,7 +218,12 @@ class TransformRuntimeClientTest {
         var mappingPlan = TransformContractSupport.mappingPlan(new TransformMappingPlanDto(
             Map.of("user_account", "actor"),
             List.of("id"),
-            List.of(new TransformFieldMappingDto("user_account", "actor", " lower "))
+            List.of(new TransformFieldMappingDto(
+                "user_account",
+                "actor",
+                " lower ",
+                Map.of("type", "valueMap", "values", Map.of("ADMIN", "admin"))
+            ))
         ));
 
         assertEquals(Map.of("user_account", "actor"), mappingPlan.fieldMappings());
@@ -227,6 +232,8 @@ class TransformRuntimeClientTest {
         assertEquals("user_account", mappingPlan.fieldMappingDetails().get(0).sourceField());
         assertEquals("actor", mappingPlan.fieldMappingDetails().get(0).standardField());
         assertEquals(" lower ", mappingPlan.fieldMappingDetails().get(0).transformRule());
+        assertEquals("valueMap", mappingPlan.fieldMappingDetails().get(0).transformRulePayload().get("type"));
+        assertEquals(Map.of("ADMIN", "admin"), mappingPlan.fieldMappingDetails().get(0).transformRulePayload().get("values"));
     }
 
     private HttpServer startServer(int status, String body) throws IOException {

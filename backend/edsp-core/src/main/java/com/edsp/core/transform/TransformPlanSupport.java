@@ -119,7 +119,8 @@ public class TransformPlanSupport {
                 result.add(new TransformFieldMappingDto(
                     sourceField,
                     standardField,
-                    rawStringOrNull(mapping.get("transformRule"))
+                    rawStringOrNull(mapping.get("transformRule")),
+                    objectMap(mapping.get("transformRulePayload"))
                 ));
             }
         }
@@ -143,5 +144,18 @@ public class TransformPlanSupport {
 
     private String rawStringOrNull(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        var result = new LinkedHashMap<String, Object>();
+        for (var entry : map.entrySet()) {
+            if (entry.getKey() != null) {
+                result.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        return result;
     }
 }

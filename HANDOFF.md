@@ -756,3 +756,11 @@ One merge.
 One post-merge HANDOFF update.
 Clean master before continuing.
 ```
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Configurable Transform Rule Processor MVP`
+- Latest feature merge commit: `edd0af6 merge: configurable transform rule processor mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for configurable transform rule processor mvp`
+- Stage branch: `codex/configurable-transform-rule-processor-mvp`
+- Stage result: added package-private `TransformRuleApplier`; `StandardEventTransformRuleProcessor` now executes the minimal transformRule set inside `edsp-transform`; supported rules are `trim`, `lower`, `upper`, and `defaultIfBlank`; legacy `trim(sourceField)`, `lower(sourceField)`, and `upper(sourceField)` are supported; `fieldMappings` remains the only authoritative mapping source; `fieldMappingDetails` must exactly match `{sourceField, standardField}` before a rule executes; non-authoritative `fieldMappingDetails` are ignored; unsupported / invalid / mismatch rules only enter `warnings` and do not cause row failed / sync failed / ShadowRun failed; rules only affect mapped value and do not modify raw source row; `dedupFields` still use raw source row semantics; sync once and ShadowRun naturally receive rule results through `TransformRuntimeClient`; Precheck remains dry-run / schema metadata validation and does not execute rules; this stage did not implement `valueMap`, JSON rule schema, script, expression, DB, HTTP, or filesystem capabilities; PR #5 triggered EDSP CI and Transform Runtime Smoke, both success; Transform Runtime Smoke artifact `transform-runtime-smoke-26635459664-1` is PR runtime smoke sample #5.
+- Recommended next stage: `Transform Rule Runtime Verification MVP` or `Transform Rule Structured Payload / valueMap Readiness MVP`.

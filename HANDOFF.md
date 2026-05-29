@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Rule Contract Readiness MVP`
-- 最新 feature merge commit：`178238f merge: transform rule contract readiness mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule contract readiness mvp`
-- 本轮阶段分支：`codex/transform-rule-contract-readiness-mvp`
-- 本轮结果：新增 `docs/transform-rule-contract-readiness.md`；本轮为 docs-only / assessment-first，评估 configurable `transform_rule` 如何从 `field_mappings` / `plan_json` 进入 transform runtime contract / wire shape；当前 `field_mappings.transform_rule` 已能进入 `plan_json.fieldMappingDetails` / `fieldEvidence`，但不会进入 runtime contract；当前 `TransformMappingPlanDto` / `MappingPlan` 仍只有 `fieldMappings` + `dedupFields`，runtime 不接收也不执行 `transform_rule`；推荐后续采用 mapping-detail based transport，最小安全规则集候选为 `trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap`；明确拒绝 scripts / Groovy / JS / SpEL / SQL / HTTP / filesystem / arbitrary expressions 等能力；下一阶段建议 `Transform Rule Contract MVP`。
+- 当前阶段：`Transform Rule Contract MVP`
+- 最新 feature merge commit：`af3d337 merge: transform rule contract mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule contract mvp`
+- 本轮阶段分支：`codex/transform-rule-contract-mvp`
+- 本轮结果：新增 `TransformFieldMappingDto`；`TransformMappingPlanDto` 新增 optional `fieldMappingDetails` 并保留旧二参构造兼容；`MappingPlan` 新增 `fieldMappingDetails` passthrough；`TransformPlanSupport` 从 `plan_json.fieldMappingDetails` 构造 contract payload；`TransformContractSupport` / `TransformContractMapper` 只做 DTO 与 `MappingPlan` 映射；sync once / ShadowRun request 可以携带 `fieldMappingDetails`；`fieldMappings` 仍是当前唯一 authoritative transform mapping source；`fieldMappingDetails` 当前只是 future-facing passthrough payload；本轮不解析、不验证、不执行 `transformRule`；本轮不改变 transform output；本轮不改变 Precheck / ShadowRun / sync once / scheduled sync 语义；下一阶段建议 `Configurable Transform Rule Processor MVP`。
 
 ## 已完成能力
 
@@ -260,6 +260,22 @@
   - 本轮未改变 ShadowRun / Precheck / sync once / scheduled sync 语义。
   - PR #2 已触发 EDSP CI 和 `Transform Runtime Smoke`，均 `success`。
   - `Transform Runtime Smoke` artifact：`transform-runtime-smoke-26609609065-1`，可作为 PR runtime smoke sample #2。
+- 新增 transform rule contract passthrough：
+  - 新增 `TransformFieldMappingDto`，字段为 `sourceField` / `standardField` / `transformRule`。
+  - `TransformMappingPlanDto` 新增 optional `fieldMappingDetails`，并保留旧二参 Java 构造兼容。
+  - `TransformMappingPlanDto` 旧 JSON 不带 `fieldMappingDetails` 仍可反序列化，新 JSON 带 `fieldMappingDetails` 可反序列化，`null fieldMappingDetails` 归一为空 list。
+  - `MappingPlan` 新增 `fieldMappingDetails` passthrough，并保留既有二参构造和 `fromPlan(...)` 语义。
+  - `MappingPlan.fromPlan(...)` 仍优先使用 `plan_json.fieldMappings`；仅当 `fieldMappings` 为空时保持既有从 `fieldMappingDetails` fallback 构造 `fieldMappings` 的行为。
+  - `TransformPlanSupport` 从 `plan_json.fieldMappingDetails` 构造 runtime contract payload。
+  - `TransformContractSupport` / `TransformContractMapper` 只做 DTO 与 `MappingPlan` 映射。
+  - sync once / ShadowRun runtime request 可以携带 `fieldMappingDetails`。
+  - `fieldMappings` 仍是当前唯一 authoritative transform mapping source。
+  - `fieldMappingDetails` 当前只是 future-facing passthrough payload。
+  - 本轮不解析、不验证、不执行 `transformRule`。
+  - 本轮不改变 transform output。
+  - 本轮不改变 Precheck / ShadowRun / sync once / scheduled sync 语义。
+  - PR #4 已触发 EDSP CI 和 `Transform Runtime Smoke`，均 `success`。
+  - `Transform Runtime Smoke` artifact：`transform-runtime-smoke-26625414672-1`，可作为 PR runtime smoke sample #4。
 
 ## 明确未做 / 禁止误解
 
@@ -271,7 +287,7 @@
 - 本轮不把 `edsp-core` 改成 remote-only core。
 - 本轮不新增 local bridge module。
 - 本轮不修改 `edsp-transform-service` HTTP API。
-- 本轮不修改 `edsp-transform-contract` DTO。
+- 本轮除 additive contract / wire shape passthrough 外，不修改 `edsp-transform-contract` DTO 以承载 rule execution 语义。
 - 本轮不修改 sync once / scheduled sync 主链路语义。
 - 本轮不新增 database migration。
 - 本轮不新增 Gateway route。
@@ -611,6 +627,27 @@
     - Artifact：`transform-runtime-smoke-26615687733-1`，`474 Bytes`。
     - Artifact 内容确认：仅包含 `summary.json`；`remoteSuccess`、`remoteUnavailable`、`fallbackUnavailable`、`transformRuntimeVerification` 均为 `PASS`。
   - review 通过，未发现 P0 / P1 / P2。
+- Transform Rule Contract MVP 阶段分支验证：
+  - `mvn -pl edsp-transform-contract test` 通过，`5` tests。
+  - `mvn -pl edsp-transform -am test` 通过，`14` tests。
+  - `mvn -pl edsp-transform-service -am test` 通过，`8` transform-service tests。
+  - `mvn -pl edsp-core -am "-Dtest=TransformRuntimeClientTest,IngestionPlanShadowRunServiceTest,IngestionPlanSyncOnceServiceTest,TransformRuntimeDependencyGuardTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` 通过，`66` tests。
+  - `mvn -pl edsp-core -am test` 通过，`152` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `docker compose -p edsp config --quiet` 通过。
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - forbidden files diff 检查通过，未修改 frontend、`docker-compose.yml`、`.github/workflows/**`、`scripts/**`、migration、`AGENTS.md` 或 `HANDOFF.md`。
+  - 内容检查确认 `transformRule` 仅作为 DTO / mapping / passthrough / tests / existing plan generation 相关 payload 出现；未新增 rule execution、script / expression 能力或 edsp-core 业务层 direct transform engine dependency。
+  - PR #4 EDSP CI 通过。
+  - PR #4 `Transform Runtime Smoke` non-required PR check 通过：
+    - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26625414672`。
+    - Job URL：`https://github.com/Ruidooww/EDSP/actions/runs/26625414672/job/78460848590`。
+    - Result：`success`。
+    - Duration：`2m9s`。
+    - Artifact：`transform-runtime-smoke-26625414672-1`，`474 Bytes`。
+    - Artifact 内容确认：仅包含 `summary.json`；`remoteSuccess`、`remoteUnavailable`、`fallbackUnavailable`、`transformRuntimeVerification` 均为 `PASS`，未发现 DB dump、完整 raw row、`data_sources.config_json`、完整 env 或 secret-like 内容。
+  - review 通过，未发现 P0 / P1。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -650,6 +687,13 @@
 - 后续最小安全规则集候选为 `trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap`，但尚未实现。
 - scripts / Groovy / JS / SpEL / SQL / HTTP / filesystem / arbitrary expressions 等能力已明确不进入 MVP 范围。
 - PR #3 已提供第三条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success；artifact 为 `transform-runtime-smoke-26615687733-1`。
+- Transform Rule Contract MVP 已完成；runtime contract 现在可以携带 mapping-detail style `fieldMappingDetails` payload。
+- `TransformFieldMappingDto` 已新增，`TransformMappingPlanDto` / `MappingPlan` 已新增 optional `fieldMappingDetails` passthrough。
+- `TransformPlanSupport`、`TransformContractSupport`、`TransformContractMapper` 只做 payload 构造和 DTO / `MappingPlan` 映射，不执行 rules。
+- sync once / ShadowRun request 可以携带 `fieldMappingDetails`，但当前 transform output 仍只由 `fieldMappings` 决定。
+- `fieldMappings` 仍是当前唯一 authoritative transform mapping source；`fieldMappingDetails` 当前只是 future-facing passthrough payload。
+- 当前仍不解析、不验证、不执行 `transformRule`；`trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap` 仍未实现。
+- PR #4 已提供第四条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success；artifact 为 `transform-runtime-smoke-26625414672-1`。
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 - `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。
@@ -661,17 +705,19 @@
 建议下一阶段优先执行：
 
 ```text
-Transform Rule Contract MVP
+Configurable Transform Rule Processor MVP
 ```
 
 目标建议：
 
-- 在 `edsp-transform-contract` 中做兼容性 contract 扩展，让 runtime wire shape 可以承载 mapping-detail rule payload。
-- 优先采用 mapping-detail based transport，建议形态为 `{ sourceField, standardField, transformRule }` 或等价的 typed DTO list。
-- 更新 `TransformPlanSupport` / `TransformContractSupport` / `MappingPlan` 只做 rule payload passthrough / no-op 接收，不执行 rules。
-- 不实现 `field_mappings.transform_rule` runtime execution。
+- 在 `edsp-transform` 内部 `StandardEventTransformRuleProcessor` 中实现经过批准的最小安全规则集。
+- 候选规则集限定为 `trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap`。
+- 使用当前已经透传到 runtime contract 的 mapping-detail `fieldMappingDetails[*].transformRule` payload。
+- 保持规则执行集中在 `edsp-transform` 内部 processor，不在 `edsp-core`、ShadowRun、Precheck、frontend 或 transform-service controller 中复制执行逻辑。
+- 继续保持 `fieldMappings` 的 authoritative mapping 语义，任何 rule execution 都必须有独立测试证明不会改变 mapping source 优先级。
+- 需要明确 unsupported rule / invalid payload / valueMap missing key / defaultIfBlank missing default 的 errors / warnings 语义。
+- 不允许 scripts / Groovy / JS / SpEL / SQL / HTTP / filesystem / arbitrary expressions / external process execution。
 - 不实现 configurable transform rule DSL。
-- 不执行 `trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap`。
 - 不改变 ShadowRun / Precheck / sync once / scheduled sync 语义。
 - 不默认 remote / fallback。
 - 不删除 `edsp-core -> edsp-transform`。

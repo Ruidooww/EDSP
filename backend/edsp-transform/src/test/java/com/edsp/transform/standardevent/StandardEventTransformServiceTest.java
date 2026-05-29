@@ -174,8 +174,38 @@ class StandardEventTransformServiceTest {
             "fieldMappingDetails", List.of(Map.of("sourceField", "create_time", "standardField", "occurredAt")),
             "dedupStrategy", Map.of("fields", "id")
         ));
-        assertEquals(Map.of("create_time", "occurredAt"), detailPlan.fieldMappings());
+        assertEquals(Map.of(), detailPlan.fieldMappings());
+        assertEquals(1, detailPlan.fieldMappingDetails().size());
         assertEquals(List.of("id"), detailPlan.dedupFields());
+    }
+
+    @Test
+    void fieldMappingDetailsAloneDoNotBecomeAuthoritativeMappings() {
+        var plan = MappingPlan.fromPlan(Map.of(
+            "fieldMappingDetails", List.of(Map.of(
+                "sourceField", "user_account",
+                "standardField", "actor",
+                "transformRule", "lower"
+            )),
+            "dedupStrategy", Map.of("fields", List.of("id"))
+        ));
+
+        var result = service.transform(
+            new SourceRow(Map.of(
+                "id", "ALERT-1",
+                "create_time", "2026-05-20 10:30:00",
+                "user_account", "USER_A"
+            )),
+            plan,
+            defaultOptions()
+        );
+
+        assertEquals(Map.of(), plan.fieldMappings());
+        assertEquals(1, plan.fieldMappingDetails().size());
+        assertEquals(List.of("missing_occurred_at"), result.errors());
+        assertEquals(List.of(), result.warnings());
+        assertNull(result.draft().actor());
+        assertEquals(Map.of(), result.draft().normalized().get("mapped"));
     }
 
     @Test
@@ -199,7 +229,7 @@ class StandardEventTransformServiceTest {
     }
 
     @Test
-    void transformRulesInMappingDetailsDoNotChangeCurrentOutput() {
+    void transformRulesInAuthoritativeMappingDetailsChangeMappedOutputOnly() {
         var row = new SourceRow(Map.of(
             "id", "ALERT-1",
             "create_time", "2026-05-20 10:30:00",
@@ -227,8 +257,10 @@ class StandardEventTransformServiceTest {
 
         assertEquals(baseline.errors(), withRulePayload.errors());
         assertEquals(baseline.warnings(), withRulePayload.warnings());
-        assertEquals(baseline.draft(), withRulePayload.draft());
-        assertEquals("USER_A", withRulePayload.draft().actor());
+        assertEquals(baseline.draft().dedupKey(), withRulePayload.draft().dedupKey());
+        assertEquals("USER_A", baseline.draft().actor());
+        assertEquals("user_a", withRulePayload.draft().actor());
+        assertEquals("user_a", objectMap(withRulePayload.draft().normalized().get("mapped")).get("actor"));
     }
 
     private void assertSeverity(String raw, String expectedSeverity, Integer expectedRisk, List<String> expectedErrors) {

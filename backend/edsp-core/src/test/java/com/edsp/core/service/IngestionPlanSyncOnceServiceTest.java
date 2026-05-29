@@ -146,6 +146,32 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     @Test
+    void syncOnceConsumesRuleTransformedLocalRuntimeResultWithoutCoreRuleExecution() throws Exception {
+        executeSourceSql("update sec_alert_event set user_account = 'USER_A' where id = 'ALERT-1'");
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", result.get("status"));
+        var rawPayload = objectValue(jdbcTemplate.queryForObject(
+            "select payload_json from raw_events where external_id = 'ALERT-1'",
+            Object.class
+        ));
+        assertEquals("USER_A", objectValue(rawPayload.get("fields")).get("user_account"));
+        assertEquals("user_a", jdbcTemplate.queryForObject(
+            "select actor from standard_events where external_id = 'ALERT-1'",
+            String.class
+        ));
+        assertEquals(0, remoteShadowClient.calls);
+    }
+
+    @Test
     void remoteRuntimeUsesBatchResultAsMainResultAndDoesNotRunShadow() {
         remoteShadowClient.nextReport = TransformShadowReport.enabled(2, 2, 0, 0, List.of());
         runtimeClient = new RecordingTransformRuntimeClient(

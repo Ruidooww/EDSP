@@ -8,12 +8,14 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Objects;
 
 final class StandardEventTransformRuleProcessor {
     private final TimeValueParser timeValueParser;
     private final SeverityNormalizer severityNormalizer;
     private final RiskScoreCalculator riskScoreCalculator;
     private final DedupKeyBuilder dedupKeyBuilder;
+    private final TransformRuleApplier transformRuleApplier;
 
     StandardEventTransformRuleProcessor() {
         this(new TimeValueParser(), new SeverityNormalizer(), new RiskScoreCalculator(), new DedupKeyBuilder());
@@ -25,17 +27,29 @@ final class StandardEventTransformRuleProcessor {
         RiskScoreCalculator riskScoreCalculator,
         DedupKeyBuilder dedupKeyBuilder
     ) {
+        this(timeValueParser, severityNormalizer, riskScoreCalculator, dedupKeyBuilder, new TransformRuleApplier());
+    }
+
+    StandardEventTransformRuleProcessor(
+        TimeValueParser timeValueParser,
+        SeverityNormalizer severityNormalizer,
+        RiskScoreCalculator riskScoreCalculator,
+        DedupKeyBuilder dedupKeyBuilder,
+        TransformRuleApplier transformRuleApplier
+    ) {
         this.timeValueParser = timeValueParser;
         this.severityNormalizer = severityNormalizer;
         this.riskScoreCalculator = riskScoreCalculator;
         this.dedupKeyBuilder = dedupKeyBuilder;
+        this.transformRuleApplier = transformRuleApplier == null ? new TransformRuleApplier() : transformRuleApplier;
     }
 
     TransformResult process(SourceRow row, MappingPlan plan, TransformOptions options) {
         var sourceRow = row == null ? new SourceRow(null) : row;
         var mappingPlan = plan == null ? new MappingPlan(null, null) : plan;
         var transformOptions = options == null ? new TransformOptions(null, null, null, null) : options;
-        var values = mappedValues(sourceRow, mappingPlan);
+        var warnings = new ArrayList<String>();
+        var values = mappedValues(sourceRow, mappingPlan, warnings);
         var errors = new ArrayList<String>();
         var occurredAt = parseRequiredTime(values.get("occurredAt"), errors);
         var severity = normalizeSeverity(values.get("severity"), errors);
@@ -86,13 +100,30 @@ final class StandardEventTransformRuleProcessor {
             normalized,
             extra
         );
-        return new TransformResult(draft, errors, List.of());
+        return new TransformResult(draft, errors, warnings);
     }
 
-    private LinkedHashMap<String, Object> mappedValues(SourceRow row, MappingPlan plan) {
+    private LinkedHashMap<String, Object> mappedValues(SourceRow row, MappingPlan plan, List<String> warnings) {
         var values = new LinkedHashMap<String, Object>();
-        plan.fieldMappings().forEach((sourceField, standardField) -> values.put(standardField, row.values().get(sourceField)));
+        plan.fieldMappings().forEach((sourceField, standardField) -> {
+            var value = row.values().get(sourceField);
+            var detail = exactDetail(plan, sourceField, standardField);
+            if (detail != null) {
+                var application = transformRuleApplier.apply(value, detail.transformRule(), sourceField);
+                warnings.addAll(application.warnings());
+                value = application.value();
+            }
+            values.put(standardField, value);
+        });
         return values;
+    }
+
+    private MappingPlan.FieldMappingDetail exactDetail(MappingPlan plan, String sourceField, String standardField) {
+        return plan.fieldMappingDetails().stream()
+            .filter(detail -> Objects.equals(sourceField, detail.sourceField())
+                && Objects.equals(standardField, detail.standardField()))
+            .findFirst()
+            .orElse(null);
     }
 
     private OffsetDateTime parseRequiredTime(Object value, List<String> errors) {

@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Precheck Real Runtime Alignment Assessment MVP`
-- 最新 feature merge commit：`7582b97 merge: precheck real runtime alignment assessment mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for precheck real runtime alignment assessment mvp`
-- 本轮阶段分支：`codex/precheck-real-runtime-alignment-assessment-mvp`
-- 本轮结果：新增 `docs/precheck-real-runtime-alignment-assessment.md`，完成 Precheck real runtime alignment docs-only assessment；当前 Precheck 仍保持 dry-run / schema metadata validation，本轮不实现 real runtime Precheck，不注入 `TransformRuntimeClient`，不调用 remote transform service，不改变 activation gate / ShadowRun / sync once / scheduled sync；当前推荐保持 Precheck dry-run，未来如实现优先评估 `Option C: Two-stage Precheck`，并必须单独开 `Precheck Real Runtime Alignment Implementation MVP`。
+- 当前阶段：`Standard Event Transform Internal Rule Processor MVP`
+- 最新 feature merge commit：`431c605 merge: standard event transform internal rule processor mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for standard event transform internal rule processor mvp`
+- 本轮阶段分支：`codex/standard-event-transform-rule-processor-mvp`
+- 本轮结果：新增 `StandardEventTransformRuleProcessor`，将 `edsp-transform` 中既有标准事件转换逻辑收敛到内部 processor；`StandardEventTransformService` 保持 public facade 并委托 processor；本轮只做 internal processor extraction，未实现 configurable `transform_rule`，未读取或执行 `field_mappings.transform_rule`，未修改 `edsp-transform-contract` DTO、`edsp-transform-service` HTTP API、`edsp-core` main production logic，也未改变 ShadowRun / Precheck / sync once / scheduled sync 语义。
 
 ## 已完成能力
 
@@ -248,6 +248,18 @@
   - 未来实现必须单独开 `Precheck Real Runtime Alignment Implementation MVP`。
   - PR #1 已触发 `Transform Runtime Smoke` non-required PR check，结果 `success`，可作为 PR run sample #1。
   - PR #1 的 EDSP CI 也已 `success`。
+- 新增 `StandardEventTransformRuleProcessor`：
+  - 作为 `edsp-transform` 内部 processor，承接现有 `StandardEventTransformService` 中的标准事件转换步骤。
+  - `StandardEventTransformService` 继续作为 public facade，保留既有 `transform(SourceRow, MappingPlan, TransformOptions)` 入口并委托 processor。
+  - 本轮只做 internal processor extraction。
+  - 本轮未实现 configurable `transform_rule`。
+  - 本轮未读取或执行 `field_mappings.transform_rule`。
+  - 本轮未修改 `edsp-transform-contract` DTO。
+  - 本轮未修改 `edsp-transform-service` HTTP API。
+  - 本轮未修改 `edsp-core` main production logic。
+  - 本轮未改变 ShadowRun / Precheck / sync once / scheduled sync 语义。
+  - PR #2 已触发 EDSP CI 和 `Transform Runtime Smoke`，均 `success`。
+  - `Transform Runtime Smoke` artifact：`transform-runtime-smoke-26609609065-1`，可作为 PR runtime smoke sample #2。
 
 ## 明确未做 / 禁止误解
 
@@ -268,7 +280,7 @@
 - 本轮不改 `SchemaPage`。
 - 本轮不改 `IngestionPlanPanel`。
 - 本轮不把 Precheck 升级为 real runtime。
-- 本轮不做 transform_rule processor。
+- 本轮不做 configurable `transform_rule` processor。
 - 本轮不做 Standard Field Catalog。
 - 本轮不做 Mapping Management Hardening。
 - 本轮不新增 MySQL / Oracle / 达梦 / 金仓 connector。
@@ -556,6 +568,31 @@
   - PR #1 EDSP CI 通过：
     - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26585947803`。
     - Result：`success`。
+- Standard Event Transform Internal Rule Processor MVP 阶段分支验证：
+  - `mvn -pl edsp-transform -am test` 通过，`12` tests。
+  - `mvn -pl edsp-transform-service -am test` 通过，`17` tests。
+  - `mvn -pl edsp-core -am "-Dtest=IngestionPlanSyncOnceServiceTest,IngestionPlanShadowRunServiceTest,TransformRuntimeDependencyGuardTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` 通过，`57` tests。
+  - `mvn -pl edsp-core -am test` 通过，`149` tests。
+  - `npm.cmd run build` 通过；仅有既有 Vite chunk size warning。
+  - `docker compose -p edsp config --quiet` 通过。
+  - `git diff --check` 通过。
+  - `git status --short --branch` clean after branch commit / push。
+  - `git diff --name-only origin/master...HEAD` 确认仅包含：
+    - `backend/edsp-transform/src/main/java/com/edsp/transform/standardevent/StandardEventTransformRuleProcessor.java`
+    - `backend/edsp-transform/src/main/java/com/edsp/transform/standardevent/StandardEventTransformService.java`
+    - `backend/edsp-transform/src/test/java/com/edsp/transform/standardevent/StandardEventTransformRuleProcessorTest.java`
+  - forbidden files diff 检查通过，未修改 `backend/edsp-transform-contract/**`、frontend、`docker-compose.yml`、`.github/workflows/**`、`scripts/**`、migration、`AGENTS.md`、`HANDOFF.md` 或 `backend/edsp-core/src/main/java/**`。
+  - PR #2 EDSP CI 通过：
+    - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26609609118`。
+    - Result：`success`。
+  - PR #2 `Transform Runtime Smoke` non-required PR check 通过：
+    - Run URL：`https://github.com/Ruidooww/EDSP/actions/runs/26609609065`。
+    - Job URL：`https://github.com/Ruidooww/EDSP/actions/runs/26609609065/job/78412380001`。
+    - Result：`success`。
+    - Duration：`2m10s`。
+    - Artifact：`transform-runtime-smoke-26609609065-1`，`474 Bytes`。
+    - Artifact 内容确认：仅包含 `summary.json`；`remoteSuccess`、`remoteUnavailable`、`fallbackUnavailable`、`transformRuntimeVerification` 均为 `PASS`。
+  - review 通过，未发现 P0 / P1。
 - Post-merge / push 后 Git 检查结果记录在最终回复中。
 
 ## 已知后续项
@@ -587,6 +624,8 @@
 - Precheck Real Runtime Alignment Assessment 已完成；当前推荐保持 Precheck dry-run / schema metadata validation。
 - 未来如实现 Precheck real runtime，优先评估 `Option C: Two-stage Precheck`，并必须单独开 `Precheck Real Runtime Alignment Implementation MVP`。
 - PR #1 已提供第一条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success。
+- Standard Event Transform Internal Rule Processor MVP 已完成；当前 `StandardEventTransformService` 已委托 `StandardEventTransformRuleProcessor`，但 configurable `transform_rule` 仍未实现。
+- PR #2 已提供第二条真实 PR check 样本：`Transform Runtime Smoke` success，EDSP CI success。
 - `actions/upload-artifact@v4` Node.js 20 deprecation warning 仍作为 P2 跟踪，不影响当前 workflow 成功。
 - `TransformRuntimeDependencyGuardTest` 已收紧为显式 bridge allowlist；后续新增 runtime bridge 需要显式审查并更新守卫，不能通过扩大目录豁免绕过边界。
 - `edsp-core -> edsp-transform` 仍保留；本轮 readiness 文档确认当前不建议直接 dependency removal。
@@ -598,32 +637,36 @@
 建议下一阶段优先执行：
 
 ```text
-Transform Runtime Smoke PR Check Observation MVP
+Configurable Transform Rule Processor Assessment MVP
 ```
 
 目标建议：
 
-- 观察 `Transform Runtime Smoke` 的 `pull_request` non-required check 运行结果。
-- 记录至少 3-5 次 PR check 的运行结果、耗时、失败原因、artifact 内容和 flake 情况。
-- 不设置 required check。
-- 不修改 branch protection / repository settings。
-- 不挂 `push` trigger。
-- 保持 manual `workflow_dispatch` 作为人工验证入口。
-- 继续保留 artifact / logs 安全边界。
-- required gate 需等 non-required PR check 稳定运行后再单独评估。
-- `actions/upload-artifact@v4` Node.js 20 deprecation warning 继续作为 P2 跟踪。
-- 继续保持 `runtime-mode=local` 默认值。
-- 不执行 destructive volume cleanup。
+- 评估如何把可配置 `transform_rule` 接入新的内部 processor 边界。
+- 先确认 rule source、contract / plan_json 表达方式、错误码、脱敏策略和回滚策略。
+- 不直接修改 `edsp-transform-contract` DTO，除非单独确认 scope。
+- 不改变 transform-service HTTP API，除非单独确认 scope。
+- 不改变 ShadowRun / Precheck / sync once / scheduled sync 语义。
+- 不默认 remote / fallback。
+- 不删除 `edsp-core -> edsp-transform`。
+- 不新增 migration，除非单独确认 scope。
+- 继续保持 runtime smoke PR check 作为 non-required observation。
 
 如果优先推进 transform 运行口径，可单独排期：
 
-- `Precheck Real Runtime Alignment Assessment MVP`
-  - 评估 `IngestionPlanPrecheckService` 是否需要从 dry-run / schema metadata validation 升级为 real runtime validation。
-  - 明确 Precheck 是否应调用 `TransformRuntimeClient`，以及失败时是否只影响 precheck report。
-  - 评估 real runtime Precheck 是否需要扩展 `edsp-transform-contract` DTO；如需要，应单独确认 scope。
+- `Precheck Real Runtime Alignment Implementation MVP`
+  - 在 assessment 结论基础上评估 `Option C: Two-stage Precheck` 的最小实现。
+  - 明确 Precheck runtime failure 是否只影响 precheck report。
+  - 如需要扩展 `edsp-transform-contract` DTO，必须单独确认 scope。
   - 不改变默认 `runtime-mode=local`。
   - 不删除 `edsp-core -> edsp-transform`。
   - 不修改 transform-service HTTP API 或 contract DTO。
+
+如果优先继续 CI gate 观察，可单独排期：
+
+- `Transform Runtime Smoke PR Check Observation MVP`
+  - 继续收集 3-5 次真实 PR check 样本。
+  - 继续保持 non-required，不设置 required check。
 
 如继续推进 transform runtime 观测，可在 compose 隔离完成后单独排期：
 

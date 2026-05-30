@@ -170,6 +170,35 @@ class IngestionPlanShadowRunServiceTest {
     }
 
     @Test
+    void createShadowRunPreviewUsesValueMapThroughRuntimeClient() throws Exception {
+        executeSourceSql("update sec_alert_event set user_account = 'USER_A' where id = 'ALERT-1'");
+        var dataSourceId = insertDataSource(SOURCE_URL);
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId, "sec_alert_event", "alert_table");
+        insertField(tableId, scanRunId, "id", "varchar", 1, null);
+        insertField(tableId, scanRunId, "create_time", "timestamp", 2, null);
+        insertField(tableId, scanRunId, "event_name", "varchar", 3, null);
+        insertField(tableId, scanRunId, "user_account", "varchar", 4, null);
+        insertField(tableId, scanRunId, "host_name", "varchar", 5, null);
+        var planId = insertValueMapPlan(dataSourceId, scanRunId, tableId);
+
+        var run = service.createShadowRun(planId, new IngestionPlanShadowRunRequest(5000));
+
+        assertEquals("passed", run.get("status"));
+        assertEquals(1, transformRuntimeClient.calls);
+        var mappingDetails = transformRuntimeClient.lastRequest.mappingPlan().fieldMappingDetails();
+        assertEquals(1, mappingDetails.size());
+        assertEquals("valueMap", mappingDetails.get(0).transformRule());
+        assertEquals("valueMap", mappingDetails.get(0).transformRulePayload().get("type"));
+        var report = objectValue(run.get("report"));
+        var samples = objectList(report.get("samples"));
+        var firstStandardPreview = objectValue(samples.get(0).get("standardEventPreview"));
+        assertEquals("mapped-user", firstStandardPreview.get("actor"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+    }
+
+    @Test
     void createShadowRunSummarizesStandardDetailPreviewByTargetFieldName() {
         var dataSourceId = insertDataSource(SOURCE_URL);
         var scanRunId = insertCompleteScan(dataSourceId);
@@ -571,6 +600,14 @@ class IngestionPlanShadowRunServiceTest {
         return lastId("ingestion_plans");
     }
 
+    private Long insertValueMapPlan(Long dataSourceId, Long scanRunId, Long tableId) {
+        jdbcTemplate.update("""
+            insert into ingestion_plans(data_source_id, scan_run_id, name, status, plan_json)
+            values (?, ?, 'Value map plan', 'approved', cast(? as jsonb))
+            """, dataSourceId, scanRunId, valueMapPlanJson(tableId));
+        return lastId("ingestion_plans");
+    }
+
     private Long insertSeverityPlan(Long dataSourceId, Long scanRunId, Long tableId) {
         jdbcTemplate.update("""
             insert into ingestion_plans(data_source_id, scan_run_id, name, status, plan_json)
@@ -637,6 +674,44 @@ class IngestionPlanShadowRunServiceTest {
                     "type": "valueMap",
                     "values": {
                       "USER_A": "ignored"
+                    },
+                    "onMissing": "keepOriginal"
+                  }
+                }
+              ],
+              "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
+              "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
+              "risks": [],
+              "requiredFieldsMissing": []
+            }
+            """.formatted(tableId);
+    }
+
+    private String valueMapPlanJson(Long tableId) {
+        return """
+            {
+              "version": "ingestion-plan-v1",
+              "mode": "database_polling",
+              "mainTable": "sec_alert_event",
+              "schemaTableId": %d,
+              "cursorField": "create_time",
+              "fieldMappings": {
+                "id": "externalId",
+                "create_time": "occurredAt",
+                "event_name": "title",
+                "user_account": "actor",
+                "host_name": "assetRef"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "user_account",
+                  "standardField": "actor",
+                  "transformRule": "valueMap",
+                  "transformRulePayload": {
+                    "type": "valueMap",
+                    "values": {
+                      "USER_A": "mapped-user",
+                      "lisi": "lisi"
                     },
                     "onMissing": "keepOriginal"
                   }

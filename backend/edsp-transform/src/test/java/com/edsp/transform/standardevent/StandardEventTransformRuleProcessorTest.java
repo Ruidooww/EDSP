@@ -141,7 +141,7 @@ class StandardEventTransformRuleProcessorTest {
         assertEquals(List.of(), result.errors());
         assertEquals(List.of(
             "transform_rule_mismatch",
-            "transform_rule_unsupported",
+            "transform_rule_value_map_invalid_payload",
             "transform_rule_invalid"
         ), result.warnings());
         assertEquals("USER_A", result.draft().actor());

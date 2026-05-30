@@ -152,7 +152,7 @@ class IngestionPlanSyncOnceServiceTest {
         var scanRunId = insertCompleteScan(dataSourceId);
         var tableId = insertTable(dataSourceId, scanRunId);
         insertDefaultFields(tableId, scanRunId);
-        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId, valueMapActorPlanJson(tableId));
         var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
         var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
 
@@ -164,7 +164,7 @@ class IngestionPlanSyncOnceServiceTest {
             Object.class
         ));
         assertEquals("USER_A", objectValue(rawPayload.get("fields")).get("user_account"));
-        assertEquals("user_a", jdbcTemplate.queryForObject(
+        assertEquals("mapped-user", jdbcTemplate.queryForObject(
             "select actor from standard_events where external_id = 'ALERT-1'",
             String.class
         ));
@@ -1623,6 +1623,45 @@ class IngestionPlanSyncOnceServiceTest {
               "requiredFieldsMissing": []
             }
             """.formatted(tableName, tableId, dedupFieldsJson);
+    }
+
+    private String valueMapActorPlanJson(Long tableId) {
+        return """
+            {
+              "version": "ingestion-plan-v1",
+              "mode": "database_polling",
+              "mainTable": "sec_alert_event",
+              "schemaTableId": %d,
+              "cursorField": "create_time",
+              "fieldMappings": {
+                "id": "externalId",
+                "create_time": "occurredAt",
+                "event_name": "title",
+                "user_account": "actor",
+                "host_name": "assetRef",
+                "risk_level": "severity"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "user_account",
+                  "standardField": "actor",
+                  "transformRule": "valueMap",
+                  "transformRulePayload": {
+                    "type": "valueMap",
+                    "values": {
+                      "USER_A": "mapped-user",
+                      "lisi": "lisi"
+                    },
+                    "onMissing": "keepOriginal"
+                  }
+                }
+              ],
+              "dedupStrategy": {"type": "external_id", "fields": ["id"], "fallback": "composite"},
+              "syncStrategy": {"type": "polling", "cursorField": "create_time", "shadowOnly": true, "enabled": false},
+              "risks": [],
+              "requiredFieldsMissing": []
+            }
+            """.formatted(tableId);
     }
 
     private Long count(String tableName) {

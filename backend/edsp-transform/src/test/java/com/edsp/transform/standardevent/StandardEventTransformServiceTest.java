@@ -266,18 +266,9 @@ class StandardEventTransformServiceTest {
     }
 
     @Test
-    void transformRulePayloadDoesNotExecuteValueMapOrChangeOutput() {
+    void transformRulePayloadExecutesValueMapForAuthoritativeDetail() {
         var row = rowWith("risk_level", "critical");
-        var baseline = service.transform(
-            row,
-            new MappingPlan(
-                defaultMappings(),
-                List.of("id"),
-                List.of(new MappingPlan.FieldMappingDetail("risk_level", "severity", "valueMap"))
-            ),
-            defaultOptions()
-        );
-        var withPayload = service.transform(
+        var result = service.transform(
             row,
             new MappingPlan(
                 defaultMappings(),
@@ -292,10 +283,11 @@ class StandardEventTransformServiceTest {
             defaultOptions()
         );
 
-        assertEquals(baseline.errors(), withPayload.errors());
-        assertEquals(baseline.warnings(), withPayload.warnings());
-        assertEquals(baseline.draft().severity(), withPayload.draft().severity());
-        assertEquals(baseline.draft().riskScore(), withPayload.draft().riskScore());
+        assertEquals(List.of(), result.errors());
+        assertEquals(List.of(), result.warnings());
+        assertEquals("high", result.draft().severity());
+        assertEquals(80, result.draft().riskScore());
+        assertEquals("high", objectMap(result.draft().normalized().get("mapped")).get("severity"));
     }
 
     @Test
@@ -354,6 +346,35 @@ class StandardEventTransformServiceTest {
         assertEquals("USER_A", baseline.draft().actor());
         assertEquals("user_a", withRulePayload.draft().actor());
         assertEquals("user_a", objectMap(withRulePayload.draft().normalized().get("mapped")).get("actor"));
+    }
+
+    @Test
+    void valueMapDoesNotChangeDedupRawSourceRowSemantics() {
+        var row = rowWith("risk_level", "critical");
+        var baseline = service.transform(
+            row,
+            new MappingPlan(defaultMappings(), List.of("risk_level")),
+            defaultOptions()
+        );
+        var withValueMap = service.transform(
+            row,
+            new MappingPlan(
+                defaultMappings(),
+                List.of("risk_level"),
+                List.of(new MappingPlan.FieldMappingDetail(
+                    "risk_level",
+                    "severity",
+                    "valueMap",
+                    Map.of("type", "valueMap", "values", Map.of("critical", "high"))
+                ))
+            ),
+            defaultOptions()
+        );
+
+        assertEquals("critical", baseline.draft().severity());
+        assertEquals("high", withValueMap.draft().severity());
+        assertEquals(baseline.draft().dedupKey(), withValueMap.draft().dedupKey());
+        assertEquals("critical", row.values().get("risk_level"));
     }
 
     private void assertSeverity(String raw, String expectedSeverity, Integer expectedRisk, List<String> expectedErrors) {

@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.core.dto.IngestionPlanActivationRequest;
+import com.edsp.core.dto.IngestionPlanMappingRuleUpdateRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
+import com.edsp.core.service.IngestionPlanService;
 import com.edsp.core.service.IngestionPlanSyncOnceService;
 import com.edsp.core.service.IngestionPlanSyncScheduleService;
 import com.edsp.core.transform.runtime.TransformBatchResult;
@@ -18,6 +20,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 class IngestionPlanActivationControllerTest {
@@ -36,6 +39,13 @@ class IngestionPlanActivationControllerTest {
         Method list = IngestionPlanController.class.getMethod("activations", long.class, int.class);
         assertEquals("/{id}/activations", list.getAnnotation(GetMapping.class).value()[0]);
 
+        Method updateMappingRule = IngestionPlanController.class.getMethod(
+            "updateMappingRule",
+            long.class,
+            IngestionPlanMappingRuleUpdateRequest.class
+        );
+        assertEquals("/{id}/mapping-rules", updateMappingRule.getAnnotation(PutMapping.class).value()[0]);
+
         var activationRequestMapping = IngestionPlanActivationController.class.getAnnotation(RequestMapping.class);
         assertEquals("/api/core/ingestion-plan-activations", activationRequestMapping.value()[0]);
 
@@ -49,14 +59,21 @@ class IngestionPlanActivationControllerTest {
 
     @Test
     void controllerMethodsReturnServicePayloads() {
+        var planService = new StubPlanService();
         var activationService = new StubActivationService();
         var syncOnceService = new StubSyncOnceService();
         var scheduleService = new StubScheduleService();
-        var planController = new IngestionPlanController(null, null, activationService, syncOnceService, scheduleService);
+        var planController = new IngestionPlanController(planService, null, activationService, syncOnceService, scheduleService);
         var activationController = new IngestionPlanActivationController(activationService, syncOnceService, scheduleService);
 
         var created = planController.activate(7L, new IngestionPlanActivationRequest(9L, "ops", "validated"));
         var list = planController.activations(7L, 10);
+        var mappingRule = planController.updateMappingRule(7L, new IngestionPlanMappingRuleUpdateRequest(
+            "risk_level",
+            "severity",
+            "valueMap",
+            Map.of("type", "valueMap", "values", Map.of("warn", "medium"))
+        ));
         var deactivated = activationController.deactivate(
             11L,
             new IngestionPlanActivationRequest(null, "ops", "rollback")
@@ -67,7 +84,24 @@ class IngestionPlanActivationControllerTest {
         assertEquals("active", created.data().get("status"));
         assertEquals(1, list.data().size());
         assertEquals(7L, list.data().get(0).get("ingestionPlanId"));
+        assertEquals(7L, mappingRule.data().get("id"));
+        assertEquals("valueMap", mappingRule.data().get("transformRule"));
+        assertEquals("risk_level", planService.request.sourceField());
         assertEquals("deactivated", deactivated.data().get("status"));
+    }
+
+    private static class StubPlanService extends IngestionPlanService {
+        private IngestionPlanMappingRuleUpdateRequest request;
+
+        StubPlanService() {
+            super(null, null, null, null, null, null);
+        }
+
+        @Override
+        public Map<String, Object> updateMappingRule(long id, IngestionPlanMappingRuleUpdateRequest request) {
+            this.request = request;
+            return Map.of("id", id, "transformRule", request.transformRule());
+        }
     }
 
     private static class StubActivationService extends IngestionPlanActivationService {

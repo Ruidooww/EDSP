@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.core.dto.IngestionPlanGenerateRequest;
+import com.edsp.core.dto.IngestionPlanMappingRuleUpdateRequest;
 import com.edsp.core.dto.IngestionPlanShadowValidationRequest;
 import com.edsp.core.dto.IngestionPlanStatusRequest;
 import com.edsp.core.support.CoreRequestSupport;
@@ -21,6 +22,7 @@ import org.flywaydb.core.Flyway;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -412,6 +414,302 @@ class IngestionPlanServiceTest {
     }
 
     @Test
+    void updateMappingRuleSavesValueMapPayloadAndPreservesDetailMetadataWithoutSideEffects() throws Exception {
+        var dataSourceId = insertDataSource();
+        var planId = insertPlan(dataSourceId, "approved", """
+            {
+              "fieldMappings": {
+                "risk_level": "severity",
+                "operator": "actor"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "risk_level",
+                  "standardField": "severity",
+                  "confidence": 93,
+                  "source": "existing_mapping",
+                  "reason": "manual severity mapping"
+                }
+              ]
+            }
+            """);
+
+        var updated = service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+            "risk_level",
+            "severity",
+            "valueMap",
+            Map.of(
+                "type", "valueMap",
+                "values", Map.of("critical", "high", "warn", "medium"),
+                "onMissing", "useDefault",
+                "defaultValue", "info"
+            )
+        ));
+
+        assertEquals(planId, ((Number) updated.get("id")).longValue());
+        assertEquals("approved", planStatus(planId));
+        var detail = fieldMappingBySource(planJson(planId), "risk_level");
+        assertEquals("severity", detail.path("standardField").asText());
+        assertEquals(93, detail.path("confidence").asInt());
+        assertEquals("existing_mapping", detail.path("source").asText());
+        assertEquals("manual severity mapping", detail.path("reason").asText());
+        assertEquals("valueMap", detail.path("transformRule").asText());
+        assertEquals("valueMap", detail.path("transformRulePayload").path("type").asText());
+        assertEquals("high", detail.path("transformRulePayload").path("values").path("critical").asText());
+        assertEquals("medium", detail.path("transformRulePayload").path("values").path("warn").asText());
+        assertEquals("useDefault", detail.path("transformRulePayload").path("onMissing").asText());
+        assertEquals("info", detail.path("transformRulePayload").path("defaultValue").asText());
+        assertEquals(0L, count("ingestion_plan_shadow_runs"));
+        assertEquals(0L, count("raw_events"));
+        assertEquals(0L, count("standard_events"));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void updateMappingRuleUpsertsDetailOnlyForAuthoritativeFieldMapping() throws Exception {
+        var dataSourceId = insertDataSource();
+        var planId = insertPlan(dataSourceId, "review_required", """
+            {
+              "fieldMappings": {
+                "risk_level": "severity"
+              },
+              "fieldMappingDetails": []
+            }
+            """);
+
+        service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+            "risk_level",
+            "severity",
+            "trim",
+            null
+        ));
+
+        var detail = fieldMappingBySource(planJson(planId), "risk_level");
+        assertEquals("severity", detail.path("standardField").asText());
+        assertEquals("trim", detail.path("transformRule").asText());
+        assertFalse(detail.has("transformRulePayload"));
+    }
+
+    @Test
+    void updateMappingRuleRejectsNonAuthoritativeMappingEdges() {
+        var dataSourceId = insertDataSource();
+        var planId = insertPlan(dataSourceId, "review_required", """
+            {
+              "fieldMappings": {
+                "risk_level": "severity"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "risk_level",
+                  "standardField": "actor"
+                }
+              ]
+            }
+            """);
+
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "mapping_edge_mismatch",
+            () -> service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+                "risk_level",
+                "actor",
+                "lower",
+                null
+            ))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "mapping_edge_mismatch",
+            () -> service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+                "unknown",
+                "severity",
+                "lower",
+                null
+            ))
+        );
+    }
+
+    @Test
+    void updateMappingRuleRejectsActiveActivationWithConflict() {
+        var dataSourceId = insertDataSource();
+        var planId = insertPlan(dataSourceId, "shadow_ready", """
+            {
+              "fieldMappings": {
+                "risk_level": "severity"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "risk_level",
+                  "standardField": "severity"
+                }
+              ]
+            }
+            """);
+        insertActiveActivation(planId, dataSourceId);
+
+        assertRejected(
+            HttpStatus.CONFLICT,
+            "plan_already_activated",
+            () -> service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+                "risk_level",
+                "severity",
+                "upper",
+                null
+            ))
+        );
+    }
+
+    @Test
+    void updateMappingRuleSavesSimpleRulesAndClearsExistingRule() throws Exception {
+        var dataSourceId = insertDataSource();
+        var planId = insertPlan(dataSourceId, "review_required", """
+            {
+              "fieldMappings": {
+                "risk_level": "severity"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "risk_level",
+                  "standardField": "severity",
+                  "transformRule": "valueMap",
+                  "transformRulePayload": {
+                    "type": "valueMap",
+                    "values": {
+                      "warn": "medium"
+                    }
+                  }
+                }
+              ]
+            }
+            """);
+
+        for (var rule : List.of("trim", "lower", "upper", "defaultIfBlank:info")) {
+            service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+                "risk_level",
+                "severity",
+                rule,
+                null
+            ));
+            var detail = fieldMappingBySource(planJson(planId), "risk_level");
+            assertEquals(rule, detail.path("transformRule").asText());
+            assertFalse(detail.has("transformRulePayload"));
+        }
+
+        service.updateMappingRule(planId, new IngestionPlanMappingRuleUpdateRequest(
+            "risk_level",
+            "severity",
+            "",
+            null
+        ));
+        var cleared = fieldMappingBySource(planJson(planId), "risk_level");
+        assertFalse(cleared.has("transformRule"));
+        assertFalse(cleared.has("transformRulePayload"));
+    }
+
+    @Test
+    void updateMappingRuleRejectsInvalidRulesAndValueMapPayloads() {
+        var dataSourceId = insertDataSource();
+        var planId = insertPlan(dataSourceId, "review_required", """
+            {
+              "fieldMappings": {
+                "risk_level": "severity"
+              },
+              "fieldMappingDetails": [
+                {
+                  "sourceField": "risk_level",
+                  "standardField": "severity"
+                }
+              ]
+            }
+            """);
+
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "transform_rule_unsupported",
+            () -> service.updateMappingRule(planId, ruleRequest("notARule", null))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "transform_rule_unsupported",
+            () -> service.updateMappingRule(planId, ruleRequest("defaultIfBlank", null))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_payload_required",
+            () -> service.updateMappingRule(planId, ruleRequest("valueMap", null))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_type_invalid",
+            () -> service.updateMappingRule(planId, ruleRequest("valueMap", Map.of("values", Map.of("warn", "medium"))))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_values_invalid",
+            () -> service.updateMappingRule(planId, ruleRequest("valueMap", Map.of("type", "valueMap", "values", List.of("warn"))))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_values_invalid",
+            () -> service.updateMappingRule(planId, ruleRequest("valueMap", rawValuesPayload(Map.of("warn", 1))))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_on_missing_invalid",
+            () -> service.updateMappingRule(planId, ruleRequest(
+                "valueMap",
+                Map.of("type", "valueMap", "values", Map.of(), "onMissing", "blank")
+            ))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_default_value_required",
+            () -> service.updateMappingRule(planId, ruleRequest(
+                "valueMap",
+                Map.of("type", "valueMap", "values", Map.of(), "onMissing", "useDefault")
+            ))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_size_limit_exceeded",
+            () -> service.updateMappingRule(planId, ruleRequest(
+                "valueMap",
+                Map.of("type", "valueMap", "values", sizedValues(201, 10, 10))
+            ))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_size_limit_exceeded",
+            () -> service.updateMappingRule(planId, ruleRequest(
+                "valueMap",
+                Map.of("type", "valueMap", "values", Map.of("k".repeat(201), "medium"))
+            ))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_size_limit_exceeded",
+            () -> service.updateMappingRule(planId, ruleRequest(
+                "valueMap",
+                Map.of("type", "valueMap", "values", Map.of("warn", "v".repeat(501)))
+            ))
+        );
+        assertRejected(
+            HttpStatus.BAD_REQUEST,
+            "value_map_size_limit_exceeded",
+            () -> service.updateMappingRule(planId, ruleRequest(
+                "valueMap",
+                Map.of(
+                    "type", "valueMap",
+                    "values", Map.of("warn", "medium"),
+                    "onMissing", "useDefault",
+                    "defaultValue", "v".repeat(501)
+                )
+            ))
+        );
+    }
+
+    @Test
     void shadowValidateRejectsPlanBeforeManualApproval() {
         var dataSourceId = insertDataSource();
         var scanRunId = insertCompleteScan(dataSourceId);
@@ -655,6 +953,53 @@ class IngestionPlanServiceTest {
             values (?, 'Generated plan', ?, cast('{}' as jsonb))
             """, dataSourceId, status);
         return lastId("ingestion_plans");
+    }
+
+    private Long insertPlan(Long dataSourceId, String status, String planJson) {
+        jdbcTemplate.update("""
+            insert into ingestion_plans(data_source_id, name, status, plan_json)
+            values (?, 'Generated plan', ?, cast(? as jsonb))
+            """, dataSourceId, status, planJson);
+        return lastId("ingestion_plans");
+    }
+
+    private void insertActiveActivation(Long planId, Long dataSourceId) {
+        jdbcTemplate.update("""
+            insert into ingestion_plan_shadow_runs(ingestion_plan_id, data_source_id, status)
+            values (?, ?, 'passed')
+            """, planId, dataSourceId);
+        var shadowRunId = lastId("ingestion_plan_shadow_runs");
+        jdbcTemplate.update("""
+            insert into ingestion_plan_activations(
+                ingestion_plan_id, data_source_id, shadow_run_id, status, activated_by, config_json
+            )
+            values (?, ?, ?, 'active', 'ops', cast('{}' as jsonb))
+            """, planId, dataSourceId, shadowRunId);
+    }
+
+    private IngestionPlanMappingRuleUpdateRequest ruleRequest(String transformRule, Map<String, Object> payload) {
+        return new IngestionPlanMappingRuleUpdateRequest("risk_level", "severity", transformRule, payload);
+    }
+
+    private Map<String, Object> rawValuesPayload(Map<?, ?> values) {
+        var payload = new java.util.LinkedHashMap<String, Object>();
+        payload.put("type", "valueMap");
+        payload.put("values", values);
+        return payload;
+    }
+
+    private Map<String, String> sizedValues(int count, int keyLength, int valueLength) {
+        var values = new java.util.LinkedHashMap<String, String>();
+        for (var index = 0; index < count; index++) {
+            values.put("k".repeat(keyLength - String.valueOf(index).length()) + index, "v".repeat(valueLength));
+        }
+        return values;
+    }
+
+    private void assertRejected(HttpStatus status, String reason, Executable executable) {
+        var ex = assertThrows(ResponseStatusException.class, executable);
+        assertEquals(status, ex.getStatusCode());
+        assertEquals(reason, ex.getReason());
     }
 
     private String planStatus(Long planId) {

@@ -1,4 +1,4 @@
-import type { IngestionPlanRow } from '../../../types';
+import type { IngestionPlanRow, TransformRulePayload } from '../../../types';
 
 export interface NormalizedPlanMapping {
   key: string;
@@ -6,6 +6,7 @@ export interface NormalizedPlanMapping {
   standardField: string;
   confidence?: number;
   transformRule?: string;
+  transformRulePayload?: TransformRulePayload | Record<string, unknown>;
   reason?: string;
 }
 
@@ -122,6 +123,13 @@ function toTextArray(value: unknown) {
   return text ? [text] : [];
 }
 
+function toObject(value: unknown) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
 function normalizeFieldEvidence(value: unknown, rowId: number) {
   if (!value) {
     return [];
@@ -205,6 +213,7 @@ export function normalizePlan(row: IngestionPlanRow): NormalizedIngestionPlan {
         standardField: standardField || evidence?.standardField || '',
         confidence: toNumber(firstDefined([mapping], ['confidence', 'mappingConfidence', 'mapping_confidence'])),
         transformRule: toText(firstDefined([mapping], ['transformRule', 'transform_rule', 'rule'])),
+        transformRulePayload: toObject(firstDefined([mapping], ['transformRulePayload', 'transform_rule_payload'])),
         reason: toText(firstDefined([mapping], ['reason', 'description'])) || evidence?.reason,
       };
     }).filter((mapping) => mapping.sourceField || mapping.standardField)

@@ -1,6 +1,7 @@
 package com.edsp.core.service;
 
 import com.edsp.core.dto.IngestionPlanGenerateRequest;
+import com.edsp.core.dto.IngestionPlanMappingRuleUpdateRequest;
 import com.edsp.core.dto.IngestionPlanShadowValidationRequest;
 import com.edsp.core.dto.IngestionPlanStatusRequest;
 import com.edsp.core.service.SemanticProfilerService.FieldProfile;
@@ -30,6 +31,9 @@ public class IngestionPlanService {
     private static final String PLAN_VERSION = "ingestion-plan-v1";
     private static final String GENERATED_BY = "database-intelligence-mvp";
     private static final String INGESTION_MODE = "database_polling";
+    private static final int VALUE_MAP_MAX_ENTRIES = 200;
+    private static final int VALUE_MAP_MAX_KEY_LENGTH = 200;
+    private static final int VALUE_MAP_MAX_VALUE_LENGTH = 500;
     private static final Set<String> STATUS_WHITELIST = Set.of(
         "suggested",
         "review_required",
@@ -164,6 +168,47 @@ public class IngestionPlanService {
             set status = ?, updated_at = now()
             where id = ?
             """, targetStatus, id);
+        return planRow(jdbcTemplate.queryForMap("""
+            select id, data_source_id, scan_run_id, name, status, plan_json, created_at, updated_at
+            from ingestion_plans
+            where id = ?
+            """, id));
+    }
+
+    @Transactional
+    public Map<String, Object> updateMappingRule(long id, IngestionPlanMappingRuleUpdateRequest request) {
+        var sourceField = support.stringOrNull(request == null ? null : request.sourceField());
+        if (sourceField == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "source_field_required");
+        }
+        var standardField = support.stringOrNull(request.standardField());
+        if (standardField == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "standard_field_required");
+        }
+
+        var rows = jdbcTemplate.queryForList("""
+            select id, data_source_id, scan_run_id, name, status, plan_json, created_at, updated_at
+            from ingestion_plans
+            where id = ?
+            """, id);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "ingestion_plan_not_found");
+        }
+        if (hasActiveActivation(id)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "plan_already_activated");
+        }
+
+        var row = rows.get(0);
+        var plan = new LinkedHashMap<>(parsePlan(row.get("plan_json")));
+        validateAuthoritativeMapping(plan, sourceField, standardField);
+        var rule = normalizedMappingRule(request.transformRule(), request.transformRulePayload());
+        updateFieldMappingDetail(plan, sourceField, standardField, rule);
+
+        jdbcTemplate.update("""
+            update ingestion_plans
+            set plan_json = cast(? as jsonb), updated_at = now()
+            where id = ?
+            """, toJson(plan), id);
         return planRow(jdbcTemplate.queryForMap("""
             select id, data_source_id, scan_run_id, name, status, plan_json, created_at, updated_at
             from ingestion_plans
@@ -424,6 +469,148 @@ public class IngestionPlanService {
             }
         }
         return mapping;
+    }
+
+    private boolean hasActiveActivation(long planId) {
+        var count = jdbcTemplate.queryForObject("""
+            select count(*)
+            from ingestion_plan_activations
+            where ingestion_plan_id = ? and status = 'active'
+            """, Long.class, planId);
+        return count != null && count > 0;
+    }
+
+    private void validateAuthoritativeMapping(Map<String, Object> plan, String sourceField, String standardField) {
+        if (!(plan.get("fieldMappings") instanceof Map<?, ?> fieldMappings)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "mapping_edge_mismatch");
+        }
+        var mappedStandardField = fieldMappings.get(sourceField);
+        if (mappedStandardField == null || !standardField.equals(String.valueOf(mappedStandardField))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "mapping_edge_mismatch");
+        }
+    }
+
+    private MappingRuleUpdate normalizedMappingRule(String transformRule, Map<String, Object> transformRulePayload) {
+        var rule = support.blankToNull(transformRule);
+        if (rule == null) {
+            return new MappingRuleUpdate(null, Map.of());
+        }
+        if ("trim".equalsIgnoreCase(rule)) {
+            return new MappingRuleUpdate("trim", Map.of());
+        }
+        if ("lower".equalsIgnoreCase(rule)) {
+            return new MappingRuleUpdate("lower", Map.of());
+        }
+        if ("upper".equalsIgnoreCase(rule)) {
+            return new MappingRuleUpdate("upper", Map.of());
+        }
+        if (rule.startsWith("defaultIfBlank:")) {
+            if (rule.substring("defaultIfBlank:".length()).isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "transform_rule_unsupported");
+            }
+            return new MappingRuleUpdate(rule, Map.of());
+        }
+        if ("defaultIfBlank".equals(rule) || "none".equalsIgnoreCase(rule)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "transform_rule_unsupported");
+        }
+        if ("valueMap".equalsIgnoreCase(rule)) {
+            return new MappingRuleUpdate("valueMap", normalizedValueMapPayload(transformRulePayload));
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "transform_rule_unsupported");
+    }
+
+    private Map<String, Object> normalizedValueMapPayload(Map<String, Object> payload) {
+        if (payload == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_payload_required");
+        }
+        if (!"valueMap".equals(payload.get("type"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_type_invalid");
+        }
+        var rawValues = payload.get("values");
+        if (!(rawValues instanceof Map<?, ?> values)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_values_invalid");
+        }
+        if (values.size() > VALUE_MAP_MAX_ENTRIES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_size_limit_exceeded");
+        }
+
+        var normalizedValues = new LinkedHashMap<String, String>();
+        for (var entry : values.entrySet()) {
+            if (!(entry.getKey() instanceof String key) || !(entry.getValue() instanceof String value)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_values_invalid");
+            }
+            if (key.length() > VALUE_MAP_MAX_KEY_LENGTH || value.length() > VALUE_MAP_MAX_VALUE_LENGTH) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_size_limit_exceeded");
+            }
+            normalizedValues.put(key, value);
+        }
+
+        var onMissing = payload.get("onMissing") == null ? "keepOriginal" : payload.get("onMissing");
+        if (!(onMissing instanceof String onMissingText)
+            || (!"keepOriginal".equals(onMissingText) && !"useDefault".equals(onMissingText))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_on_missing_invalid");
+        }
+
+        var normalized = new LinkedHashMap<String, Object>();
+        normalized.put("type", "valueMap");
+        normalized.put("values", normalizedValues);
+        normalized.put("onMissing", onMissingText);
+        if ("useDefault".equals(onMissingText)) {
+            if (!(payload.get("defaultValue") instanceof String defaultValue)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_default_value_required");
+            }
+            if (defaultValue.length() > VALUE_MAP_MAX_VALUE_LENGTH) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "value_map_size_limit_exceeded");
+            }
+            normalized.put("defaultValue", defaultValue);
+        }
+        return normalized;
+    }
+
+    private void updateFieldMappingDetail(
+        Map<String, Object> plan,
+        String sourceField,
+        String standardField,
+        MappingRuleUpdate rule
+    ) {
+        var details = new ArrayList<Map<String, Object>>();
+        var matched = false;
+        if (plan.get("fieldMappingDetails") instanceof List<?> rawDetails) {
+            for (var item : rawDetails) {
+                if (!(item instanceof Map<?, ?> map)) {
+                    continue;
+                }
+                var detail = objectMapper.convertValue(map, new TypeReference<LinkedHashMap<String, Object>>() {});
+                if (sourceField.equals(support.stringOrNull(detail.get("sourceField")))
+                    && standardField.equals(support.stringOrNull(detail.get("standardField")))) {
+                    applyMappingRuleUpdate(detail, rule);
+                    matched = true;
+                }
+                details.add(detail);
+            }
+        }
+        if (!matched && rule.transformRule() != null) {
+            var detail = new LinkedHashMap<String, Object>();
+            detail.put("sourceField", sourceField);
+            detail.put("standardField", standardField);
+            applyMappingRuleUpdate(detail, rule);
+            details.add(detail);
+        }
+        plan.put("fieldMappingDetails", details);
+    }
+
+    private void applyMappingRuleUpdate(Map<String, Object> detail, MappingRuleUpdate rule) {
+        if (rule.transformRule() == null) {
+            detail.remove("transformRule");
+            detail.remove("transformRulePayload");
+            return;
+        }
+        detail.put("transformRule", rule.transformRule());
+        if (rule.transformRulePayload().isEmpty()) {
+            detail.remove("transformRulePayload");
+        } else {
+            detail.put("transformRulePayload", rule.transformRulePayload());
+        }
     }
 
     private Map<String, Object> syncStrategy(String cursorField) {
@@ -816,6 +1003,9 @@ public class IngestionPlanService {
     }
 
     private record Coverage(int confidence, boolean limited, boolean unknown) {
+    }
+
+    private record MappingRuleUpdate(String transformRule, Map<String, Object> transformRulePayload) {
     }
 
     private record ExistingMapping(String standardField, String transformRule) {

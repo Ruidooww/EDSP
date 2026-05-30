@@ -1,13 +1,14 @@
 import { Button, Card, Select, Space } from 'antd';
 import type {
   IngestionPlanActivationRow,
+  IngestionPlanMappingRuleUpdateRequest,
   IngestionPlanRow,
   IngestionPlanShadowRunRow,
   IngestionPlanSyncRunRow,
   IngestionPlanSyncScheduleRow,
 } from '../../../types';
 import { PLAN_STATUS_FILTER_OPTIONS } from '../utils/ingestionPlanLabels';
-import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
+import type { NormalizedIngestionPlan, NormalizedPlanMapping } from '../utils/normalizeIngestionPlan';
 import IngestionPlanPanel from './IngestionPlanPanel';
 
 interface IngestionPlanSourceOption {
@@ -52,6 +53,11 @@ interface IngestionPlanSectionProps {
   ) => void;
   onPauseSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
   onResumeSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
+  onSaveMappingRule: (
+    row: IngestionPlanRow,
+    mapping: NormalizedPlanMapping,
+    request: IngestionPlanMappingRuleUpdateRequest,
+  ) => Promise<void>;
 }
 
 export default function IngestionPlanSection({
@@ -82,6 +88,7 @@ export default function IngestionPlanSection({
   onConfigureSyncSchedule,
   onPauseSyncSchedule,
   onResumeSyncSchedule,
+  onSaveMappingRule,
 }: IngestionPlanSectionProps) {
   return (
     <Card className="ops-card" title="推荐接入方案">
@@ -138,6 +145,7 @@ export default function IngestionPlanSection({
               onConfigureSyncSchedule={onConfigureSyncSchedule}
               onPauseSyncSchedule={onPauseSyncSchedule}
               onResumeSyncSchedule={onResumeSyncSchedule}
+              onSaveMappingRule={onSaveMappingRule}
             />
           ))}
         </div>

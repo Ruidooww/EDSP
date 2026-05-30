@@ -3,6 +3,7 @@ package com.edsp.core.controller;
 import com.edsp.common.api.ApiResponse;
 import com.edsp.core.dto.IngestionPlanActivationRequest;
 import com.edsp.core.dto.IngestionPlanGenerateRequest;
+import com.edsp.core.dto.IngestionPlanMappingRuleUpdateRequest;
 import com.edsp.core.dto.IngestionPlanShadowRunRequest;
 import com.edsp.core.dto.IngestionPlanShadowValidationRequest;
 import com.edsp.core.dto.IngestionPlanStatusRequest;
@@ -65,6 +66,14 @@ public class IngestionPlanController {
         @RequestBody IngestionPlanStatusRequest request
     ) {
         return ApiResponse.ok(ingestionPlanService.updateStatus(id, request), "updated");
+    }
+
+    @PutMapping("/{id}/mapping-rules")
+    public ApiResponse<Map<String, Object>> updateMappingRule(
+        @PathVariable("id") long id,
+        @Valid @RequestBody IngestionPlanMappingRuleUpdateRequest request
+    ) {
+        return ApiResponse.ok(ingestionPlanService.updateMappingRule(id, request), "updated");
     }
 
     @PostMapping("/{id}/shadow-validate")

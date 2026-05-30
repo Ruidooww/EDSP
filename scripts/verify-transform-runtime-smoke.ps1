@@ -43,6 +43,10 @@ $scenarioResults = [ordered]@{
     fallbackUnavailable = "NOT_RUN"
     transformRuntimeVerification = "NOT_RUN"
     transformRuleRuntimeVerification = "NOT_RUN"
+    valueMapRuntimeVerification = "NOT_RUN"
+    remoteValueMapRuntimeVerification = "NOT_RUN"
+    fallbackValueMapRuntimeVerification = "NOT_RUN"
+    remoteUnavailableNoWritesVerification = "NOT_RUN"
 }
 
 function Require-SafeIdentifier {
@@ -361,7 +365,7 @@ create table $schemaIdentifier.$tableIdentifier (
     risk_level varchar(32) not null
 );
 insert into $schemaIdentifier.$tableIdentifier(id, create_time, event_name, user_account, host_name, action_raw, risk_level)
-values ($(Quote-SqlText -Value $externalId), '2026-05-20 10:30:00', 'runtime transform smoke', 'RUNTIME-SMOKE-USER', ' SMOKE-HOST-01 ', '', 'high');
+values ($(Quote-SqlText -Value $externalId), '2026-05-20 10:30:00', 'runtime transform smoke', 'RUNTIME-SMOKE-USER', ' SMOKE-HOST-01 ', '', 'warn');
 "@
 
     $dataSourceId = Invoke-PsqlScalar -Sql @"
@@ -405,7 +409,7 @@ values
     ($tableId, $scanRunId, 'user_account', 'varchar', 'RUNTIME-SMOKE-USER', 4, 95, 'active'),
     ($tableId, $scanRunId, 'host_name', 'varchar', ' SMOKE-HOST-01 ', 5, 95, 'active'),
     ($tableId, $scanRunId, 'action_raw', 'varchar', '', 6, 95, 'active'),
-    ($tableId, $scanRunId, 'risk_level', 'varchar', 'high', 7, 95, 'active');
+    ($tableId, $scanRunId, 'risk_level', 'varchar', 'warn', 7, 95, 'active');
 "@
 
     $plan = [ordered]@{
@@ -443,6 +447,19 @@ values
                 sourceField = "action_raw"
                 standardField = "action"
                 transformRule = "defaultIfBlank:LOGIN"
+            },
+            [ordered]@{
+                sourceField = "risk_level"
+                standardField = "severity"
+                transformRule = "valueMap"
+                transformRulePayload = [ordered]@{
+                    type = "valueMap"
+                    values = [ordered]@{
+                        warn = "medium"
+                        critical = "high"
+                    }
+                    onMissing = "keepOriginal"
+                }
             }
         )
         dedupStrategy = [ordered]@{
@@ -527,6 +544,12 @@ select json_build_object(
         from raw_events
         where external_id = $externalIdLiteral
           and payload_json #>> '{fields,user_account}' = 'RUNTIME-SMOKE-USER'
+    ),
+    'rawRiskLevelOriginal', exists(
+        select 1
+        from raw_events
+        where external_id = $externalIdLiteral
+          and payload_json #>> '{fields,risk_level}' = 'warn'
     )
 )::text
 from ingestion_plan_sync_runs sync
@@ -567,11 +590,12 @@ function Assert-SmokeResult {
     Assert-Equal -Actual ([long]$Observation.standardCount) -Expected $StandardCount -Label "$Label standard_events count"
     if ($RawCount -eq 1) {
         Assert-Equal -Actual $Observation.rawUserAccountOriginal -Expected $true -Label "$Label raw payload keeps original user_account"
+        Assert-Equal -Actual $Observation.rawRiskLevelOriginal -Expected $true -Label "$Label raw payload keeps original risk_level"
     }
     if ($StandardCount -eq 1) {
         Assert-Equal -Actual $Observation.externalId -Expected $Fixture.ExternalId -Label "$Label external_id"
         Assert-Equal -Actual $Observation.eventType -Expected "RUNTIME TRANSFORM SMOKE" -Label "$Label event_type upper rule"
-        Assert-Equal -Actual $Observation.severity -Expected "high" -Label "$Label severity"
+        Assert-Equal -Actual $Observation.severity -Expected "medium" -Label "$Label severity valueMap rule"
         Assert-Equal -Actual $Observation.actor -Expected "runtime-smoke-user" -Label "$Label actor lower rule"
         Assert-Equal -Actual $Observation.assetRef -Expected "SMOKE-HOST-01" -Label "$Label asset_ref trim rule"
         Assert-Equal -Actual $Observation.action -Expected "LOGIN" -Label "$Label action defaultIfBlank rule"
@@ -639,6 +663,7 @@ try {
         -Fixture $remoteSuccess -Status "passed" -Mode "remote" -RemoteSucceeded $true -FallbackUsed $false `
         -FailureType $null -RawCount 1 -StandardCount 1
     $scenarioResults.remoteSuccess = "PASS"
+    $scenarioResults.remoteValueMapRuntimeVerification = "PASS"
 
     $failureStage = "remote_unavailable"
     Write-Host "Running remote unavailable fixture..."
@@ -651,6 +676,7 @@ try {
         -Fixture $remoteUnavailable -Status "failed" -Mode "remote" -RemoteSucceeded $false -FallbackUsed $false `
         -FailureType "remote_unavailable" -RawCount 0 -StandardCount 0
     $scenarioResults.remoteUnavailable = "PASS"
+    $scenarioResults.remoteUnavailableNoWritesVerification = "PASS"
 
     $failureStage = "fallback_unavailable"
     Write-Host "Running fallback unavailable fixture..."
@@ -665,12 +691,15 @@ try {
         -Fixture $fallbackUnavailable -Status "passed" -Mode "fallback" -RemoteSucceeded $false -FallbackUsed $true `
         -FailureType "remote_unavailable" -RawCount 1 -StandardCount 1
     $scenarioResults.fallbackUnavailable = "PASS"
+    $scenarioResults.fallbackValueMapRuntimeVerification = "PASS"
 
     $failureStage = $null
     $scenarioResults.transformRuntimeVerification = "PASS"
     $scenarioResults.transformRuleRuntimeVerification = "PASS"
+    $scenarioResults.valueMapRuntimeVerification = "PASS"
     Write-Host "transformRuntime verification: PASS"
     Write-Host "transformRule runtime verification: PASS"
+    Write-Host "valueMap runtime verification: PASS"
 } catch {
     $failure = $_
     $failureType = $_.Exception.GetType().Name
@@ -722,3 +751,5 @@ Write-Host "Remote success: PASS"
 Write-Host "Remote unavailable: PASS"
 Write-Host "Fallback unavailable: PASS"
 Write-Host "transformRuntime verification: PASS"
+Write-Host "transformRule runtime verification: PASS"
+Write-Host "valueMap runtime verification: PASS"

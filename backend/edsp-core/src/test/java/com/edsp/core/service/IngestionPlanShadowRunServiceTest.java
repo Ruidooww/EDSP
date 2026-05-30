@@ -71,6 +71,7 @@ class IngestionPlanShadowRunServiceTest {
         jdbcTemplate = new JdbcTemplate(dataSource);
         objectMapper = new ObjectMapper();
         var support = new CoreRequestSupport(objectMapper);
+        var planFingerprintSupport = new PlanFingerprintSupport(objectMapper);
         var precheckService = new IngestionPlanPrecheckService(jdbcTemplate, objectMapper, support);
         var sampleService = new JdbcShadowSampleService(objectMapper);
         var planSupport = new TransformPlanSupport(objectMapper, support);
@@ -84,6 +85,7 @@ class IngestionPlanShadowRunServiceTest {
             precheckService,
             sampleService,
             planSupport,
+            planFingerprintSupport,
             transformRuntimeClient
         );
         resetSourceDatabase();
@@ -137,6 +139,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals(0L, count("alerts"));
 
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         var previewPolicy = objectValue(report.get("previewPolicy"));
         assertEquals("mapped_fields_only", previewPolicy.get("mode"));
         assertEquals(true, previewPolicy.get("maskedSensitiveValues"));
@@ -191,6 +194,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals("valueMap", mappingDetails.get(0).transformRule());
         assertEquals("valueMap", mappingDetails.get(0).transformRulePayload().get("type"));
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         var samples = objectList(report.get("samples"));
         var firstStandardPreview = objectValue(samples.get(0).get("standardEventPreview"));
         assertEquals("mapped-user", firstStandardPreview.get("actor"));
@@ -318,6 +322,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals(0, ((Number) run.get("successCount")).intValue());
         assertEquals(0, ((Number) run.get("failedCount")).intValue());
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         assertTrue(stringList(report.get("warnings")).contains("no_sample_rows"));
         assertEquals(0, transformRuntimeClient.calls);
     }
@@ -346,6 +351,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals(2, ((Number) run.get("successCount")).intValue());
         assertEquals(1, ((Number) run.get("duplicateCount")).intValue());
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         assertTrue(stringList(report.get("warnings")).contains("duplicate_in_sample"));
         var duplicateSample = objectList(report.get("samples")).stream()
             .filter(sample -> stringList(sample.get("warnings")).contains("duplicate_in_sample"))
@@ -391,6 +397,7 @@ class IngestionPlanShadowRunServiceTest {
 
         assertEquals("warning", run.get("status"));
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         assertEquals("warning", report.get("status"));
         assertTrue(stringList(report.get("warnings")).contains("coverage_unknown"));
     }
@@ -410,6 +417,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals(0, ((Number) run.get("readCount")).intValue());
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         assertTrue(objectList(report.get("checks")).stream().anyMatch(check ->
             "required_fields".equals(check.get("code")) && "failed".equals(check.get("result"))
         ));
@@ -433,6 +441,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         assertNotNull(run.get("errorMessage"));
         var report = objectValue(run.get("report"));
+        assertPlanFingerprint(report);
         assertTrue(stringList(report.get("blockers")).contains("source_fields_missing"));
         assertEquals(1, ((Number) objectValue(report.get("errorsByType")).get("source_fields_missing")).intValue());
         assertTrue(objectList(report.get("checks")).stream().anyMatch(check ->
@@ -459,6 +468,7 @@ class IngestionPlanShadowRunServiceTest {
         assertEquals("failed", run.get("status"));
         assertNotNull(run.get("errorMessage"));
         assertFalse(String.valueOf(run.get("errorMessage")).contains("super-secret"));
+        assertPlanFingerprint(objectValue(run.get("report")));
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         assertEquals(0L, count("standard_events"));
     }
@@ -491,6 +501,7 @@ class IngestionPlanShadowRunServiceTest {
         assertFalse(errorMessage.contains("super-secret"));
         assertFalse(errorMessage.contains(SOURCE_URL));
         assertFalse(errorMessage.contains("raw secret payload"));
+        assertPlanFingerprint(objectValue(run.get("report")));
         assertEquals("approved", planStatus(planId));
         assertEquals(1L, count("ingestion_plan_shadow_runs"));
         assertEquals(0L, count("raw_events"));
@@ -854,6 +865,16 @@ class IngestionPlanShadowRunServiceTest {
 
     private List<String> stringList(Object value) {
         return objectMapper.convertValue(value, new TypeReference<>() {});
+    }
+
+    private Map<String, Object> assertPlanFingerprint(Map<String, Object> report) {
+        var fingerprint = objectValue(report.get("planFingerprint"));
+        assertEquals("sha256-canonical-json-v1", fingerprint.get("algorithm"));
+        assertTrue(String.valueOf(fingerprint.get("hash")).matches("[0-9a-f]{64}"));
+        assertFalse(fingerprint.containsKey("planJson"));
+        assertFalse(fingerprint.containsKey("plan_json"));
+        assertFalse(String.valueOf(fingerprint).contains("fieldMappings"));
+        return fingerprint;
     }
 
     private Long count(String tableName) {

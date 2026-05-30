@@ -113,6 +113,17 @@ const FIELD_PRESETS: Record<MetadataCollectValues['collectMode'], SuggestedField
   ],
 };
 
+const STALE_SHADOW_RUN_REASONS = [
+  'shadow_run_stale_after_plan_edit',
+  'shadow_run_plan_fingerprint_missing',
+  'shadow_run_plan_fingerprint_invalid',
+];
+
+function isStaleShadowRunActivationError(messageText: string) {
+  return STALE_SHADOW_RUN_REASONS.some((reason) => messageText.includes(reason))
+    || messageText.includes('Request failed: 400');
+}
+
 function statusTag(value?: string) {
   if (value === 'confirmed') {
     return <Tag color="success">已确认</Tag>;
@@ -471,12 +482,12 @@ export default function SchemaPage() {
   ) {
     setPlanActionId(row.id);
     try {
-      const updated = await apiPut<IngestionPlanRow>(
+      await apiPut<IngestionPlanRow>(
         `/api/core/ingestion-plans/${row.id}/mapping-rules`,
         payload,
       );
-      setPlans((current) => current.map((plan) => plan.id === row.id ? updated : plan));
-      message.success('Rule saved. Run Shadow Run again to verify the new rule.');
+      await loadPlans();
+      message.success('规则已保存。请重新执行 Shadow Run 后再激活。');
     } catch (error) {
       const messageText = error instanceof Error ? error.message : '';
       if (messageText.includes('409')) {
@@ -594,7 +605,12 @@ export default function SchemaPage() {
           message.success('方案已启用，仅生成启用审计记录');
           await loadPlans();
         } catch (error) {
-          message.error(error instanceof Error ? error.message : '方案启用失败');
+          const messageText = error instanceof Error ? error.message : '';
+          if (isStaleShadowRunActivationError(messageText)) {
+            message.error('当前 Shadow Run 已过期，请重新执行 Shadow Run 后再激活。');
+          } else {
+            message.error(messageText || '方案启用失败');
+          }
         } finally {
           setPlanActionId(null);
         }

@@ -116,7 +116,7 @@ class IngestionPlanSyncOnceControllerTest {
 
     private static class StubActivationService extends IngestionPlanActivationService {
         StubActivationService() {
-            super(null, null, null);
+            super(null, null, null, null);
         }
 
         @Override

@@ -875,3 +875,26 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26686490536`; job `https://github.com/Ruidooww/EDSP/actions/runs/26686490536/job/78655515111`; duration `1m58s`; artifact `transform-runtime-smoke-26686490536-1`.
 - Artifact safety: PR #12 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Recommended next stage: `Plan Revision UI Runtime Freshness Verification / API Error Reason Handling MVP`, focused on browser-level verification of stale activation messaging and improving API error-body propagation without changing the activation gate semantics.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Plan Revision UI Runtime Freshness Verification / API Error Reason Handling MVP`
+- Latest feature merge commit: `a662579 merge: plan revision ui freshness error handling mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for plan revision ui freshness error handling mvp`
+- Stage branch: `codex/plan-revision-ui-freshness-error-handling-mvp`
+- Stage result: PR #13 improved stale activation error propagation from backend API to frontend UI without changing activation gate semantics.
+- Backend API error handling: added `CoreApiExceptionHandler` for `edsp-core` controllers so `ResponseStatusException` keeps its HTTP status and returns `ApiResponse.fail(reason)`.
+- Freshness reasons surfaced: `shadow_run_stale_after_plan_edit`, `shadow_run_plan_fingerprint_missing`, and `shadow_run_plan_fingerprint_invalid` are now returned in the response body when activation is blocked by plan/ShadowRun freshness.
+- Frontend API client: `frontend/src/api.ts` now reads non-2xx JSON response bodies and throws `payload.message` when available; non-JSON or missing-message responses still fall back to `Request failed: <status>`.
+- Schema page UI: stale activation handling now matches explicit freshness reason codes only. The previous generic `Request failed: 400` stale fallback was removed.
+- Browser verification: a local browser smoke with a mocked `400 ApiResponse.fail("shadow_run_stale_after_plan_edit")` displayed the stale ShadowRun message `当前 Shadow Run 已过期，请重新执行 Shadow Run 后再激活。`.
+- Activation boundary unchanged: approved or `shadow_ready` plans still require the latest passed ShadowRun with a matching plan fingerprint. This stage did not change fingerprint calculation, activation eligibility, activation persistence, or ShadowRun freshness gate rules.
+- Runtime boundary unchanged: no transform runtime behavior, transform rule execution, sync once semantics, ShadowRun runtime semantics, scheduled sync semantics, Precheck behavior, runtime smoke scripts, workflow, docker-compose, migration, or `AGENTS.md` changes were made.
+- UI stack boundary: this stage did not introduce Arco and did not migrate existing AntD screens.
+- Forbidden capabilities not added: no `valueMap` changes, transform rule chaining, script/expression capability, SQL/HTTP/filesystem lookup, notification behavior, or standard-event-to-alert auto pipeline behavior was added.
+- Verification: local targeted `edsp-core` freshness/error tests passed; full `mvn -pl edsp-core -am test` passed; optional `mvn -pl edsp-transform -am test` passed; optional `mvn -pl edsp-transform-service -am test` passed; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; `git diff --check` passed with only LF/CRLF warnings; browser smoke passed.
+- PR #13 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI run: `https://github.com/Ruidooww/EDSP/actions/runs/26687528220`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26687528201`; job `https://github.com/Ruidooww/EDSP/actions/runs/26687528201/job/78658190769`; duration `2m7s`; artifact `transform-runtime-smoke-26687528201-1`.
+- Artifact safety: PR #13 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Recommended next stage: `Standard Event Rule Decision Auto Pipeline MVP`, focused on creating alert decisions from standardized events while keeping notification behavior disabled and preserving the existing raw_events -> standard_events -> alert_decisions boundary.

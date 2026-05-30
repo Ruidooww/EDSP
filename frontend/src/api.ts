@@ -27,12 +27,24 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function errorMessageFromResponse(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as Partial<ApiResponse<unknown>>;
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
+    }
+  } catch {
+    // Keep the stable status fallback when the error body is not JSON.
+  }
+  return `Request failed: ${response.status}`;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(path, {
     headers: authHeaders(),
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(await errorMessageFromResponse(response));
   }
   const payload = (await response.json()) as ApiResponse<T>;
   if (!payload.success) {
@@ -48,7 +60,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(await errorMessageFromResponse(response));
   }
   const payload = (await response.json()) as ApiResponse<T>;
   if (!payload.success) {
@@ -64,7 +76,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(await errorMessageFromResponse(response));
   }
   const payload = (await response.json()) as ApiResponse<T>;
   if (!payload.success) {

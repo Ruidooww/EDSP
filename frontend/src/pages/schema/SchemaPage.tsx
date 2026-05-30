@@ -120,8 +120,7 @@ const STALE_SHADOW_RUN_REASONS = [
 ];
 
 function isStaleShadowRunActivationError(messageText: string) {
-  return STALE_SHADOW_RUN_REASONS.some((reason) => messageText.includes(reason))
-    || messageText.includes('Request failed: 400');
+  return STALE_SHADOW_RUN_REASONS.some((reason) => messageText.includes(reason));
 }
 
 function statusTag(value?: string) {

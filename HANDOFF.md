@@ -6,11 +6,11 @@
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Rule valueMap Runtime Verification MVP`
-- 最新 feature merge commit：`328b4db merge: transform rule value map runtime verification mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule value map runtime verification mvp`
-- 本轮阶段分支：`codex/transform-rule-value-map-runtime-verification-mvp`
-- 本轮结果：runtime smoke 已加入 `valueMap` fixture，通过 `risk_level=warn` -> `severity=medium` 验证 `fieldMappingDetails[*].transformRule=valueMap` 与 `transformRulePayload` 在真实 runtime 链路中生效；remote success 场景验证真实 remote `edsp-transform-service` runtime 执行 `valueMap`；fallback unavailable 场景验证 remote unavailable 后 local fallback runtime 也执行 `valueMap`；remote unavailable 场景保持 `failed` / `remote_unavailable` / `raw_events=0` / `standard_events=0` 语义；raw source row 保持原始 `risk_level=warn`；新增 summary 字段 `valueMapRuntimeVerification`、`remoteValueMapRuntimeVerification`、`fallbackValueMapRuntimeVerification`、`remoteUnavailableNoWritesVerification`；本轮只修改 `scripts/verify-transform-runtime-smoke.ps1`，未修改 backend / frontend / DTO / API / migration / workflow / docker-compose / production runtime behavior；artifact `transform-runtime-smoke-26674265441-1` 仅包含 `summary.json`，无 DB dump、完整 raw row、source config、完整 env 或 secret-like 内容；PR #10 EDSP CI 与 `Transform Runtime Smoke` 均 success，可作为 PR runtime smoke sample #10；下一阶段建议 `Transform Rule UI / Mapping Rule Configuration MVP` 或 `Transform Rule Chaining Readiness MVP`。
+- 当前阶段：`Transform Rule UI / Mapping Rule Configuration MVP`
+- 最新 feature merge commit：`b894cfe merge: transform rule ui mapping rule configuration mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule ui mapping rule configuration mvp`
+- 本轮阶段分支：`codex/transform-rule-ui-mapping-rule-configuration-mvp`
+- 本轮结果：新增 `PUT /api/core/ingestion-plans/{id}/mapping-rules`，用于保存 mapping rule 到 `ingestion_plans.plan_json.fieldMappingDetails`；前端在现有 AntD ingestion plan mapping 面板中新增 rule 配置 drawer，可配置 `trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap`；`fieldMappings` 仍是唯一 authoritative mapping source，`fieldMappingDetails` 只承载 detail metadata；active activation 下禁止直接修改 mapping rule 并返回 `409 plan_already_activated`；authoritative edge mismatch 返回 `400 mapping_edge_mismatch`；valueMap UI/API 保存时校验 `type`、`values`、`onMissing`、`defaultValue` 和当前 size guard；本轮未修改 transform runtime / processor 执行语义，未新增 chaining / nested rules / ordered rule list，未新增 script / expression / SQL / HTTP / filesystem 能力；未引入 Arco，继续使用现有 `antd`；未修改 migration / workflow / scripts / docker-compose / `AGENTS.md`；PR #11 EDSP CI 与 `Transform Runtime Smoke` 均 success，runtime smoke artifact `transform-runtime-smoke-26681102530-1` 仅包含 `summary.json`，无 DB dump、完整 raw row、source config、完整 env 或 secret-like 内容；下一阶段建议 `Transform Rule UI Runtime Verification / Configuration Hardening MVP` 或 `Transform Rule Chaining Readiness MVP`。
 
 ## 已完成能力
 
@@ -755,7 +755,7 @@
 - PR #9 已提供第九条真实 PR check 样本：EDSP CI success；`Transform Runtime Smoke` success；run `https://github.com/Ruidooww/EDSP/actions/runs/26673266852`；job `https://github.com/Ruidooww/EDSP/actions/runs/26673266852/job/78620436191`；duration `2m16s`；artifact `transform-runtime-smoke-26673266852-1`。
 - PR #9 artifact inspection confirmed nested `summary.json` only, with no DB dump, complete raw row, source config, complete env, or secret-like content。
 
-## 下一轮建议
+## 历史下一轮建议（valueMap runtime verification 已完成）
 
 建议下一阶段优先执行：
 
@@ -813,7 +813,7 @@ One merge.
 One post-merge HANDOFF update.
 Clean master before continuing.
 ```
-## Current Stage Status (latest)
+## Previous Stage Status (valueMap runtime verification)
 - Current stable branch: `master`
 - Current stage: `Transform Rule valueMap Runtime Verification MVP`
 - Latest feature merge commit: `328b4db merge: transform rule value map runtime verification mvp`
@@ -830,3 +830,27 @@ Clean master before continuing.
 - Verification: `mvn -pl edsp-transform-contract test` passed; `mvn -pl edsp-transform -am test` passed; `mvn -pl edsp-transform-service -am test` passed; targeted `edsp-core` runtime tests passed; full `mvn -pl edsp-core -am test` passed; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; local runtime smoke passed; `git diff --check` passed.
 - PR #10 status: EDSP CI success; Transform Runtime Smoke success. Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26674265441`; job: `https://github.com/Ruidooww/EDSP/actions/runs/26674265441/job/78623102572`; duration `2m10s`; artifact `transform-runtime-smoke-26674265441-1`. This is PR runtime smoke sample #10.
 - Recommended next stage: `Transform Rule UI / Mapping Rule Configuration MVP` or `Transform Rule Chaining Readiness MVP`, depending on whether the next priority is user configuration or rule-composition planning.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Transform Rule UI / Mapping Rule Configuration MVP`
+- Latest feature merge commit: `b894cfe merge: transform rule ui mapping rule configuration mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for transform rule ui mapping rule configuration mvp`
+- Stage branch: `codex/transform-rule-ui-mapping-rule-configuration-mvp`
+- Stage result: PR #11 added the first UI and API surface for configuring transform mapping rules on ingestion plans.
+- Backend API: added `PUT /api/core/ingestion-plans/{id}/mapping-rules`.
+- Persistence boundary: rule changes are saved only into `ingestion_plans.plan_json.fieldMappingDetails`; no migration was added and no `field_mappings` table write path was introduced.
+- Authoritative mapping boundary: `fieldMappings` remains the only authoritative mapping source. The update API requires an exact `{sourceField, standardField}` edge already present in `fieldMappings`; mismatch returns `400 mapping_edge_mismatch`.
+- Activation boundary: active plans cannot be edited directly; active activation returns `409 plan_already_activated`.
+- UI surface: added an AntD drawer from the ingestion plan mapping panel for configuring `trim`, `lower`, `upper`, `defaultIfBlank`, and `valueMap`.
+- Design system boundary: this stage did not introduce Arco or migrate AntD components. Existing `antd` remains the UI stack for this screen.
+- valueMap configuration: UI/API accept `transformRulePayload` with `type=valueMap`, `values`, `onMissing`, and optional `defaultValue`; `values` is kept as `string -> string`.
+- Safety guards: valueMap save validation enforces max 200 entries, key length <= 200, mapped value length <= 500, and default value length <= 500.
+- Runtime boundary: this stage did not modify `TransformRuleApplier`, `StandardEventTransformRuleProcessor`, `edsp-transform`, `edsp-transform-service` production behavior, sync once runtime semantics, ShadowRun runtime semantics, scheduled sync semantics, Precheck behavior, or activation gate behavior.
+- Forbidden capabilities not added: no chaining, nested rules, ordered rule lists, `trim -> lower -> valueMap` composition, Groovy, JavaScript, SpEL, `ScriptEngine`, `eval`, arbitrary expression, SQL lookup, HTTP lookup, filesystem access, external process execution, migration, workflow change, scripts change, docker-compose change, `AGENTS.md` change, or required check change.
+- Verification: local `mvn -pl edsp-core -am test` passed; local `mvn -pl edsp-transform-service -am test` passed; local `npm.cmd run build` passed with only the existing Vite chunk-size warning; local `docker compose -p edsp config --quiet` passed; local `git diff --check` passed; local browser smoke on `http://127.0.0.1:18130/` loaded with title `数据安全预警分析平台` and console error count `0`.
+- PR #11 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI run: `https://github.com/Ruidooww/EDSP/actions/runs/26681102515`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26681102530`; job `https://github.com/Ruidooww/EDSP/actions/runs/26681102530/job/78641538884`; duration `2m21s`; artifact `transform-runtime-smoke-26681102530-1`.
+- Artifact safety: PR #11 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Recommended next stage: `Transform Rule UI Runtime Verification / Configuration Hardening MVP` if the next priority is hardening the UI save and ShadowRun verification workflow, or `Transform Rule Chaining Readiness MVP` if the next priority is rule-composition planning.

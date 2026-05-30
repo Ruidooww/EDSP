@@ -854,3 +854,24 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26681102530`; job `https://github.com/Ruidooww/EDSP/actions/runs/26681102530/job/78641538884`; duration `2m21s`; artifact `transform-runtime-smoke-26681102530-1`.
 - Artifact safety: PR #11 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Recommended next stage: `Transform Rule UI Runtime Verification / Configuration Hardening MVP` if the next priority is hardening the UI save and ShadowRun verification workflow, or `Transform Rule Chaining Readiness MVP` if the next priority is rule-composition planning.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Plan Revision / ShadowRun Freshness Gate MVP`
+- Latest feature merge commit: `a604f74 merge: plan revision shadowrun freshness gate mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for plan revision shadowrun freshness gate mvp`
+- Stage branch: `codex/plan-revision-shadowrun-freshness-gate-mvp`
+- Stage result: PR #12 added a plan revision freshness gate so an activation can only use a ShadowRun whose plan fingerprint matches the current `ingestion_plans.plan_json`.
+- Fingerprint storage: plan fingerprints are stored in ShadowRun `report_json`; this stage did not add a migration, plan revision table, or full version-history model.
+- Activation boundary: approved or `shadow_ready` plans still require the latest passed ShadowRun, and that ShadowRun must now include a matching plan fingerprint. Missing, invalid, stale, or mismatched fingerprints block activation.
+- Freshness behavior: old ShadowRun records without a fingerprint are intentionally treated as stale; users must rerun ShadowRun after this stage before activating affected plans.
+- UI behavior: after mapping-rule save, the schema page refreshes the plan list so plan/ShadowRun freshness state is not left stale in the browser.
+- UI error display: stale, missing, or invalid fingerprint activation failures are surfaced to the user; the current API client still falls back to a generic `400` message when the response body cannot be parsed.
+- Runtime boundary: this stage did not change transform runtime behavior, transform rule execution, sync once semantics, scheduled sync semantics, Precheck behavior, or runtime smoke scripts.
+- Forbidden capabilities not added: no `valueMap` changes, no transform rule chaining, no Arco migration, no `standard_events -> alert_decisions` chain, no notification behavior, no migration, no workflow change, no script change, no docker-compose change, and no `AGENTS.md` change.
+- Verification: local `mvn -pl edsp-core -am test` passed; `mvn -pl edsp-transform -am test` passed; `mvn -pl edsp-transform-service -am test` passed; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; local runtime smoke passed; `git diff --check` passed.
+- PR #12 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI runs: `https://github.com/Ruidooww/EDSP/actions/runs/26686484863` and `https://github.com/Ruidooww/EDSP/actions/runs/26686490548`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26686490536`; job `https://github.com/Ruidooww/EDSP/actions/runs/26686490536/job/78655515111`; duration `1m58s`; artifact `transform-runtime-smoke-26686490536-1`.
+- Artifact safety: PR #12 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Recommended next stage: `Plan Revision UI Runtime Freshness Verification / API Error Reason Handling MVP`, focused on browser-level verification of stale activation messaging and improving API error-body propagation without changing the activation gate semantics.

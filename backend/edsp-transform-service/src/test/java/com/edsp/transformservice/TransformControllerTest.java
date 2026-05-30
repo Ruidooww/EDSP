@@ -236,7 +236,7 @@ class TransformControllerTest {
     }
 
     @Test
-    void unsupportedAndInvalidTransformRulesReturnWarningsWithoutHttpFailure() throws Exception {
+    void valueMapAndInvalidTransformRulesReturnWarningsWithoutHttpFailure() throws Exception {
         mockMvc.perform(post("/api/transform/standard-events")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
@@ -284,11 +284,62 @@ class TransformControllerTest {
                     }
                     """))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.draft.actor").value("USER_A"))
+            .andExpect(jsonPath("$.draft.actor").value("mapped-user"))
             .andExpect(jsonPath("$.draft.severity").value("high"))
             .andExpect(jsonPath("$.errors.length()").value(0))
-            .andExpect(jsonPath("$.warnings[0]").value("transform_rule_unsupported"))
-            .andExpect(jsonPath("$.warnings[1]").value("transform_rule_invalid"));
+            .andExpect(jsonPath("$.warnings[0]").value("transform_rule_invalid"));
+    }
+
+    @Test
+    void transformsBatchRowsWithValueMapInInputOrder() throws Exception {
+        mockMvc.perform(post("/api/transform/standard-events/batch")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "rows": [
+                        {"id": "ALERT-1", "create_time": "2026-05-20 10:30:00", "user_account": "USER_A", "risk_level": "warn"},
+                        {"id": "ALERT-2", "create_time": "2026-05-20 10:31:00", "user_account": "USER_B", "risk_level": "critical"}
+                      ],
+                      "mappingPlan": {
+                        "fieldMappings": {
+                          "id": "externalId",
+                          "create_time": "occurredAt",
+                          "user_account": "actor",
+                          "risk_level": "severity"
+                        },
+                        "dedupFields": ["id"],
+                        "fieldMappingDetails": [
+                          {
+                            "sourceField": "risk_level",
+                            "standardField": "severity",
+                            "transformRule": "valueMap",
+                            "transformRulePayload": {
+                              "type": "valueMap",
+                              "values": {
+                                "critical": "high",
+                                "warn": "medium"
+                              },
+                              "onMissing": "keepOriginal"
+                            }
+                          }
+                        ]
+                      },
+                      "options": {
+                        "dataSourceId": 7,
+                        "schemaTableId": 11,
+                        "sourceTable": "sec_alert_event",
+                        "syncMode": "sync_once"
+                      }
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.results[0].index").value(0))
+            .andExpect(jsonPath("$.results[0].draft.externalId").value("ALERT-1"))
+            .andExpect(jsonPath("$.results[0].draft.severity").value("medium"))
+            .andExpect(jsonPath("$.results[1].index").value(1))
+            .andExpect(jsonPath("$.results[1].draft.externalId").value("ALERT-2"))
+            .andExpect(jsonPath("$.results[1].draft.severity").value("high"))
+            .andExpect(jsonPath("$.errors.length()").value(0));
     }
 
     @Test

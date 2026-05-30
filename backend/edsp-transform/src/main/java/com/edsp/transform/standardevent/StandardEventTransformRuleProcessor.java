@@ -109,7 +109,12 @@ final class StandardEventTransformRuleProcessor {
             var value = row.values().get(sourceField);
             var detail = exactDetail(plan, sourceField, standardField);
             if (detail != null) {
-                var application = transformRuleApplier.apply(value, detail.transformRule(), sourceField);
+                var application = transformRuleApplier.apply(
+                    value,
+                    detail.transformRule(),
+                    sourceField,
+                    detail.transformRulePayload()
+                );
                 warnings.addAll(application.warnings());
                 value = application.value();
             }

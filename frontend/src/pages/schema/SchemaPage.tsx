@@ -16,6 +16,7 @@ import { apiGet, apiPost, apiPut } from '../../api';
 import type {
   DataSourceRow,
   IngestionPlanActivationRow,
+  IngestionPlanMappingRuleUpdateRequest,
   IngestionPlanRow,
   IngestionPlanShadowRunRow,
   IngestionPlanSyncRunRow,
@@ -43,6 +44,7 @@ import {
   getSyncScheduleActivationId,
 } from './utils/ingestionPlanActivation';
 import { normalizePlan } from './utils/normalizeIngestionPlan';
+import type { NormalizedPlanMapping } from './utils/normalizeIngestionPlan';
 
 interface SchemaMappingRow {
   id: number;
@@ -457,6 +459,32 @@ export default function SchemaPage() {
       await loadPlans();
     } catch (error) {
       message.error(error instanceof Error ? error.message : '推荐接入方案状态更新失败');
+    } finally {
+      setPlanActionId(null);
+    }
+  }
+
+  async function saveMappingRule(
+    row: IngestionPlanRow,
+    _mapping: NormalizedPlanMapping,
+    payload: IngestionPlanMappingRuleUpdateRequest,
+  ) {
+    setPlanActionId(row.id);
+    try {
+      const updated = await apiPut<IngestionPlanRow>(
+        `/api/core/ingestion-plans/${row.id}/mapping-rules`,
+        payload,
+      );
+      setPlans((current) => current.map((plan) => plan.id === row.id ? updated : plan));
+      message.success('Rule saved. Run Shadow Run again to verify the new rule.');
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '';
+      if (messageText.includes('409')) {
+        message.error('Active plans cannot be edited directly. Create a new draft before changing rules.');
+      } else {
+        message.error(messageText || 'Rule save failed.');
+      }
+      throw error;
     } finally {
       setPlanActionId(null);
     }
@@ -1086,6 +1114,7 @@ export default function SchemaPage() {
         onConfigureSyncSchedule={openSyncScheduleConfig}
         onPauseSyncSchedule={pauseSyncSchedule}
         onResumeSyncSchedule={resumeSyncSchedule}
+        onSaveMappingRule={saveMappingRule}
       />
 
       <Card className="ops-card" title="扫描运行记录">

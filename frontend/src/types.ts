@@ -596,7 +596,25 @@ export interface IngestionPlanFieldMapping {
   confidence?: number | string;
   transformRule?: string;
   transform_rule?: string;
+  transformRulePayload?: TransformRulePayload | Record<string, unknown>;
+  transform_rule_payload?: TransformRulePayload | Record<string, unknown>;
   reason?: string;
+  [key: string]: unknown;
+}
+
+export interface TransformRulePayload {
+  type?: string;
+  values?: Record<string, string>;
+  onMissing?: 'keepOriginal' | 'useDefault';
+  defaultValue?: string;
+  [key: string]: unknown;
+}
+
+export interface IngestionPlanMappingRuleUpdateRequest {
+  sourceField: string;
+  standardField: string;
+  transformRule?: string | null;
+  transformRulePayload?: TransformRulePayload | Record<string, unknown> | null;
 }
 
 export interface IngestionPlanFieldEvidence {

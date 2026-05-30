@@ -1,6 +1,9 @@
-import { Alert, Descriptions, Space, Tag, Typography } from 'antd';
+import { SettingOutlined } from '@ant-design/icons';
+import { Alert, Button, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
+import { useState } from 'react';
 import type {
   IngestionPlanActivationRow,
+  IngestionPlanMappingRuleUpdateRequest,
   IngestionPlanRow,
   IngestionPlanShadowRunRow,
   IngestionPlanSyncRunRow,
@@ -31,9 +34,10 @@ import {
   getSyncScheduleText,
   getSyncScheduleTime,
 } from '../utils/ingestionPlanActivation';
-import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
+import type { NormalizedIngestionPlan, NormalizedPlanMapping } from '../utils/normalizeIngestionPlan';
 import IngestionPlanActions from './IngestionPlanActions';
 import IngestionPlanDetailSection from './IngestionPlanDetailSection';
+import IngestionPlanRuleConfigDrawer from './IngestionPlanRuleConfigDrawer';
 
 interface IngestionPlanPanelProps {
   row: IngestionPlanRow;
@@ -59,6 +63,11 @@ interface IngestionPlanPanelProps {
   ) => void;
   onPauseSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
   onResumeSyncSchedule: (row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) => void;
+  onSaveMappingRule: (
+    row: IngestionPlanRow,
+    mapping: NormalizedPlanMapping,
+    request: IngestionPlanMappingRuleUpdateRequest,
+  ) => Promise<void>;
 }
 
 function syncRunStatusTag(value?: string) {
@@ -85,6 +94,13 @@ function scheduleStatusTag(value?: string) {
     return <Tag>paused</Tag>;
   }
   return <Tag>{value || '-'}</Tag>;
+}
+
+function valueMapCount(mapping: NormalizedPlanMapping) {
+  const values = mapping.transformRulePayload?.values;
+  return values && typeof values === 'object' && !Array.isArray(values)
+    ? Object.keys(values).length
+    : 0;
 }
 
 function syncRunSummary(run: IngestionPlanSyncRunRow | null, formatTime: (value?: string | number) => string) {
@@ -132,7 +148,9 @@ export default function IngestionPlanPanel({
   onConfigureSyncSchedule,
   onPauseSyncSchedule,
   onResumeSyncSchedule,
+  onSaveMappingRule,
 }: IngestionPlanPanelProps) {
+  const [ruleMapping, setRuleMapping] = useState<NormalizedPlanMapping | null>(null);
   const activationStatus = getActivationStatus(activation);
   const activationShadowRunId = getActivationShadowRunId(activation);
   const activationOperator = getActivationOperator(activation);
@@ -267,6 +285,19 @@ export default function IngestionPlanPanel({
                   {renderWrappedTag(STANDARD_FIELD_LABELS[mapping.standardField] || mapping.standardField || '-', 'success')}
                   {mapping.confidence !== undefined && <Typography.Text type="secondary">{formatConfidence(mapping.confidence)}</Typography.Text>}
                   {mapping.transformRule && <Typography.Text type="secondary" style={{ wordBreak: 'break-word' }}>{mapping.transformRule}</Typography.Text>}
+                  {mapping.transformRule === 'valueMap' && valueMapCount(mapping) > 0 && (
+                    <Tag color="blue">{valueMapCount(mapping)} values</Tag>
+                  )}
+                  <Tooltip title={isActive ? 'Active plan cannot be edited directly.' : 'Configure transform rule'}>
+                    <Button
+                      size="small"
+                      icon={<SettingOutlined />}
+                      disabled={isActive}
+                      onClick={() => setRuleMapping(mapping)}
+                    >
+                      Rule
+                    </Button>
+                  </Tooltip>
                 </div>
               ))}
             </div>
@@ -283,6 +314,14 @@ export default function IngestionPlanPanel({
         <IngestionPlanDetailSection title="风险提示">{renderTextTags(plan.risks, '无')}</IngestionPlanDetailSection>
         <IngestionPlanDetailSection title="推荐动作">{renderTextTags(plan.recommendedActions, '无')}</IngestionPlanDetailSection>
       </div>
+      <IngestionPlanRuleConfigDrawer
+        open={Boolean(ruleMapping)}
+        mapping={ruleMapping}
+        active={isActive}
+        saving={busy}
+        onClose={() => setRuleMapping(null)}
+        onSave={(request) => ruleMapping ? onSaveMappingRule(row, ruleMapping, request) : Promise.resolve()}
+      />
     </div>
   );
 }

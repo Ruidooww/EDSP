@@ -25,15 +25,18 @@ public class IngestionPlanActivationService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final CoreRequestSupport support;
+    private final PlanFingerprintSupport planFingerprintSupport;
 
     public IngestionPlanActivationService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
-        CoreRequestSupport support
+        CoreRequestSupport support,
+        PlanFingerprintSupport planFingerprintSupport
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.support = support;
+        this.planFingerprintSupport = planFingerprintSupport;
     }
 
     @Transactional
@@ -76,8 +79,10 @@ public class IngestionPlanActivationService {
             );
         }
 
+        var planFingerprint = planFingerprintSupport.fingerprint(plan.get("plan_json"));
+        validatePlanFingerprint(latestRun, planFingerprint);
         var planJson = parseJson(plan.get("plan_json"));
-        var config = activationConfig(planStatus, request.shadowRunId(), planJson);
+        var config = activationConfig(planStatus, request.shadowRunId(), planJson, planFingerprint);
         var activationId = insertActivation(
             planId,
             support.number(plan.get("data_source_id")),
@@ -131,11 +136,17 @@ public class IngestionPlanActivationService {
         return activationRow(activationId);
     }
 
-    private Map<String, Object> activationConfig(String planStatus, Long shadowRunId, Map<String, Object> planJson) {
+    private Map<String, Object> activationConfig(
+        String planStatus,
+        Long shadowRunId,
+        Map<String, Object> planJson,
+        PlanFingerprintSupport.PlanFingerprint planFingerprint
+    ) {
         var config = new LinkedHashMap<String, Object>();
         config.put("activationGate", "latest_shadow_run_passed");
         config.put("shadowRunId", shadowRunId);
         config.put("planStatus", planStatus);
+        config.put("planFingerprint", planFingerprint.asMap());
         config.put("dedupStrategy", planJson.getOrDefault("dedupStrategy", Map.of()));
         config.put("cursorField", cursorField(planJson));
         config.put("batchSize", 100);
@@ -153,6 +164,28 @@ public class IngestionPlanActivationService {
             return syncStrategy.get("cursorField");
         }
         return null;
+    }
+
+    private void validatePlanFingerprint(
+        Map<String, Object> shadowRun,
+        PlanFingerprintSupport.PlanFingerprint currentFingerprint
+    ) {
+        var report = parseJson(shadowRun.get("report_json"));
+        if (!(report.get("planFingerprint") instanceof Map<?, ?> rawFingerprint)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "shadow_run_plan_fingerprint_missing");
+        }
+        Map<String, Object> fingerprint = objectMapper.convertValue(rawFingerprint, new TypeReference<>() {});
+        var algorithm = support.stringOrNull(fingerprint.get("algorithm"));
+        if (!PlanFingerprintSupport.ALGORITHM.equals(algorithm)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "shadow_run_plan_fingerprint_invalid");
+        }
+        var hash = support.stringOrNull(fingerprint.get("hash"));
+        if (hash == null || hash.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "shadow_run_plan_fingerprint_missing");
+        }
+        if (!currentFingerprint.hash().equals(hash)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "shadow_run_stale_after_plan_edit");
+        }
     }
 
     private Long insertActivation(
@@ -219,7 +252,7 @@ public class IngestionPlanActivationService {
 
     private Map<String, Object> loadShadowRun(long shadowRunId) {
         var rows = jdbcTemplate.queryForList("""
-            select id, ingestion_plan_id, data_source_id, status, created_at
+            select id, ingestion_plan_id, data_source_id, status, report_json, created_at
             from ingestion_plan_shadow_runs
             where id = ?
             """, shadowRunId);
@@ -231,7 +264,7 @@ public class IngestionPlanActivationService {
 
     private Map<String, Object> latestShadowRun(long planId) {
         var rows = jdbcTemplate.queryForList("""
-            select id, ingestion_plan_id, data_source_id, status, created_at
+            select id, ingestion_plan_id, data_source_id, status, report_json, created_at
             from ingestion_plan_shadow_runs
             where ingestion_plan_id = ?
             order by created_at desc, id desc

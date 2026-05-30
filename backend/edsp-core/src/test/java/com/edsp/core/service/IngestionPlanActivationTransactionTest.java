@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.edsp.core.dto.IngestionPlanActivationRequest;
 import com.edsp.core.support.CoreRequestSupport;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
@@ -26,6 +28,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 class IngestionPlanActivationTransactionTest {
     private AnnotationConfigApplicationContext context;
     private JdbcTemplate jdbcTemplate;
+    private ObjectMapper objectMapper;
+    private PlanFingerprintSupport planFingerprintSupport;
     private IngestionPlanActivationService service;
     private TransactionTemplate transactionTemplate;
 
@@ -46,6 +50,8 @@ class IngestionPlanActivationTransactionTest {
             .migrate();
 
         jdbcTemplate = context.getBean(JdbcTemplate.class);
+        objectMapper = context.getBean(ObjectMapper.class);
+        planFingerprintSupport = context.getBean(PlanFingerprintSupport.class);
         service = context.getBean(IngestionPlanActivationService.class);
         transactionTemplate = new TransactionTemplate(context.getBean(DataSourceTransactionManager.class));
     }
@@ -117,14 +123,29 @@ class IngestionPlanActivationTransactionTest {
     }
 
     private Long insertShadowRun(Long planId, Long dataSourceId, String status) {
+        var planJson = jdbcTemplate.queryForObject(
+            "select plan_json from ingestion_plans where id = ?",
+            Object.class,
+            planId
+        );
         jdbcTemplate.update("""
             insert into ingestion_plan_shadow_runs(
                 ingestion_plan_id, data_source_id, status, sample_limit,
                 read_count, success_count, failed_count, report_json
             )
-            values (?, ?, ?, 20, 2, 2, 0, cast('{}' as jsonb))
-            """, planId, dataSourceId, status);
+            values (?, ?, ?, 20, 2, 2, 0, cast(? as jsonb))
+            """, planId, dataSourceId, status, writeJson(Map.of(
+                "planFingerprint", planFingerprintSupport.fingerprint(planJson).asMap()
+            )));
         return lastId("ingestion_plan_shadow_runs");
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Unable to serialize test JSON", ex);
+        }
     }
 
     private Long activeActivationCount(Long planId) {
@@ -181,12 +202,18 @@ class IngestionPlanActivationTransactionTest {
         }
 
         @Bean
+        PlanFingerprintSupport planFingerprintSupport(ObjectMapper objectMapper) {
+            return new PlanFingerprintSupport(objectMapper);
+        }
+
+        @Bean
         IngestionPlanActivationService activationService(
             JdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
-            CoreRequestSupport support
+            CoreRequestSupport support,
+            PlanFingerprintSupport planFingerprintSupport
         ) {
-            return new IngestionPlanActivationService(jdbcTemplate, objectMapper, support);
+            return new IngestionPlanActivationService(jdbcTemplate, objectMapper, support, planFingerprintSupport);
         }
     }
 }

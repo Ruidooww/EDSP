@@ -34,7 +34,7 @@ class IngestionPlanShadowRunControllerTest {
 
     private static class StubShadowRunService extends IngestionPlanShadowRunService {
         StubShadowRunService() {
-            super(null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null);
         }
 
         @Override

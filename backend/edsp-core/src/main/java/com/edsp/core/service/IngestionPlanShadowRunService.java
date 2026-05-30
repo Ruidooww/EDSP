@@ -51,6 +51,7 @@ public class IngestionPlanShadowRunService {
     private final IngestionPlanPrecheckService precheckService;
     private final JdbcShadowSampleService sampleService;
     private final TransformPlanSupport planSupport;
+    private final PlanFingerprintSupport planFingerprintSupport;
     private final TransformRuntimeClient transformRuntimeClient;
 
     public IngestionPlanShadowRunService(
@@ -60,6 +61,7 @@ public class IngestionPlanShadowRunService {
         IngestionPlanPrecheckService precheckService,
         JdbcShadowSampleService sampleService,
         TransformPlanSupport planSupport,
+        PlanFingerprintSupport planFingerprintSupport,
         TransformRuntimeClient transformRuntimeClient
     ) {
         this.jdbcTemplate = jdbcTemplate;
@@ -68,6 +70,7 @@ public class IngestionPlanShadowRunService {
         this.precheckService = precheckService;
         this.sampleService = sampleService;
         this.planSupport = planSupport;
+        this.planFingerprintSupport = planFingerprintSupport;
         this.transformRuntimeClient = transformRuntimeClient;
     }
 
@@ -84,9 +87,10 @@ public class IngestionPlanShadowRunService {
         }
 
         var dataSourceId = support.number(planRow.get("data_source_id"));
+        var planFingerprint = planFingerprintSupport.fingerprint(planRow.get("plan_json"));
         var precheck = precheckService.shadowValidate(planId, new IngestionPlanShadowValidationRequest(sampleLimit));
         if ("blocked".equals(support.stringOrDefault(precheck.get("result"), ""))) {
-            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
+            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck, planFingerprint);
             var runId = insertRun(planId, dataSourceId, "blocked", sampleLimit, 0, 0, 0, 0, 0,
                 startedAt, null, report);
             return runRow(runId, true);
@@ -103,7 +107,7 @@ public class IngestionPlanShadowRunService {
                 source.selectedFields(),
                 sampleLimit
             );
-            var analysis = analyze(planId, dataSourceId, sampleLimit, precheck, source, rows);
+            var analysis = analyze(planId, dataSourceId, sampleLimit, precheck, source, rows, planFingerprint);
             var status = analysis.status();
             var runId = insertRun(
                 planId,
@@ -122,7 +126,7 @@ public class IngestionPlanShadowRunService {
             return runRow(runId, true);
         } catch (PlanBlockerException ex) {
             var error = support.stringOrDefault(ex.getMessage(), "Shadow run blocked");
-            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
+            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck, planFingerprint);
             var blockers = new LinkedHashSet<>(stringList(report.get("blockers")));
             blockers.addAll(ex.blockers());
             var checks = new ArrayList<Object>();
@@ -141,7 +145,7 @@ public class IngestionPlanShadowRunService {
             return runRow(runId, true);
         } catch (RuntimeException ex) {
             var error = sanitizedError(ex, "Shadow run failed");
-            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
+            var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck, planFingerprint);
             report.put("status", "failed");
             report.put("summary", summary("failed", sampleLimit, 0, 0, 0, 0, 0));
             report.put("errorsByType", Map.of("execution_failed", 1));
@@ -187,7 +191,8 @@ public class IngestionPlanShadowRunService {
         int sampleLimit,
         Map<String, Object> precheck,
         Source source,
-        List<Map<String, Object>> rows
+        List<Map<String, Object>> rows,
+        PlanFingerprintSupport.PlanFingerprint planFingerprint
     ) {
         var mappingPlan = planSupport.mappingPlan(source.plan());
         var fieldMappings = mappingPlan.fieldMappings();
@@ -252,7 +257,7 @@ public class IngestionPlanShadowRunService {
             : "passed";
         var mergedWarnings = new LinkedHashSet<>(stringList(precheck.get("warnings")));
         mergedWarnings.addAll(warnings);
-        var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck);
+        var report = reportSkeleton(planId, dataSourceId, sampleLimit, precheck, planFingerprint);
         report.put("status", status);
         report.put("summary", summary(status, sampleLimit, rows.size(), successCount, failedCount,
             duplicateCount, missingRequiredCount));
@@ -463,7 +468,8 @@ public class IngestionPlanShadowRunService {
         long planId,
         Long dataSourceId,
         int sampleLimit,
-        Map<String, Object> precheck
+        Map<String, Object> precheck,
+        PlanFingerprintSupport.PlanFingerprint planFingerprint
     ) {
         var status = support.stringOrDefault(precheck.get("result"), "passed");
         var report = new LinkedHashMap<String, Object>();
@@ -477,6 +483,7 @@ public class IngestionPlanShadowRunService {
         report.put("samples", List.of());
         report.put("errorsByType", Map.of());
         report.put("previewPolicy", previewPolicy());
+        report.put("planFingerprint", planFingerprint.asMap());
         return report;
     }
 

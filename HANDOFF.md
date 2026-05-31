@@ -965,3 +965,23 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26709973607`; job `https://github.com/Ruidooww/EDSP/actions/runs/26709973607/job/78718257848`; duration `2m0s`; artifact `transform-runtime-smoke-26709973607-1`; digest `sha256:adb2b213dd2dc188196d9058b6ad2e246aef209d97482a081e87e6495087de0f`.
 - Artifact safety: PR #16 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Selected next stage: `EDSP Security Theme MVP`, followed by `Matched Alert Decision Auto Generation MVP`.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `EDSP Security Theme MVP`
+- Latest feature merge commit: `9e20562 merge: edsp security theme mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for edsp security theme mvp`
+- Stage branch: `codex/antd-theme-edsp-security`
+- Stage result: PR #17 applied a frontend theme-only EDSP security visual refresh without changing page business logic, backend behavior, API contracts, routes, or data flow.
+- Theme boundary: added `frontend/src/theme/edspTheme.ts` and switched `frontend/src/main.tsx` to `theme={edspTheme}` while keeping `ConfigProvider locale={zhCN}`, `React.StrictMode`, and the existing `App` render structure unchanged.
+- CSS boundary: `frontend/src/styles.css` now uses a dark solid sider `#0d1421`, teal brand gradient `#26c5bb -> #0d8580`, teal selected menu and topbar icon accents, and additive severity/status/delivery tag classes for later page adoption.
+- Scope boundary: this stage touched only `frontend/src/theme/edspTheme.ts`, `frontend/src/main.tsx`, and `frontend/src/styles.css`. It did not modify `frontend/src/App.tsx`, any page component, `frontend/src/types.ts`, `frontend/src/api.ts`, demo data, backend code, migration, workflow, scripts, `docker-compose.yml`, `AGENTS.md`, or runtime behavior.
+- UI stack boundary: Ant Design remains the active frontend component stack. This stage did not introduce Arco, replace AntD, or add new npm dependencies.
+- Business boundary: no login flow, rule flow, alert flow, notification flow, transform runtime, sync behavior, ShadowRun behavior, Precheck behavior, activation gate behavior, or PostgreSQL alert concurrency behavior changed.
+- Verification: local `mvn -pl edsp-core -am test` passed with 180 tests, 0 failures, and 1 expected skip; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; `git diff --check` passed with only LF/CRLF conversion warnings and no whitespace errors.
+- Browser verification: local login/theme surface verification confirmed the teal brand gradient, dark sider, and teal primary action styling on `http://127.0.0.1:4173/`. Workspace-shell visual verification remained limited because the local backend runtime was unavailable during this stage.
+- PR #17 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI runs: `https://github.com/Ruidooww/EDSP/actions/runs/26713000078` and `https://github.com/Ruidooww/EDSP/actions/runs/26713004990`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26713004993`; job `https://github.com/Ruidooww/EDSP/actions/runs/26713004993/job/78726548538`; duration `2m1s`.
+- Runtime smoke boundary: this stage is frontend theme-only. The passing runtime smoke did not indicate any backend/runtime regression from the theme diff.
+- Recommended next stage: `Matched Alert Decision Auto Generation MVP`.

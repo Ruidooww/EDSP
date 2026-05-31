@@ -1,47 +1,45 @@
 /**
  * EDSP 安全运营平台 - Ant Design v5 主题配置
+ * 白色简洁风格：白色侧边栏 + 青绿选中态 + 极浅灰内容区
  * 不修改任何业务逻辑，仅覆盖设计 token。
  */
 import type { ThemeConfig } from 'antd';
 
 const edspTheme: ThemeConfig = {
   token: {
-    // 主色：安全青绿
     colorPrimary: '#0f9f9a',
-
-    // 语义色
     colorSuccess: '#17b77a',
     colorWarning: '#f77234',
     colorError: '#e84545',
     colorInfo: '#3d81f5',
-
-    // 基础
     borderRadius: 6,
     fontSize: 14,
     fontFamily: '"Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif',
   },
   components: {
     Layout: {
-      bodyBg: '#f0f4f8',
-      siderBg: '#0d1421',
-      triggerBg: '#0d1421',
+      bodyBg: '#f7f8fa',
+      siderBg: '#ffffff',
+      triggerBg: '#f5f6f8',
     },
     Menu: {
-      darkItemBg: '#0d1421',
-      darkSubMenuItemBg: '#111928',
-      darkItemSelectedBg: 'rgba(15, 159, 154, 0.15)',
-      darkItemSelectedColor: '#0f9f9a',
-      darkItemColor: '#c8d4e3',
-      darkItemHoverColor: '#e6f9f7',
-      darkItemHoverBg: 'rgba(15, 159, 154, 0.08)',
+      itemBg: 'transparent',
+      subMenuItemBg: 'transparent',
+      itemColor: '#6b7280',
+      itemHoverColor: '#1c1f26',
+      itemHoverBg: '#f5f6f8',
+      itemSelectedColor: '#ffffff',
+      itemSelectedBg: '#0f9f9a',
+      itemActiveBg: '#0d8580',
     },
     Card: {
-      borderRadiusLG: 8,
+      borderRadiusLG: 9,
     },
     Table: {
-      headerBg: '#f4f7fb',
+      headerBg: '#f7f8fa',
       rowHoverBg: '#f0fbf9',
       cellPaddingBlock: 11,
+      borderColor: '#f0f1f4',
     },
     Button: {
       borderRadius: 6,

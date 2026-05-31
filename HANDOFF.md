@@ -921,3 +921,25 @@ Clean master before continuing.
 - Artifact safety: PR #14 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Known UI follow-up: the existing schema page still has horizontal overflow at a `390px` browser viewport. This predates the new summary block and was not mixed into this stage.
 - Recommended next stage: `Matched Alert Decision Auto Generation Readiness MVP`, focused on defining the minimal boundary for creating `alerts` from matched `alert_decisions` while notifications remain disabled.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Matched Alert Decision Auto Generation Readiness MVP`
+- Latest feature merge commit: `7a28c0a merge: matched alert decision auto generation readiness mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for matched alert decision auto generation readiness mvp`
+- Stage branch: `codex/matched-alert-decision-auto-generation-readiness-mvp`
+- Stage result: PR #15 added `docs/matched-alert-decision-auto-generation-readiness.md`. This stage is docs-only / assessment-first and does not enable automatic alert generation or change backend/frontend production behavior.
+- Reusable boundary: future automatic alert generation must reuse `AlertGenerationService.generate(...)`, `AlertGenerationRunRequest`, and `AlertRepository.createFromDecision(...)`. It must not duplicate alert title, severity, detail, external ID, idempotency, or lifecycle logic.
+- Eligibility boundary: future automatic generation may only process persisted `alert_decisions` for newly inserted `standard_events` where `rule_id is not null` and `decision = 'matched'`. It must not create alerts directly from `raw_events` or `standard_events`.
+- Idempotency boundary: `alerts.alert_decision_id` and unique index `uk_alerts_alert_decision_id` already exist. PostgreSQL concurrent insert recovery inside `PROPAGATION_NESTED` remains a required follow-up verification before automatic generation is enabled; the current H2 coverage is not PostgreSQL proof.
+- Transaction recommendation: future generation should isolate each matched decision with a nested transaction / JDBC savepoint so a single downstream alert creation failure downgrades sync to warning without rolling back persisted `raw_events`, `standard_events`, or `alert_decisions`.
+- Report recommendation: future sync `report_json` may add a safe additive `alertGenerationAuto` summary with mode, status, candidate count, created count, existing count, and failed count only. It must not include decision ID lists, alert ID lists, raw rows, payload JSON, normalized JSON, extra JSON, rule expressions, SQL exceptions, stack traces, source config, env, or secret-like content.
+- Notification boundary: future automatic alert generation must not call `NotificationService` or `AlertNotificationService`, write `notification_deliveries`, or automatically send webhook, WeCom, or Feishu messages.
+- Lifecycle boundary: future automatic generation must not close, revoke, reopen, acknowledge, or assign alerts. Existing manual alert lifecycle behavior remains unchanged.
+- Unchanged components: this stage did not modify backend, frontend, migration, workflow, scripts, docker-compose, `AGENTS.md`, runtime behavior, sync semantics, ShadowRun, Precheck, activation gate, transform runtime, transform rules, valueMap, chaining, notifications, queue, outbox, retry, or backfill behavior.
+- Verification: local `mvn -pl edsp-core -am test` passed with 178 `edsp-core` tests; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; `git diff --check` passed.
+- PR #15 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI run: `https://github.com/Ruidooww/EDSP/actions/runs/26706342205`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26706342207`; job `https://github.com/Ruidooww/EDSP/actions/runs/26706342207/job/78708229140`; duration `2m4s`; artifact `transform-runtime-smoke-26706342207-1`; digest `sha256:567ba977e808842f4f6ae232f90a6956ce1180257c85ba0a295f84bdff2ebd4a`.
+- Artifact safety: PR #15 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Recommended next stage: `Matched Alert Decision Auto Generation PostgreSQL Concurrency Verification MVP`, focused on verifying or hardening PostgreSQL unique-conflict recovery inside nested transactions before enabling automatic alert generation. After that prerequisite is closed, proceed to `Matched Alert Decision Auto Generation MVP`.

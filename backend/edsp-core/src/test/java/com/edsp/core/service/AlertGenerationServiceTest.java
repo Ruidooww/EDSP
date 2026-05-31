@@ -24,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 class AlertGenerationServiceTest {
     private JdbcTemplate jdbcTemplate;
     private ObjectMapper objectMapper;
+    private AlertRepository repository;
     private AlertGenerationService service;
 
     @BeforeEach
@@ -53,7 +54,7 @@ class AlertGenerationServiceTest {
         jdbcTemplate = new JdbcTemplate(dataSource);
         objectMapper = new ObjectMapper();
         var support = new CoreRequestSupport(objectMapper);
-        var repository = new AlertRepository(jdbcTemplate, objectMapper, support);
+        repository = new AlertRepository(jdbcTemplate, objectMapper, support);
         service = new AlertGenerationService(jdbcTemplate, objectMapper, support, repository);
     }
 
@@ -146,6 +147,36 @@ class AlertGenerationServiceTest {
                 values ('duplicate', 'high', 'open', ?, ?, ?, cast('{}' as jsonb))
                 """, ruleId, eventId, decisionId)
         );
+    }
+
+    @Test
+    void repositoryDoesNotMaskNonIdempotentIntegrityErrors() {
+        var eventId = insertStandardEvent();
+        var ruleId = insertRule("Rule", "file_operation", "high");
+        var decisionId = insertDecision(eventId, ruleId, "matched", "high", 90);
+        var invalidCandidate = new AlertGenerationService.AlertCandidate(
+            decisionId,
+            999999L,
+            ruleId,
+            "Invalid standard event reference",
+            "high",
+            "asset",
+            "WIN-01",
+            "sync-once",
+            "rule-decision-" + decisionId,
+            "file_operation",
+            java.sql.Timestamp.from(java.time.Instant.parse("2026-05-23T02:15:00Z")),
+            "zhangsan",
+            "WIN-01",
+            "Rule",
+            Map.of()
+        );
+
+        assertThrows(
+            DataIntegrityViolationException.class,
+            () -> repository.createFromDecision(invalidCandidate)
+        );
+        assertEquals(0L, count("alerts"));
     }
 
     private Long insertStandardEvent() {

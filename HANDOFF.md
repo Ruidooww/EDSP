@@ -985,3 +985,26 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26713004993`; job `https://github.com/Ruidooww/EDSP/actions/runs/26713004993/job/78726548538`; duration `2m1s`.
 - Runtime smoke boundary: this stage is frontend theme-only. The passing runtime smoke did not indicate any backend/runtime regression from the theme diff.
 - Recommended next stage: `Matched Alert Decision Auto Generation MVP`.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Matched Alert Decision Auto Generation MVP`
+- Latest feature merge commit: `726aec2 merge: matched alert decision auto generation mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for matched alert decision auto generation mvp`
+- Stage branch: `codex/matched-alert-decision-auto-generation-mvp`
+- Stage result: PR #18 added automatic alert generation from persisted matched `alert_decisions` for newly inserted `standard_events`, while keeping notification and lifecycle boundaries unchanged.
+- New service: added `MatchedAlertDecisionAutoPipelineService`. It queries only eligible decisions (`rule_id is not null` and `decision = 'matched'`) and calls existing `AlertGenerationService.generate(...)` per decision in `PROPAGATION_NESTED` transactions.
+- Sync integration: `IngestionPlanSyncOnceService` now runs `MatchedAlertDecisionAutoPipelineService.generateForNewStandardEvents(...)` after `RuleDecisionAutoPipelineService` for both sync-once and scheduled sync paths.
+- Report boundary: sync `report_json` now includes additive `alertGenerationAuto` summary with `mode`, `status`, `candidateDecisionCount`, `createdAlertCount`, `existingAlertCount`, `failedDecisionCount`, optional `errorsByType`, and optional fixed safe `errorMessage`.
+- Failure semantics: single-decision alert generation failure downgrades sync to `warning`, adds `alert_generation_auto_failed`, and does not roll back persisted `raw_events`, `standard_events`, or `alert_decisions`.
+- Idempotency boundary: duplicate generation attempts are counted through `existingAlertCount`; no duplicate alerts are created for the same decision.
+- Eligibility boundary: `not_matched`, `skipped`, `error`, and `rule_id is null` decisions are excluded from automatic alert generation.
+- Notification boundary: this stage does not call `NotificationService` or `AlertNotificationService`, does not write `notification_deliveries`, and does not auto-send webhook / WeCom / Feishu messages.
+- Lifecycle boundary: this stage does not auto-close, auto-reopen, auto-revoke, auto-acknowledge, or auto-assign alerts. Existing lifecycle behavior remains unchanged.
+- Unchanged components: no migration, no frontend changes, no transform runtime changes, no rule-evaluation engine behavior changes, no activation gate changes, no ShadowRun changes, no Precheck changes, no workflow/scripts/docker-compose changes, and no `AGENTS.md` changes.
+- Verification: local `mvn -pl edsp-core -am test` passed with 184 tests and 1 expected skip; local `npm.cmd run build` passed with only existing Vite chunk-size warning; local `docker compose -p edsp config --quiet` passed; local `git diff --check` passed with only LF/CRLF conversion warnings and no whitespace errors.
+- PR #18 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI run: `https://github.com/Ruidooww/EDSP/actions/runs/26713669509`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26713669517`; job `https://github.com/Ruidooww/EDSP/actions/runs/26713669517/job/78728333541`; duration `2m10s`; artifact `transform-runtime-smoke-26713669517-1`; digest `sha256:c3ef8042849eb2e0942355f417541740ea52bfecca4abcc4ba222fffbeba1f54`.
+- Artifact safety: PR #18 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Recommended next stage: `Alert Notification Auto Delivery Readiness MVP`, focused on planning opt-in notification dispatch from existing alerts with strict idempotency and delivery safety boundaries.

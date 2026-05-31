@@ -943,3 +943,25 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26706342207`; job `https://github.com/Ruidooww/EDSP/actions/runs/26706342207/job/78708229140`; duration `2m4s`; artifact `transform-runtime-smoke-26706342207-1`; digest `sha256:567ba977e808842f4f6ae232f90a6956ce1180257c85ba0a295f84bdff2ebd4a`.
 - Artifact safety: PR #15 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Recommended next stage: `Matched Alert Decision Auto Generation PostgreSQL Concurrency Verification MVP`, focused on verifying or hardening PostgreSQL unique-conflict recovery inside nested transactions before enabling automatic alert generation. After that prerequisite is closed, proceed to `Matched Alert Decision Auto Generation MVP`.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Matched Alert Decision Auto Generation PostgreSQL Concurrency Verification MVP`
+- Latest feature merge commit: `5e9868c merge: matched alert decision postgres concurrency verification mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for matched alert decision postgres concurrency verification mvp`
+- Stage branch: `codex/matched-alert-decision-auto-generation-postgresql-concurrency-verification-mvp`
+- Stage result: PR #16 added an isolated PostgreSQL concurrency verification asset and applied the minimum `AlertRepository.createFromDecision(...)` hardening required by the reproduced PostgreSQL nested-transaction conflict failure.
+- Initial PostgreSQL result: the first meaningful real PostgreSQL run reproduced `transaction_aborted_after_unique_conflict`. The previous repository path caught a unique violation and immediately queried the existing alert while the current transaction remained aborted.
+- Repository hardening: `AlertRepository.createFromDecision(...)` now uses `insert ... on conflict do nothing`. An affected-row count of `1` returns `action=created`; a count of `0` resolves the existing alert for the same `alert_decision_id` and returns `action=existing`; unresolved conflicts throw a fixed safe `DataIntegrityViolationException`.
+- Integrity boundary: non-idempotent foreign-key and other integrity failures are not masked as existing alerts.
+- PostgreSQL verification asset: added `scripts/docker-compose.alert-generation-postgresql-concurrency.yml`, `scripts/verify-alert-generation-postgresql-concurrency.ps1`, and `AlertRepositoryPostgresqlConcurrencyTest`.
+- Verification isolation: the script starts only an isolated localhost-bound PostgreSQL service, uses the dedicated `edsp_alert_pg_verify` database, rejects occupied ports and reused Compose projects, writes a safe `summary.json`, and falls back to the OS temp directory if the configured artifact root is not ignored by Git.
+- Final PostgreSQL result: PASS with two concurrent workers competing for one matched `alert_decision_id`; exactly one result is `created`, one is `existing`, exactly one alert row exists, `notification_deliveries=0`, lifecycle fields remain unchanged, and both outer transactions remain usable after the race.
+- Automatic generation boundary: this stage does not enable automatic alert generation, add `MatchedAlertDecisionAutoPipelineService`, modify sync once or scheduled sync, trigger notifications, write `notification_deliveries`, or change alert lifecycle behavior.
+- Unchanged components: no migration, frontend, main `docker-compose.yml`, GitHub workflow, required check, Testcontainers dependency, retry, queue, outbox, backfill, or `AGENTS.md` change was added.
+- Verification: local PostgreSQL Compose verification passed; unignored artifact-root fallback verification passed; full `mvn -pl edsp-core -am test` passed with 180 tests, 0 failures, and 1 expected opt-in PostgreSQL test skip; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; `git diff --check` passed.
+- PR #16 status: EDSP CI success; Transform Runtime Smoke success.
+- EDSP CI run: `https://github.com/Ruidooww/EDSP/actions/runs/26709973606`.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26709973607`; job `https://github.com/Ruidooww/EDSP/actions/runs/26709973607/job/78718257848`; duration `2m0s`; artifact `transform-runtime-smoke-26709973607-1`; digest `sha256:adb2b213dd2dc188196d9058b6ad2e246aef209d97482a081e87e6495087de0f`.
+- Artifact safety: PR #16 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Selected next stage: `EDSP Security Theme MVP`, followed by `Matched Alert Decision Auto Generation MVP`.

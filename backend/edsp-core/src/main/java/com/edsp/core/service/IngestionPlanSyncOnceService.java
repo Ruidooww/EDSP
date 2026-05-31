@@ -6,6 +6,7 @@ import com.edsp.core.transform.TransformShadowReport;
 import com.edsp.core.transform.runtime.TransformRuntimeClient;
 import com.edsp.core.transform.runtime.TransformRuntimeException;
 import com.edsp.core.transform.runtime.TransformRuntimeReport;
+import com.edsp.core.service.MatchedAlertDecisionAutoPipelineService.AlertGenerationAutoSummary;
 import com.edsp.core.support.CoreRequestSupport;
 import com.edsp.core.service.RuleDecisionAutoPipelineService.RuleDecisionAutoSummary;
 import com.edsp.transform.contract.BatchTransformRequest;
@@ -54,6 +55,7 @@ public class IngestionPlanSyncOnceService {
     private final TransformRemoteShadowClient transformRemoteShadowClient;
     private final TransformRuntimeClient transformRuntimeClient;
     private final RuleDecisionAutoPipelineService ruleDecisionAutoPipelineService;
+    private final MatchedAlertDecisionAutoPipelineService matchedAlertDecisionAutoPipelineService;
 
     @Autowired
     public IngestionPlanSyncOnceService(
@@ -64,7 +66,8 @@ public class IngestionPlanSyncOnceService {
         StandardEventDedupService standardEventDedupService,
         TransformRemoteShadowClient transformRemoteShadowClient,
         TransformRuntimeClient transformRuntimeClient,
-        RuleDecisionAutoPipelineService ruleDecisionAutoPipelineService
+        RuleDecisionAutoPipelineService ruleDecisionAutoPipelineService,
+        MatchedAlertDecisionAutoPipelineService matchedAlertDecisionAutoPipelineService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
@@ -82,6 +85,10 @@ public class IngestionPlanSyncOnceService {
             throw new IllegalStateException("RuleDecisionAutoPipelineService is required");
         }
         this.ruleDecisionAutoPipelineService = ruleDecisionAutoPipelineService;
+        if (matchedAlertDecisionAutoPipelineService == null) {
+            throw new IllegalStateException("MatchedAlertDecisionAutoPipelineService is required");
+        }
+        this.matchedAlertDecisionAutoPipelineService = matchedAlertDecisionAutoPipelineService;
     }
 
     @Transactional
@@ -214,7 +221,7 @@ public class IngestionPlanSyncOnceService {
             warnings.add("no_source_rows");
             return new SyncResult("warning", readCount, successCount, failedCount, duplicateCount, rawCount,
                  standardCount, new ArrayList<>(warnings), errorsByType, TransformShadowReport.disabled(),
-                noRowsRuntimeReport(), RuleDecisionAutoSummary.skipped());
+                noRowsRuntimeReport(), RuleDecisionAutoSummary.skipped(), AlertGenerationAutoSummary.skipped());
         }
         var transformRequest = transformRequest(rows, mappingPlan, transformOptions);
         var transformBatch = transformRuntimeClient.transform(transformRequest);
@@ -261,13 +268,23 @@ public class IngestionPlanSyncOnceService {
                 errorsByType.put(type, errorsByType.getOrDefault(type, 0) + count)
             );
         }
-        var status = failedCount > 0 || !warnings.isEmpty() || "warning".equals(ruleDecisionAuto.status())
+        var alertGenerationAuto = matchedAlertDecisionAutoPipelineService.generateForNewStandardEvents(newStandardEventIds);
+        if (alertGenerationAuto.failedDecisionCount() > 0) {
+            warnings.add("alert_generation_auto_failed");
+            alertGenerationAuto.errorsByType().forEach((type, count) ->
+                errorsByType.put(type, errorsByType.getOrDefault(type, 0) + count)
+            );
+        }
+        var status = failedCount > 0
+            || !warnings.isEmpty()
+            || "warning".equals(ruleDecisionAuto.status())
+            || "warning".equals(alertGenerationAuto.status())
             ? "warning"
             : "passed";
         var transformShadow = transformShadow(transformRequest, transformResults);
         return new SyncResult(status, readCount, successCount, failedCount, duplicateCount, rawCount,
             standardCount, new ArrayList<>(warnings), errorsByType, transformShadow, transformBatch.report(),
-            ruleDecisionAuto);
+            ruleDecisionAuto, alertGenerationAuto);
     }
 
     private TransformRuntimeReport noRowsRuntimeReport() {
@@ -743,8 +760,8 @@ public class IngestionPlanSyncOnceService {
         report.put(
             "boundary",
             "scheduled".equals(triggerType)
-                ? "Scheduled Sync writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications"
-                : "Sync Once writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications"
+                ? "Scheduled Sync writes raw_events and standard_events, then evaluates rules and auto-generates alerts for matched new standard_events only; no notifications"
+                : "Sync Once writes raw_events and standard_events, then evaluates rules and auto-generates alerts for matched new standard_events only; no notifications"
         );
         report.put("planId", planId);
         report.put("activationId", activationId);
@@ -768,6 +785,7 @@ public class IngestionPlanSyncOnceService {
             report.put("transformRuntime", result.transformRuntimeReport().toReportMap());
         }
         report.put("ruleDecisionAuto", result.ruleDecisionAutoSummary().toReportMap());
+        report.put("alertGenerationAuto", result.alertGenerationAutoSummary().toReportMap());
         return report;
     }
 
@@ -955,7 +973,8 @@ public class IngestionPlanSyncOnceService {
         Map<String, Integer> errorsByType,
         TransformShadowReport transformShadowReport,
         TransformRuntimeReport transformRuntimeReport,
-        RuleDecisionAutoSummary ruleDecisionAutoSummary
+        RuleDecisionAutoSummary ruleDecisionAutoSummary,
+        AlertGenerationAutoSummary alertGenerationAutoSummary
     ) {
         private static SyncResult empty(String status) {
             return empty(status, TransformRuntimeReport.disabled());
@@ -974,7 +993,8 @@ public class IngestionPlanSyncOnceService {
                 Map.of(),
                 TransformShadowReport.disabled(),
                 transformRuntimeReport,
-                RuleDecisionAutoSummary.skipped()
+                RuleDecisionAutoSummary.skipped(),
+                AlertGenerationAutoSummary.skipped()
             );
         }
     }

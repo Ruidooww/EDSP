@@ -71,6 +71,7 @@ class AlertGenerationServiceTest {
         assertEquals("existing", second.get("action"));
         assertEquals(1L, count("alerts"));
         assertEquals(0L, count("notification_deliveries"));
+        assertEquals(0L, count("alert_lifecycle_events"));
         assertEquals(decisionId, longCell("select alert_decision_id from alerts"));
         assertEquals(eventId, longCell("select standard_event_id from alerts"));
         assertEquals(ruleId, longCell("select rule_id from alerts"));

@@ -141,14 +141,14 @@ class IngestionPlanSyncOnceServiceTest {
             result.get("id")
         ));
         assertEquals("sync_once", report.get("mode"));
-        assertEquals("Sync Once writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications", report.get("boundary"));
+        assertEquals("Sync Once writes raw_events and standard_events, then evaluates rules and auto-generates alerts for matched new standard_events only; no notifications", report.get("boundary"));
         assertFalse(report.containsKey("transformShadow"));
         assertFalse(report.containsKey("transformRuntime"));
         assertEquals(0, remoteShadowClient.calls);
     }
 
     @Test
-    void syncOnceAutoEvaluatesRulesForNewStandardEventsWithoutCreatingAlertsOrNotifications() {
+    void syncOnceAutoGeneratesAlertsForMatchedDecisionsOnlyWithoutNotifications() {
         var dataSourceId = insertDataSource();
         var scanRunId = insertCompleteScan(dataSourceId);
         var tableId = insertTable(dataSourceId, scanRunId);
@@ -167,8 +167,9 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(2L, count("alert_decisions"));
         assertEquals(1L, countWhere("alert_decisions", "decision = 'matched'"));
         assertEquals(1L, countWhere("alert_decisions", "decision = 'not_matched'"));
-        assertEquals(0L, count("alerts"));
+        assertEquals(1L, count("alerts"));
         assertEquals(0L, count("notification_deliveries"));
+        assertEquals(0L, count("alert_lifecycle_events"));
         var ruleDecisionAuto = objectValue(syncReport(result).get("ruleDecisionAuto"));
         assertEquals("new_standard_events_only", ruleDecisionAuto.get("mode"));
         assertEquals("passed", ruleDecisionAuto.get("status"));
@@ -178,6 +179,13 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(1, intValue(ruleDecisionAuto.get("notMatchedCount")));
         assertEquals(0, intValue(ruleDecisionAuto.get("errorCount")));
         assertEquals(0, intValue(ruleDecisionAuto.get("failedStandardCount")));
+        var alertGenerationAuto = objectValue(syncReport(result).get("alertGenerationAuto"));
+        assertEquals("new_standard_event_matched_decisions_only", alertGenerationAuto.get("mode"));
+        assertEquals("passed", alertGenerationAuto.get("status"));
+        assertEquals(1, intValue(alertGenerationAuto.get("candidateDecisionCount")));
+        assertEquals(1, intValue(alertGenerationAuto.get("createdAlertCount")));
+        assertEquals(0, intValue(alertGenerationAuto.get("existingAlertCount")));
+        assertEquals(0, intValue(alertGenerationAuto.get("failedDecisionCount")));
     }
 
     @Test
@@ -238,6 +246,58 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals("warning", ruleDecisionAuto.get("status"));
         assertEquals(2, intValue(ruleDecisionAuto.get("failedStandardCount")));
         assertEquals("Rule decision auto evaluation failed", ruleDecisionAuto.get("errorMessage"));
+        assertFalse(String.valueOf(report).contains("sensitive persistence details"));
+    }
+
+    @Test
+    void syncOnceKeepsEventsAndDecisionsWhenAutoAlertGenerationFails() {
+        var failingAlertAutoPipeline = new MatchedAlertDecisionAutoPipelineService(
+            null,
+            new DataSourceTransactionManager(),
+            new AlertGenerationService(null, null, null, null)
+        ) {
+            @Override
+            public AlertGenerationAutoSummary generateForNewStandardEvents(List<Long> standardEventIds) {
+                return new AlertGenerationAutoSummary(
+                    "new_standard_event_matched_decisions_only",
+                    "warning",
+                    1,
+                    0,
+                    0,
+                    1,
+                    Map.of("alert_generation_auto_failed", 1),
+                    "Automatic alert generation failed"
+                );
+            }
+        };
+        service = newService(remoteShadowClient, runtimeClient, null, failingAlertAutoPipeline);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        insertRule("Auto risk decision", "*", "high", """
+            {"version":1,"mode":"structured_config","timeWindow":"all_day","threshold":{"metric":"riskScore","operator":">=","value":60}}
+            """, true);
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(2L, count("raw_events"));
+        assertEquals(2L, count("standard_events"));
+        assertEquals(2L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+        assertEquals(0L, count("notification_deliveries"));
+        var report = syncReport(result);
+        assertTrue(stringList(report.get("warnings")).contains("alert_generation_auto_failed"));
+        assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("alert_generation_auto_failed")));
+        var alertGenerationAuto = objectValue(report.get("alertGenerationAuto"));
+        assertEquals("warning", alertGenerationAuto.get("status"));
+        assertEquals(1, intValue(alertGenerationAuto.get("candidateDecisionCount")));
+        assertEquals(1, intValue(alertGenerationAuto.get("failedDecisionCount")));
+        assertEquals("Automatic alert generation failed", alertGenerationAuto.get("errorMessage"));
         assertFalse(String.valueOf(report).contains("sensitive persistence details"));
     }
 
@@ -715,6 +775,7 @@ class IngestionPlanSyncOnceServiceTest {
         assertTrue(stringList(report.get("warnings")).contains("no_source_rows"));
         assertTrue(objectValue(report.get("errorsByType")).isEmpty());
         assertEquals("skipped", objectValue(report.get("ruleDecisionAuto")).get("status"));
+        assertEquals("skipped", objectValue(report.get("alertGenerationAuto")).get("status"));
         assertFalse(report.containsKey("transformShadow"));
         var transformRuntime = objectValue(report.get("transformRuntime"));
         assertEquals("remote", transformRuntime.get("mode"));
@@ -766,6 +827,7 @@ class IngestionPlanSyncOnceServiceTest {
         assertTrue(stringList(report.get("warnings")).contains("no_source_rows"));
         assertTrue(objectValue(report.get("errorsByType")).isEmpty());
         assertEquals("skipped", objectValue(report.get("ruleDecisionAuto")).get("status"));
+        assertEquals("skipped", objectValue(report.get("alertGenerationAuto")).get("status"));
         assertFalse(report.containsKey("transformShadow"));
         var transformRuntime = objectValue(report.get("transformRuntime"));
         assertEquals("fallback", transformRuntime.get("mode"));
@@ -934,7 +996,8 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(2L, count("standard_events"));
         assertEquals(2L, count("alert_decisions"));
         assertEquals("skipped", objectValue(syncReport(second).get("ruleDecisionAuto")).get("status"));
-        assertEquals(0L, count("alerts"));
+        assertEquals("skipped", objectValue(syncReport(second).get("alertGenerationAuto")).get("status"));
+        assertEquals(1L, count("alerts"));
     }
 
     @Test
@@ -1212,7 +1275,8 @@ class IngestionPlanSyncOnceServiceTest {
         assertTrue(stringList(objectValue(listed.get(0).get("report")).get("warnings")).contains("partial_row_failure"));
         assertEquals(1L, count("alert_decisions"));
         assertEquals(1, intValue(objectValue(report.get("ruleDecisionAuto")).get("evaluatedStandardCount")));
-        assertEquals(0L, count("alerts"));
+        assertEquals(1, intValue(objectValue(report.get("alertGenerationAuto")).get("createdAlertCount")));
+        assertEquals(1L, count("alerts"));
     }
 
     @Test
@@ -1395,7 +1459,7 @@ class IngestionPlanSyncOnceServiceTest {
         ));
         assertEquals("scheduled_sync", report.get("mode"));
         assertEquals("scheduled", report.get("triggerType"));
-        assertEquals("Scheduled Sync writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications", report.get("boundary"));
+        assertEquals("Scheduled Sync writes raw_events and standard_events, then evaluates rules and auto-generates alerts for matched new standard_events only; no notifications", report.get("boundary"));
         assertEquals(scheduleId, number(report.get("scheduleId")));
         var manualRawPayload = objectValue(jdbcTemplate.queryForObject(
             "select payload_json from raw_events where run_id = ? order by id limit 1",
@@ -1414,7 +1478,7 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     @Test
-    void dueScheduleAutoEvaluatesRulesForNewStandardEvents() {
+    void dueScheduleAutoGeneratesAlertsForMatchedDecisionsOnly() {
         var dataSourceId = insertDataSource();
         var scanRunId = insertCompleteScan(dataSourceId);
         var tableId = insertTable(dataSourceId, scanRunId);
@@ -1440,12 +1504,19 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(2L, count("alert_decisions"));
         assertEquals(1L, countWhere("alert_decisions", "decision = 'matched'"));
         assertEquals(1L, countWhere("alert_decisions", "decision = 'not_matched'"));
-        assertEquals(0L, count("alerts"));
+        assertEquals(1L, count("alerts"));
         assertEquals(0L, count("notification_deliveries"));
+        assertEquals(0L, count("alert_lifecycle_events"));
         var ruleDecisionAuto = objectValue(syncReport(runs.get(0)).get("ruleDecisionAuto"));
         assertEquals("passed", ruleDecisionAuto.get("status"));
         assertEquals(2, intValue(ruleDecisionAuto.get("evaluatedStandardCount")));
         assertEquals(2, intValue(ruleDecisionAuto.get("decisionCount")));
+        var alertGenerationAuto = objectValue(syncReport(runs.get(0)).get("alertGenerationAuto"));
+        assertEquals("passed", alertGenerationAuto.get("status"));
+        assertEquals(1, intValue(alertGenerationAuto.get("candidateDecisionCount")));
+        assertEquals(1, intValue(alertGenerationAuto.get("createdAlertCount")));
+        assertEquals(0, intValue(alertGenerationAuto.get("existingAlertCount")));
+        assertEquals(0, intValue(alertGenerationAuto.get("failedDecisionCount")));
     }
 
     @Test
@@ -1989,6 +2060,15 @@ class IngestionPlanSyncOnceServiceTest {
         TransformRuntimeClient runtimeClient,
         RuleDecisionAutoPipelineService autoPipeline
     ) {
+        return newService(shadowClient, runtimeClient, autoPipeline, null);
+    }
+
+    private IngestionPlanSyncOnceService newService(
+        TransformRemoteShadowClient shadowClient,
+        TransformRuntimeClient runtimeClient,
+        RuleDecisionAutoPipelineService autoPipeline,
+        MatchedAlertDecisionAutoPipelineService matchedAlertAutoPipeline
+    ) {
         var support = new CoreRequestSupport(objectMapper);
         var pipeline = autoPipeline;
         if (pipeline == null) {
@@ -2000,6 +2080,16 @@ class IngestionPlanSyncOnceServiceTest {
                 runner
             );
         }
+        var matchedPipeline = matchedAlertAutoPipeline;
+        if (matchedPipeline == null) {
+            var alertRepository = new AlertRepository(jdbcTemplate, objectMapper, support);
+            var alertGenerationService = new AlertGenerationService(jdbcTemplate, objectMapper, support, alertRepository);
+            matchedPipeline = new MatchedAlertDecisionAutoPipelineService(
+                jdbcTemplate,
+                new DataSourceTransactionManager(jdbcTemplate.getDataSource()),
+                alertGenerationService
+            );
+        }
         return new IngestionPlanSyncOnceService(
             jdbcTemplate,
             objectMapper,
@@ -2008,7 +2098,8 @@ class IngestionPlanSyncOnceServiceTest {
             new StandardEventDedupService(jdbcTemplate, support),
             shadowClient,
             runtimeClient == null ? new LocalTransformRuntimeClient(new StandardEventTransformService()) : runtimeClient,
-            pipeline
+            pipeline,
+            matchedPipeline
         );
     }
 

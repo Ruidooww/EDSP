@@ -1,16 +1,16 @@
 # 数据安全预警分析平台 Handoff
 
-更新时间：2026-05-30
+更新时间：2026-05-31
 项目路径：`C:\Users\Ruidoww\Desktop\预警分析平台推送对接`
 
 ## 当前阶段状态
 
 - 当前稳定分支：`master`
-- 当前阶段：`Transform Rule UI / Mapping Rule Configuration MVP`
-- 最新 feature merge commit：`b894cfe merge: transform rule ui mapping rule configuration mvp`
-- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for transform rule ui mapping rule configuration mvp`
-- 本轮阶段分支：`codex/transform-rule-ui-mapping-rule-configuration-mvp`
-- 本轮结果：新增 `PUT /api/core/ingestion-plans/{id}/mapping-rules`，用于保存 mapping rule 到 `ingestion_plans.plan_json.fieldMappingDetails`；前端在现有 AntD ingestion plan mapping 面板中新增 rule 配置 drawer，可配置 `trim` / `lower` / `upper` / `defaultIfBlank` / `valueMap`；`fieldMappings` 仍是唯一 authoritative mapping source，`fieldMappingDetails` 只承载 detail metadata；active activation 下禁止直接修改 mapping rule 并返回 `409 plan_already_activated`；authoritative edge mismatch 返回 `400 mapping_edge_mismatch`；valueMap UI/API 保存时校验 `type`、`values`、`onMissing`、`defaultValue` 和当前 size guard；本轮未修改 transform runtime / processor 执行语义，未新增 chaining / nested rules / ordered rule list，未新增 script / expression / SQL / HTTP / filesystem 能力；未引入 Arco，继续使用现有 `antd`；未修改 migration / workflow / scripts / docker-compose / `AGENTS.md`；PR #11 EDSP CI 与 `Transform Runtime Smoke` 均 success，runtime smoke artifact `transform-runtime-smoke-26681102530-1` 仅包含 `summary.json`，无 DB dump、完整 raw row、source config、完整 env 或 secret-like 内容；下一阶段建议 `Transform Rule UI Runtime Verification / Configuration Hardening MVP` 或 `Transform Rule Chaining Readiness MVP`。
+- 当前阶段：`Standard Event Rule Decision Auto Pipeline MVP`
+- 最新 feature merge commit：`47231fb merge: standard event rule decision auto pipeline mvp`
+- 最新 HANDOFF docs commit：本次提交 `docs: update handoff for standard event rule decision auto pipeline mvp`
+- 本轮阶段分支：`codex/standard-event-rule-decision-auto-pipeline-mvp`
+- 本轮结果：plan manual sync once 与 scheduled sync 在新插入 `standard_events` 后自动调用现有 `RuleDecisionRunner`，打通 `raw_events -> standard_events -> alert_decisions`；duplicate 与 `standardize_failed` 不进入自动评估；每个新增 standard event 使用 nested transaction / JDBC savepoint 隔离 decision persistence 基础设施异常，失败只使 sync 降级为 warning，不回滚 `raw_events` / `standard_events`；`report_json` additive 增加安全 `ruleDecisionAuto` summary；schema 页面同步摘要与边界文案已更新；本轮不创建 `alerts`，不触发 notifications，不写 `notification_deliveries`；用户批准最小 scope 扩展，仅修改 `IngestionPlanSyncScheduleService.java` 的 scheduled sync 持久化说明文案并补充最小断言；未修改 activation gate / ShadowRun / Precheck / transform runtime / migration / workflow / scripts / docker-compose / `AGENTS.md`；PR #14 EDSP CI 与 `Transform Runtime Smoke` 均 success，runtime smoke artifact `transform-runtime-smoke-26702449729-1` 仅包含 `summary.json`，无 DB dump、完整 raw row、source config、完整 env 或 secret-like 内容；下一阶段建议 `Matched Alert Decision Auto Generation Readiness MVP`。
 
 ## 已完成能力
 
@@ -898,3 +898,26 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26687528201`; job `https://github.com/Ruidooww/EDSP/actions/runs/26687528201/job/78658190769`; duration `2m7s`; artifact `transform-runtime-smoke-26687528201-1`.
 - Artifact safety: PR #13 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Recommended next stage: `Standard Event Rule Decision Auto Pipeline MVP`, focused on creating alert decisions from standardized events while keeping notification behavior disabled and preserving the existing raw_events -> standard_events -> alert_decisions boundary.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `Standard Event Rule Decision Auto Pipeline MVP`
+- Latest feature merge commit: `47231fb merge: standard event rule decision auto pipeline mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for standard event rule decision auto pipeline mvp`
+- Stage branch: `codex/standard-event-rule-decision-auto-pipeline-mvp`
+- Stage result: PR #14 connects plan manual sync once and scheduled sync to the existing `RuleDecisionRunner` after inserting new `standard_events`, completing the `raw_events -> standard_events -> alert_decisions` pipeline.
+- New service: added `RuleDecisionAutoPipelineService`. It evaluates each newly inserted standard event in a separate `PROPAGATION_NESTED` transaction / JDBC savepoint and returns a safe aggregate summary.
+- New-standard-events-only boundary: only IDs returned from newly inserted `standard_events` are evaluated. Duplicate rows link to the existing standard event without re-evaluation. `standardize_failed` rows and no-source-row runs do not enter automatic evaluation.
+- Transaction boundary: `raw_events` and `standard_events` remain the sync primary result. Automatic decision persistence is an inline warning enhancement. A decision infrastructure exception rolls back to its savepoint, increments `failedStandardCount`, and downgrades the sync run to warning without rolling back event writes.
+- Decision error boundary: evaluator results with `decision=error` are preserved in `alert_decisions`, increment `errorCount`, and downgrade the sync run to warning without rolling back event writes.
+- Report boundary: sync `report_json` now includes additive `ruleDecisionAuto` fields: `mode`, `status`, `evaluatedStandardCount`, `decisionCount`, `matchedCount`, `notMatchedCount`, `skippedCount`, `errorCount`, `failedStandardCount`, optional `errorsByType`, and optional fixed safe `errorMessage`.
+- Alert / notification boundary: this stage does not call `AlertGenerationService` or `NotificationService`, does not create `alerts`, and does not write `notification_deliveries`.
+- Frontend: the existing AntD schema ingestion-plan panel now explains that formal sync writes `raw_events` / `standard_events`, creates `alert_decisions` for new standard events, does not create `alerts`, and does not trigger notifications. Recent sync results display the safe `ruleDecisionAuto` summary.
+- Approved scope extension: after review found stale scheduled sync persisted wording, the user explicitly approved adding `backend/edsp-core/src/main/java/com/edsp/core/service/IngestionPlanSyncScheduleService.java` to this stage only to update `config_json.boundary` and add the matching minimal persistence assertion. Scheduled sync behavior was not changed.
+- Unchanged components: no activation gate, ShadowRun, Precheck, transform runtime, transform rules, valueMap, chaining, migration, workflow, scripts, docker-compose, `AGENTS.md`, required check, queue, outbox, retry job, or backfill behavior changed.
+- Verification: targeted `RuleDecisionRunnerTest,RuleDecisionAutoPipelineServiceTest,IngestionPlanSyncOnceServiceTest` passed with 57 tests; full `mvn -pl edsp-core -am test` passed with 178 `edsp-core` tests; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; `git diff --check` passed with only LF/CRLF warnings; browser verification on `http://127.0.0.1:18080/` confirmed the schema page boundary copy renders on desktop.
+- PR #14 status: EDSP CI success; Transform Runtime Smoke success.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26702449729`; job `https://github.com/Ruidooww/EDSP/actions/runs/26702449729/job/78697706639`; duration `1m57s`; artifact `transform-runtime-smoke-26702449729-1`; digest `sha256:762211788196b0a778fb224827250cc6bb043e0c7411f499fda246aa64c3c0b8`.
+- Artifact safety: PR #14 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Known UI follow-up: the existing schema page still has horizontal overflow at a `390px` browser viewport. This predates the new summary block and was not mixed into this stage.
+- Recommended next stage: `Matched Alert Decision Auto Generation Readiness MVP`, focused on defining the minimal boundary for creating `alerts` from matched `alert_decisions` while notifications remain disabled.

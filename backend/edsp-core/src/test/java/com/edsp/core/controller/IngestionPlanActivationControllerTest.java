@@ -7,10 +7,12 @@ import com.edsp.core.dto.IngestionPlanActivationRequest;
 import com.edsp.core.dto.IngestionPlanMappingRuleUpdateRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
+import com.edsp.core.service.AlertGenerationService;
 import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanService;
 import com.edsp.core.service.IngestionPlanSyncOnceService;
 import com.edsp.core.service.IngestionPlanSyncScheduleService;
+import com.edsp.core.service.MatchedAlertDecisionAutoPipelineService;
 import com.edsp.core.service.RuleDecisionAutoPipelineService;
 import com.edsp.core.transform.runtime.TransformBatchResult;
 import com.edsp.core.transform.runtime.TransformRuntimeClient;
@@ -131,7 +133,12 @@ class IngestionPlanActivationControllerTest {
         StubSyncOnceService() {
             super(
                 null, null, null, null, null, null, new NoopTransformRuntimeClient(),
-                new RuleDecisionAutoPipelineService(new DataSourceTransactionManager(), null)
+                new RuleDecisionAutoPipelineService(new DataSourceTransactionManager(), null),
+                new MatchedAlertDecisionAutoPipelineService(
+                    null,
+                    new DataSourceTransactionManager(),
+                    new AlertGenerationService(null, null, null, null)
+                )
             );
         }
 

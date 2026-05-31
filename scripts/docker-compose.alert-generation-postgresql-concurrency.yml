@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-edsp_alert_pg_verify}
+      POSTGRES_USER: ${POSTGRES_USER:-edsp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edsp-alert-pg-verify-password}
+    ports:
+      - "127.0.0.1:${EDSP_ALERT_PG_VERIFY_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edsp} -d ${POSTGRES_DB:-edsp_alert_pg_verify}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

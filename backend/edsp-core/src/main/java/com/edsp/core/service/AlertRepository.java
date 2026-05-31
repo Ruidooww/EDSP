@@ -37,38 +37,38 @@ public class AlertRepository {
             return existing;
         }
 
-        try {
-            var keyHolder = new GeneratedKeyHolder();
-            jdbcTemplate.update(connection -> {
-                var statement = connection.prepareStatement("""
-                    insert into alerts(
-                        title, severity, status, rule_id, subject_type, subject_ref, detail_json,
-                        source_system, external_id, alert_type, occurred_at, actor, asset_ref, policy_name,
-                        standard_event_id, alert_decision_id
-                    )
-                    values (?, ?, 'open', ?, ?, ?, cast(? as jsonb), ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, new String[] {"id"});
-                statement.setString(1, candidate.title());
-                statement.setString(2, candidate.severity());
-                statement.setObject(3, candidate.ruleId());
-                statement.setString(4, candidate.subjectType());
-                statement.setString(5, candidate.subjectRef());
-                statement.setString(6, toJson(candidate.detail()));
-                statement.setString(7, candidate.sourceSystem());
-                statement.setString(8, candidate.externalId());
-                statement.setString(9, candidate.alertType());
-                statement.setTimestamp(10, candidate.occurredAt());
-                statement.setString(11, candidate.actor());
-                statement.setString(12, candidate.assetRef());
-                statement.setString(13, candidate.policyName());
-                statement.setLong(14, candidate.standardEventId());
-                statement.setLong(15, candidate.decisionId());
-                return statement;
-            }, keyHolder);
-        } catch (DataIntegrityViolationException ex) {
+        var keyHolder = new GeneratedKeyHolder();
+        var inserted = jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement("""
+                insert into alerts(
+                    title, severity, status, rule_id, subject_type, subject_ref, detail_json,
+                    source_system, external_id, alert_type, occurred_at, actor, asset_ref, policy_name,
+                    standard_event_id, alert_decision_id
+                )
+                values (?, ?, 'open', ?, ?, ?, cast(? as jsonb), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict do nothing
+                """, new String[] {"id"});
+            statement.setString(1, candidate.title());
+            statement.setString(2, candidate.severity());
+            statement.setObject(3, candidate.ruleId());
+            statement.setString(4, candidate.subjectType());
+            statement.setString(5, candidate.subjectRef());
+            statement.setString(6, toJson(candidate.detail()));
+            statement.setString(7, candidate.sourceSystem());
+            statement.setString(8, candidate.externalId());
+            statement.setString(9, candidate.alertType());
+            statement.setTimestamp(10, candidate.occurredAt());
+            statement.setString(11, candidate.actor());
+            statement.setString(12, candidate.assetRef());
+            statement.setString(13, candidate.policyName());
+            statement.setLong(14, candidate.standardEventId());
+            statement.setLong(15, candidate.decisionId());
+            return statement;
+        }, keyHolder);
+        if (inserted == 0) {
             var raced = findByDecisionId(candidate.decisionId());
             if (raced == null) {
-                throw ex;
+                throw new DataIntegrityViolationException("Alert insert conflict did not resolve to an existing decision alert");
             }
             raced.put("action", "existing");
             return raced;

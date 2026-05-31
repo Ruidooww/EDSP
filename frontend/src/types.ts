@@ -874,6 +874,20 @@ export interface IngestionPlanActivationRow {
   updated_at?: string | number;
 }
 
+export interface RuleDecisionAutoSummary {
+  mode?: 'new_standard_events_only' | string;
+  status?: 'passed' | 'warning' | 'skipped' | string;
+  evaluatedStandardCount?: number;
+  decisionCount?: number;
+  matchedCount?: number;
+  notMatchedCount?: number;
+  skippedCount?: number;
+  errorCount?: number;
+  failedStandardCount?: number;
+  errorsByType?: Record<string, number>;
+  errorMessage?: string;
+}
+
 export interface IngestionPlanSyncRunReport {
   mode?: string;
   boundary?: string;
@@ -894,6 +908,7 @@ export interface IngestionPlanSyncRunReport {
   errorsByType?: Record<string, number>;
   blockers?: string[];
   errorMessage?: string;
+  ruleDecisionAuto?: RuleDecisionAutoSummary;
 }
 
 export interface IngestionPlanSyncRunRow {

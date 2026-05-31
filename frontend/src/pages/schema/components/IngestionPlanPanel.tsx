@@ -8,6 +8,7 @@ import type {
   IngestionPlanShadowRunRow,
   IngestionPlanSyncRunRow,
   IngestionPlanSyncScheduleRow,
+  RuleDecisionAutoSummary,
 } from '../../../types';
 import {
   formatConfidence,
@@ -103,28 +104,58 @@ function valueMapCount(mapping: NormalizedPlanMapping) {
     : 0;
 }
 
+function ruleDecisionAutoSummary(summary?: RuleDecisionAutoSummary) {
+  if (!summary) {
+    return null;
+  }
+  return (
+    <>
+      {summary.status === 'warning' && (
+        <Alert
+          showIcon
+          type="warning"
+          message="规则决策自动评估存在异常，请查看同步报告。"
+        />
+      )}
+      <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title="规则决策自动评估">
+        <Descriptions.Item label="状态">{syncRunStatusTag(summary.status)}</Descriptions.Item>
+        <Descriptions.Item label="新增 standard_events">{summary.evaluatedStandardCount ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="alert_decisions">{summary.decisionCount ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="matched">{summary.matchedCount ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="not_matched">{summary.notMatchedCount ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="skipped">{summary.skippedCount ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="error">{summary.errorCount ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="评估失败事件">{summary.failedStandardCount ?? 0}</Descriptions.Item>
+      </Descriptions>
+    </>
+  );
+}
+
 function syncRunSummary(run: IngestionPlanSyncRunRow | null, formatTime: (value?: string | number) => string) {
   if (!run) {
     return null;
   }
   const warnings = getSyncRunWarnings(run);
   return (
-    <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title={getSyncRunTriggerType(run) === 'scheduled' ? '最近定时同步结果' : '最近同步结果'}>
-      <Descriptions.Item label="状态">{syncRunStatusTag(getSyncRunStatus(run))}</Descriptions.Item>
-      <Descriptions.Item label="触发">{getSyncRunTriggerType(run) || 'manual'}</Descriptions.Item>
-      <Descriptions.Item label="完成时间">{formatTime(getSyncRunTime(run))}</Descriptions.Item>
-      <Descriptions.Item label="读取">{getSyncRunMetric(run, 'readCount', 'read_count')}</Descriptions.Item>
-      <Descriptions.Item label="成功">{getSyncRunMetric(run, 'successCount', 'success_count')}</Descriptions.Item>
-      <Descriptions.Item label="失败">{getSyncRunMetric(run, 'failedCount', 'failed_count')}</Descriptions.Item>
-      <Descriptions.Item label="重复">{getSyncRunMetric(run, 'duplicateCount', 'duplicate_count')}</Descriptions.Item>
-      <Descriptions.Item label="warning">{warnings.length}</Descriptions.Item>
-      <Descriptions.Item label="raw_events">{getSyncRunMetric(run, 'rawCount', 'raw_count')}</Descriptions.Item>
-      <Descriptions.Item label="standard_events">{getSyncRunMetric(run, 'standardCount', 'standard_count')}</Descriptions.Item>
-      <Descriptions.Item label="warnings" span={2}>
-        {warnings.length ? renderTextTags(warnings) : '-'}
-      </Descriptions.Item>
-      <Descriptions.Item label="错误信息" span={2}>{getSyncRunErrorMessage(run) || '-'}</Descriptions.Item>
-    </Descriptions>
+    <>
+      <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 4 }} title={getSyncRunTriggerType(run) === 'scheduled' ? '最近定时同步结果' : '最近同步结果'}>
+        <Descriptions.Item label="状态">{syncRunStatusTag(getSyncRunStatus(run))}</Descriptions.Item>
+        <Descriptions.Item label="触发">{getSyncRunTriggerType(run) || 'manual'}</Descriptions.Item>
+        <Descriptions.Item label="完成时间">{formatTime(getSyncRunTime(run))}</Descriptions.Item>
+        <Descriptions.Item label="读取">{getSyncRunMetric(run, 'readCount', 'read_count')}</Descriptions.Item>
+        <Descriptions.Item label="成功">{getSyncRunMetric(run, 'successCount', 'success_count')}</Descriptions.Item>
+        <Descriptions.Item label="失败">{getSyncRunMetric(run, 'failedCount', 'failed_count')}</Descriptions.Item>
+        <Descriptions.Item label="重复">{getSyncRunMetric(run, 'duplicateCount', 'duplicate_count')}</Descriptions.Item>
+        <Descriptions.Item label="warning">{warnings.length}</Descriptions.Item>
+        <Descriptions.Item label="raw_events">{getSyncRunMetric(run, 'rawCount', 'raw_count')}</Descriptions.Item>
+        <Descriptions.Item label="standard_events">{getSyncRunMetric(run, 'standardCount', 'standard_count')}</Descriptions.Item>
+        <Descriptions.Item label="warnings" span={2}>
+          {warnings.length ? renderTextTags(warnings) : '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="错误信息" span={2}>{getSyncRunErrorMessage(run) || '-'}</Descriptions.Item>
+      </Descriptions>
+      {ruleDecisionAutoSummary(run.report?.ruleDecisionAuto)}
+    </>
   );
 }
 
@@ -251,7 +282,7 @@ export default function IngestionPlanPanel({
           showIcon
           type="info"
           message="同步边界"
-          description="手动同步和定时同步会写入 raw_events / standard_events；不会写入 alert_decisions / alerts，也不会触发通知。"
+          description="手动同步和定时同步会写入 raw_events / standard_events，并为新增 standard_events 自动生成 alert_decisions；不会创建 alerts，也不会触发 notifications。"
         />
       )}
 

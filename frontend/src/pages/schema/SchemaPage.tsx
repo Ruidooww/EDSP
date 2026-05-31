@@ -654,7 +654,7 @@ export default function SchemaPage() {
       content: (
         <div>
           <p>将通过 active activation #{activation.id} 执行一次正式同步。</p>
-          <p>本操作会写入 raw_events / standard_events，但不会生成 alert_decisions / alerts，也不会触发通知。</p>
+          <p>本操作会写入 raw_events / standard_events，并为新增 standard_events 自动生成 alert_decisions；不会创建 alerts，也不会触发 notifications。</p>
         </div>
       ),
       okText: '执行同步',
@@ -674,11 +674,11 @@ export default function SchemaPage() {
             ].slice(0, 5),
           }));
           if (run.status === 'warning') {
-            message.warning('手动同步已完成，存在行级异常，请查看同步结果');
+            message.warning('手动同步已完成，存在异常，请查看同步结果');
           } else if (run.status === 'blocked' || run.status === 'failed') {
             message.error('手动同步未通过，请查看同步结果');
           } else {
-            message.success('手动同步完成，已写入 raw_events / standard_events');
+            message.success('手动同步完成，已写入 raw_events / standard_events 并评估新增事件规则');
           }
         } catch (error) {
           message.error(error instanceof Error ? error.message : '手动同步失败');
@@ -1189,7 +1189,7 @@ export default function SchemaPage() {
           type="info"
           showIcon
           message="定时同步边界"
-          description="执行后会写入 raw_events / standard_events；不会写入 alert_decisions / alerts，也不会触发通知。"
+          description="执行后会写入 raw_events / standard_events，并为新增 standard_events 自动生成 alert_decisions；不会创建 alerts，也不会触发 notifications。"
         />
         <Form form={syncScheduleForm} layout="vertical">
           <Form.Item

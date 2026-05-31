@@ -11,6 +11,7 @@ import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.service.IngestionPlanActivationService;
 import com.edsp.core.service.IngestionPlanSyncOnceService;
 import com.edsp.core.service.IngestionPlanSyncScheduleService;
+import com.edsp.core.service.RuleDecisionAutoPipelineService;
 import com.edsp.core.transform.runtime.TransformBatchResult;
 import com.edsp.core.transform.runtime.TransformRuntimeClient;
 import com.edsp.transform.contract.BatchTransformRequest;
@@ -18,6 +19,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -83,7 +85,10 @@ class IngestionPlanSyncOnceControllerTest {
         private int limit;
 
         StubSyncOnceService() {
-            super(null, null, null, null, null, null, new NoopTransformRuntimeClient());
+            super(
+                null, null, null, null, null, null, new NoopTransformRuntimeClient(),
+                new RuleDecisionAutoPipelineService(new DataSourceTransactionManager(), null)
+            );
         }
 
         @Override

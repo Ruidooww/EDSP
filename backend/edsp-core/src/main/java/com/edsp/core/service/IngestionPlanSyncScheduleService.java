@@ -62,7 +62,7 @@ public class IngestionPlanSyncScheduleService {
         var now = OffsetDateTime.now(ZoneOffset.UTC);
         var config = new LinkedHashMap<String, Object>();
         config.put("mode", "scheduled_sync");
-        config.put("boundary", "writes raw_events and standard_events only; no alerts or notifications");
+        config.put("boundary", "writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications");
         var scheduleId = insertSchedule(
             planId,
             activationId,

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.edsp.core.dto.RuleEvaluationRunRequest;
 import com.edsp.core.dto.IngestionPlanSyncScheduleRequest;
 import com.edsp.core.dto.IngestionPlanSyncOnceRequest;
 import com.edsp.core.support.CoreRequestSupport;
@@ -43,6 +44,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -139,10 +141,104 @@ class IngestionPlanSyncOnceServiceTest {
             result.get("id")
         ));
         assertEquals("sync_once", report.get("mode"));
-        assertEquals("Sync Once writes raw_events and standard_events only; no alerts or notifications", report.get("boundary"));
+        assertEquals("Sync Once writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications", report.get("boundary"));
         assertFalse(report.containsKey("transformShadow"));
         assertFalse(report.containsKey("transformRuntime"));
         assertEquals(0, remoteShadowClient.calls);
+    }
+
+    @Test
+    void syncOnceAutoEvaluatesRulesForNewStandardEventsWithoutCreatingAlertsOrNotifications() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        insertRule("Auto risk decision", "*", "high", """
+            {"version":1,"mode":"structured_config","timeWindow":"all_day","threshold":{"metric":"riskScore","operator":">=","value":60}}
+            """, true);
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("passed", result.get("status"));
+        assertEquals(2L, count("standard_events"));
+        assertEquals(2L, count("alert_decisions"));
+        assertEquals(1L, countWhere("alert_decisions", "decision = 'matched'"));
+        assertEquals(1L, countWhere("alert_decisions", "decision = 'not_matched'"));
+        assertEquals(0L, count("alerts"));
+        assertEquals(0L, count("notification_deliveries"));
+        var ruleDecisionAuto = objectValue(syncReport(result).get("ruleDecisionAuto"));
+        assertEquals("new_standard_events_only", ruleDecisionAuto.get("mode"));
+        assertEquals("passed", ruleDecisionAuto.get("status"));
+        assertEquals(2, intValue(ruleDecisionAuto.get("evaluatedStandardCount")));
+        assertEquals(2, intValue(ruleDecisionAuto.get("decisionCount")));
+        assertEquals(1, intValue(ruleDecisionAuto.get("matchedCount")));
+        assertEquals(1, intValue(ruleDecisionAuto.get("notMatchedCount")));
+        assertEquals(0, intValue(ruleDecisionAuto.get("errorCount")));
+        assertEquals(0, intValue(ruleDecisionAuto.get("failedStandardCount")));
+    }
+
+    @Test
+    void syncOnceRecordsRuleDecisionErrorsAsWarningWithoutRollingBackEvents() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        insertRule("Broken auto decision", "*", "medium", "{bad json", true);
+
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(2L, count("raw_events"));
+        assertEquals(2L, count("standard_events"));
+        assertEquals(2L, countWhere("alert_decisions", "decision = 'error'"));
+        assertEquals(0L, count("alerts"));
+        assertEquals(0L, count("notification_deliveries"));
+        var report = syncReport(result);
+        assertTrue(stringList(report.get("warnings")).contains("rule_decision_auto_error_decision"));
+        var ruleDecisionAuto = objectValue(report.get("ruleDecisionAuto"));
+        assertEquals("warning", ruleDecisionAuto.get("status"));
+        assertEquals(2, intValue(ruleDecisionAuto.get("decisionCount")));
+        assertEquals(2, intValue(ruleDecisionAuto.get("errorCount")));
+        assertEquals(0, intValue(ruleDecisionAuto.get("failedStandardCount")));
+    }
+
+    @Test
+    void syncOnceKeepsEventsAndReportsWarningWhenAutoDecisionInfrastructureFails() {
+        var transactionManager = new DataSourceTransactionManager(jdbcTemplate.getDataSource());
+        var failingAutoPipeline = new RuleDecisionAutoPipelineService(
+            transactionManager,
+            new AlwaysFailingRuleDecisionRunner()
+        );
+        service = newService(remoteShadowClient, runtimeClient, failingAutoPipeline);
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
+
+        assertEquals("warning", result.get("status"));
+        assertEquals(2L, count("raw_events"));
+        assertEquals(2L, count("standard_events"));
+        assertEquals(0L, count("alert_decisions"));
+        assertEquals(0L, count("alerts"));
+        assertEquals(0L, count("notification_deliveries"));
+        var report = syncReport(result);
+        assertTrue(stringList(report.get("warnings")).contains("rule_decision_auto_evaluation_failed"));
+        assertEquals(2, intValue(objectValue(report.get("errorsByType")).get("rule_decision_auto_evaluation_failed")));
+        var ruleDecisionAuto = objectValue(report.get("ruleDecisionAuto"));
+        assertEquals("warning", ruleDecisionAuto.get("status"));
+        assertEquals(2, intValue(ruleDecisionAuto.get("failedStandardCount")));
+        assertEquals("Rule decision auto evaluation failed", ruleDecisionAuto.get("errorMessage"));
+        assertFalse(String.valueOf(report).contains("sensitive persistence details"));
     }
 
     @Test
@@ -618,6 +714,7 @@ class IngestionPlanSyncOnceServiceTest {
         ));
         assertTrue(stringList(report.get("warnings")).contains("no_source_rows"));
         assertTrue(objectValue(report.get("errorsByType")).isEmpty());
+        assertEquals("skipped", objectValue(report.get("ruleDecisionAuto")).get("status"));
         assertFalse(report.containsKey("transformShadow"));
         var transformRuntime = objectValue(report.get("transformRuntime"));
         assertEquals("remote", transformRuntime.get("mode"));
@@ -668,6 +765,7 @@ class IngestionPlanSyncOnceServiceTest {
         ));
         assertTrue(stringList(report.get("warnings")).contains("no_source_rows"));
         assertTrue(objectValue(report.get("errorsByType")).isEmpty());
+        assertEquals("skipped", objectValue(report.get("ruleDecisionAuto")).get("status"));
         assertFalse(report.containsKey("transformShadow"));
         var transformRuntime = objectValue(report.get("transformRuntime"));
         assertEquals("fallback", transformRuntime.get("mode"));
@@ -823,6 +921,9 @@ class IngestionPlanSyncOnceServiceTest {
         var planId = insertPlan(dataSourceId, scanRunId, tableId);
         var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
         var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        insertRule("Auto risk decision", "*", "high", """
+            {"version":1,"mode":"structured_config","timeWindow":"all_day","threshold":{"metric":"riskScore","operator":">=","value":60}}
+            """, true);
 
         service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
         var second = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
@@ -831,6 +932,8 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(2, intValue(second.get("duplicateCount")));
         assertEquals(4L, count("raw_events"));
         assertEquals(2L, count("standard_events"));
+        assertEquals(2L, count("alert_decisions"));
+        assertEquals("skipped", objectValue(syncReport(second).get("ruleDecisionAuto")).get("status"));
         assertEquals(0L, count("alerts"));
     }
 
@@ -1080,6 +1183,9 @@ class IngestionPlanSyncOnceServiceTest {
         var planId = insertPlan(dataSourceId, scanRunId, tableId);
         var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
         var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        insertRule("Auto risk decision", "*", "high", """
+            {"version":1,"mode":"structured_config","timeWindow":"all_day","threshold":{"metric":"riskScore","operator":">=","value":60}}
+            """, true);
 
         var result = service.syncOnce(activationId, new IngestionPlanSyncOnceRequest(20, "ops-user"));
 
@@ -1104,7 +1210,8 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals(1, intValue(objectValue(report.get("errorsByType")).get("invalid_time_format")));
         var listed = service.listByPlan(planId, 5);
         assertTrue(stringList(objectValue(listed.get(0).get("report")).get("warnings")).contains("partial_row_failure"));
-        assertEquals(0L, count("alert_decisions"));
+        assertEquals(1L, count("alert_decisions"));
+        assertEquals(1, intValue(objectValue(report.get("ruleDecisionAuto")).get("evaluatedStandardCount")));
         assertEquals(0L, count("alerts"));
     }
 
@@ -1207,6 +1314,14 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals("enabled", schedule.get("status"));
         assertEquals(120, intValue(schedule.get("intervalSeconds")));
         assertEquals(20, intValue(schedule.get("sampleLimit")));
+        assertEquals(
+            "writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications",
+            objectValue(jdbcTemplate.queryForObject(
+                "select config_json from ingestion_plan_sync_schedules where id = ?",
+                Object.class,
+                schedule.get("id")
+            )).get("boundary")
+        );
         assertEquals(1L, count("ingestion_plan_sync_schedules"));
 
         var duplicate = assertThrows(
@@ -1280,7 +1395,7 @@ class IngestionPlanSyncOnceServiceTest {
         ));
         assertEquals("scheduled_sync", report.get("mode"));
         assertEquals("scheduled", report.get("triggerType"));
-        assertEquals("Scheduled Sync writes raw_events and standard_events only; no alerts or notifications", report.get("boundary"));
+        assertEquals("Scheduled Sync writes raw_events and standard_events, then evaluates rules for new standard_events only; no alerts or notifications", report.get("boundary"));
         assertEquals(scheduleId, number(report.get("scheduleId")));
         var manualRawPayload = objectValue(jdbcTemplate.queryForObject(
             "select payload_json from raw_events where run_id = ? order by id limit 1",
@@ -1296,6 +1411,41 @@ class IngestionPlanSyncOnceServiceTest {
         assertEquals("scheduled_sync", scheduledRawPayload.get("mode"));
         assertEquals(0L, count("alert_decisions"));
         assertEquals(0L, count("alerts"));
+    }
+
+    @Test
+    void dueScheduleAutoEvaluatesRulesForNewStandardEvents() {
+        var dataSourceId = insertDataSource();
+        var scanRunId = insertCompleteScan(dataSourceId);
+        var tableId = insertTable(dataSourceId, scanRunId);
+        insertDefaultFields(tableId, scanRunId);
+        var planId = insertPlan(dataSourceId, scanRunId, tableId);
+        var shadowRunId = insertShadowRun(planId, dataSourceId, "passed");
+        var activationId = insertActivation(planId, dataSourceId, shadowRunId, "active");
+        insertRule("Scheduled auto risk decision", "*", "high", """
+            {"version":1,"mode":"structured_config","timeWindow":"all_day","threshold":{"metric":"riskScore","operator":">=","value":60}}
+            """, true);
+        var schedule = scheduleService.createSchedule(
+            activationId,
+            new IngestionPlanSyncScheduleRequest(60, 20, "ops-user")
+        );
+        var scheduleId = number(schedule.get("id"));
+        jdbcTemplate.update("update ingestion_plan_sync_schedules set next_run_at = now() where id = ?", scheduleId);
+
+        var runs = scheduleService.runDueSchedules("test-worker", 10);
+
+        assertEquals(1, runs.size());
+        assertEquals("passed", runs.get(0).get("status"));
+        assertEquals(2L, count("standard_events"));
+        assertEquals(2L, count("alert_decisions"));
+        assertEquals(1L, countWhere("alert_decisions", "decision = 'matched'"));
+        assertEquals(1L, countWhere("alert_decisions", "decision = 'not_matched'"));
+        assertEquals(0L, count("alerts"));
+        assertEquals(0L, count("notification_deliveries"));
+        var ruleDecisionAuto = objectValue(syncReport(runs.get(0)).get("ruleDecisionAuto"));
+        assertEquals("passed", ruleDecisionAuto.get("status"));
+        assertEquals(2, intValue(ruleDecisionAuto.get("evaluatedStandardCount")));
+        assertEquals(2, intValue(ruleDecisionAuto.get("decisionCount")));
     }
 
     @Test
@@ -1575,6 +1725,14 @@ class IngestionPlanSyncOnceServiceTest {
         return lastId("ingestion_plan_activations");
     }
 
+    private Long insertRule(String name, String eventType, String severity, String expression, boolean enabled) {
+        jdbcTemplate.update("""
+            insert into rules(name, event_type, severity, expression, enabled)
+            values (?, ?, ?, ?, ?)
+            """, name, eventType, severity, expression, enabled);
+        return lastId("rules");
+    }
+
     private String planJson(Long tableId) {
         return planJson("sec_alert_event", tableId);
     }
@@ -1823,7 +1981,25 @@ class IngestionPlanSyncOnceServiceTest {
     }
 
     private IngestionPlanSyncOnceService newService(TransformRemoteShadowClient shadowClient, TransformRuntimeClient runtimeClient) {
+        return newService(shadowClient, runtimeClient, null);
+    }
+
+    private IngestionPlanSyncOnceService newService(
+        TransformRemoteShadowClient shadowClient,
+        TransformRuntimeClient runtimeClient,
+        RuleDecisionAutoPipelineService autoPipeline
+    ) {
         var support = new CoreRequestSupport(objectMapper);
+        var pipeline = autoPipeline;
+        if (pipeline == null) {
+            var repository = new RuleDecisionRepository(jdbcTemplate, objectMapper, support);
+            var evaluator = new RuleEvaluationService(objectMapper, support);
+            var runner = new RuleDecisionRunner(jdbcTemplate, objectMapper, support, repository, evaluator);
+            pipeline = new RuleDecisionAutoPipelineService(
+                new DataSourceTransactionManager(jdbcTemplate.getDataSource()),
+                runner
+            );
+        }
         return new IngestionPlanSyncOnceService(
             jdbcTemplate,
             objectMapper,
@@ -1831,8 +2007,20 @@ class IngestionPlanSyncOnceServiceTest {
             new JdbcShadowSampleService(objectMapper),
             new StandardEventDedupService(jdbcTemplate, support),
             shadowClient,
-            runtimeClient == null ? new LocalTransformRuntimeClient(new StandardEventTransformService()) : runtimeClient
+            runtimeClient == null ? new LocalTransformRuntimeClient(new StandardEventTransformService()) : runtimeClient,
+            pipeline
         );
+    }
+
+    private static final class AlwaysFailingRuleDecisionRunner extends RuleDecisionRunner {
+        private AlwaysFailingRuleDecisionRunner() {
+            super(null, null, null, null, null);
+        }
+
+        @Override
+        public Map<String, Object> run(RuleEvaluationRunRequest request) {
+            throw new IllegalStateException("sensitive persistence details");
+        }
     }
 
     private static final class RecordingTransformRuntimeClient implements TransformRuntimeClient {

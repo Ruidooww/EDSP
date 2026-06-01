@@ -17,11 +17,12 @@ The goal is to confirm that the AI agent runtime is safe, observable, and wired 
 - provider discovery stays configuration-only
 - local OpenAI-compatible runtime succeeds through the real runtime path
 - cloud OpenAI-compatible runtime succeeds through the same runtime path
-- fallback-template still works when a provider is unavailable or missing
+- fallback-template still works when explicitly selected
+- recent runs succeed through the frontend-visible API route
 - recent runs only persist safe summaries
 - runtime artifacts stay summary-only
 
-This stage does not change production Java, frontend behavior, notification delivery, or database schema.
+This stage only adds one minimal controller parameter-binding fix. It does not change frontend behavior, notification delivery, or database schema.
 
 ## Smoke Scenarios
 
@@ -31,10 +32,12 @@ The smoke script verifies these scenarios through the real runtime chain:
 2. `local-openai-compatible` success through a host-local mock OpenAI endpoint
 3. `cloud-openai-compatible` success through the same mock endpoint
 4. `fallback-template` warning fallback
-5. unknown provider fallback behavior
-6. recent runs through `GET /api/core/ai-agents/runs/recent`
-7. `ai_agent_runs` persistence with safe summary columns only
-8. prompt safety, response safety, and artifact safety
+5. recent runs through `GET /api/core/ai-agents/runs/recent`
+6. `ai_agent_runs` persistence with safe summary columns only
+7. prompt safety, response safety, and artifact safety
+
+Invalid `providerKey` handling is intentionally not asserted in this smoke.
+Known follow-up: AI Agent Foundation Hardening MVP should enforce `invalid providerKey -> 400`.
 
 ## Runtime Boundary
 
@@ -44,11 +47,17 @@ The mock server returns safe JSON sections only. It does not read the EDSP datab
 
 The smoke script may inspect the database for the rows it created, but the artifact itself remains summary-only.
 
+The recent runs API route must succeed. A database query may be used as failure diagnostics, but it must not convert a route failure into a passing smoke result.
+
 ## Artifact Boundary
 
 The smoke artifact is stored under:
 
 `logs/ai-agent-runtime-smoke/<runId>/summary.json`
+
+On failure, the artifact may also contain:
+
+`logs/ai-agent-runtime-smoke/<runId>/restricted-diagnostics.json`
 
 The artifact contains only aggregated verification data such as:
 
@@ -58,6 +67,8 @@ The artifact contains only aggregated verification data such as:
 - scenario statuses
 - failure stage and failure type
 - non-sensitive warnings
+
+Full Docker Compose service logs are not uploaded.
 
 The artifact does not contain:
 
@@ -77,6 +88,7 @@ This stage adds a non-required PR check workflow for the smoke run.
 
 The workflow is intended for PR visibility and manual dispatch, not as a required branch protection gate.
 
-## Next Stage
+## Known Follow-up
 
-If this stage succeeds, the next step is to keep runtime observability stable and move only if a new contract boundary is needed.
+- AI Agent Foundation Hardening MVP should enforce `invalid providerKey -> 400`.
+- A later schema-hardening stage may migrate `ai_agent_runs` JSON summary text fields to `JSONB`.

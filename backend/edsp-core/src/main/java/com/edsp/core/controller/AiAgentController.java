@@ -34,7 +34,7 @@ public class AiAgentController {
     }
 
     @GetMapping("/runs/recent")
-    public ApiResponse<List<Map<String, Object>>> recent(@RequestParam(defaultValue = "10") int limit) {
+    public ApiResponse<List<Map<String, Object>>> recent(@RequestParam(name = "limit", defaultValue = "10") int limit) {
         return ApiResponse.ok(runService.recent(limit));
     }
 }

@@ -37,7 +37,6 @@ $scenarioResults = [ordered]@{
     localOpenAiRuntime = 'NOT_RUN'
     cloudOpenAiRuntime = 'NOT_RUN'
     fallbackTemplateRuntime = 'NOT_RUN'
-    missingProviderFallback = 'NOT_RUN'
     recentRunsVerification = 'NOT_RUN'
     safeStorageVerification = 'NOT_RUN'
     promptSafetyVerification = 'NOT_RUN'
@@ -360,32 +359,23 @@ function Wait-HttpReady {
     throw "$Label did not become ready at $Uri."
 }
 
-function Save-CommandOutput {
-    param(
-        [Parameter(Mandatory = $true)][string]$FileName,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
-    )
-
-    try {
-        New-Item -ItemType Directory -Force -Path $artifactPath | Out-Null
-        $output = @(Invoke-DockerCapture -Arguments $Arguments)
-        $output | Set-Content -Path (Join-Path $artifactPath $FileName) -Encoding UTF8
-    } catch {
-        Add-SmokeWarning "Unable to collect $FileName`: $($_.Exception.Message)"
-    }
-}
-
 function Collect-SmokeArtifacts {
     if (-not $collectLogs) {
         return
     }
 
-    Save-CommandOutput -FileName 'ps.txt' -Arguments @('compose', '-p', $ComposeProject, 'ps', '-a')
-    foreach ($service in @('postgres', 'edsp-auth', 'edsp-core', 'edsp-alert', 'edsp-report', 'edsp-gateway', 'frontend', 'ai-agent-service')) {
-        Save-CommandOutput -FileName "logs-$service.txt" -Arguments @(
-            'compose', '-p', $ComposeProject, 'logs', '--tail=300', $service
-        )
+    New-Item -ItemType Directory -Force -Path $artifactPath | Out-Null
+    $diagnostics = [ordered]@{
+        runId = $runId
+        composeProject = $ComposeProject
+        failureStage = $failureStage
+        failureType = $failureType
+        scenarios = $scenarioResults
+        warnings = @($warnings)
     }
+    $diagnostics |
+        ConvertTo-Json -Depth 8 |
+        Set-Content -Path (Join-Path $artifactPath 'restricted-diagnostics.json') -Encoding UTF8
 }
 
 function Write-SmokeSummary {
@@ -403,12 +393,11 @@ function Write-SmokeSummary {
             mockPort = $MockPort
             ciMode = [bool]$CiMode
             finalAction = $FinalAction
-            artifactPath = $artifactPath
             scenarios = $scenarioResults
             mockRequestCount = if (-not [string]::IsNullOrWhiteSpace($mockLogPath) -and (Test-Path -Path $mockLogPath)) { @(Get-Content -Path $mockLogPath -Encoding UTF8).Count } else { 0 }
             failureStage = $failureStage
             failureType = $failureType
-            failureMessage = if ($null -eq $failure) { $null } else { $failure.Exception.Message }
+            failureMessage = if ($null -eq $failure) { $null } else { 'redacted' }
             warnings = @($warnings)
         }
         $summary |
@@ -553,7 +542,7 @@ function Stop-MockOpenAiServer {
             Start-Sleep -Seconds 1
         }
     } catch {
-        Add-SmokeWarning "Unable to stop mock AI server cleanly: $($_.Exception.Message)"
+        Add-SmokeWarning "Unable to stop mock AI server cleanly: $($_.Exception.GetType().Name)"
     }
 }
 
@@ -776,11 +765,11 @@ function Assert-RecentRows {
     param([Parameter(Mandatory = $true)]$Rows)
 
     $rows = @($Rows)
-    Assert-True -Condition ($rows.Count -ge 4) -Label 'recent rows count'
+    Assert-True -Condition ($rows.Count -ge 3) -Label 'recent rows count'
     foreach ($row in $rows) {
         Assert-PropertySet -Object $row -Expected @('id', 'agent_key', 'provider_key', 'theme', 'period', 'status', 'source', 'started_at', 'finished_at') -Label "recent row $($row.id)"
     }
-    foreach ($provider in @('local-openai-compatible', 'cloud-openai-compatible', 'fallback-template', 'missing-provider')) {
+    foreach ($provider in @('local-openai-compatible', 'cloud-openai-compatible', 'fallback-template')) {
         Assert-True -Condition (@($rows | Where-Object { $_.provider_key -eq $provider }).Count -ge 1) -Label "recent rows include $provider"
     }
 }
@@ -841,11 +830,11 @@ where id > $BaseRunId
 order by id
 "@
     $rows = @(ConvertFrom-JsonArray -JsonText $rowsJson)
-    Assert-Equal -Actual $rows.Count -Expected 4 -Label 'ai_agent_runs new row count'
+    Assert-Equal -Actual $rows.Count -Expected 3 -Label 'ai_agent_runs new row count'
 
-    $expectedProviders = @('local-openai-compatible', 'cloud-openai-compatible', 'fallback-template', 'missing-provider')
-    $expectedSources = @('llm', 'llm', 'fallback-template', 'fallback-template')
-    $expectedStatuses = @('passed', 'passed', 'warning', 'warning')
+    $expectedProviders = @('local-openai-compatible', 'cloud-openai-compatible', 'fallback-template')
+    $expectedSources = @('llm', 'llm', 'fallback-template')
+    $expectedStatuses = @('passed', 'passed', 'warning')
     for ($index = 0; $index -lt $rows.Count; $index++) {
         $row = $rows[$index]
         Assert-Equal -Actual $row.provider_key -Expected $expectedProviders[$index] -Label "db row $($index + 1) provider key"
@@ -972,30 +961,23 @@ try {
     Assert-ProviderRun -Response $fallbackResult -ExpectedProviderKey 'fallback-template' -ExpectedSource 'fallback-template' -ExpectedStatus 'warning' -ExpectWarnings:$true
     $scenarioResults.fallbackTemplateRuntime = 'PASS'
 
-    $failureStage = 'missing_provider_fallback'
-    $missingProviderResult = Invoke-ApiPost -Path '/api/core/ai-agents/runs' -Body @{
-        agentKey = 'security-insight-agent'
-        providerKey = 'missing-provider'
-        period = 'last_7_days'
-        theme = 'security_overview'
-    } -Headers $authHeaders
-    Assert-ProviderRun -Response $missingProviderResult -ExpectedProviderKey 'missing-provider' -ExpectedSource 'fallback-template' -ExpectedStatus 'warning' -ExpectWarnings:$true
-    $scenarioResults.missingProviderFallback = 'PASS'
+    Add-SmokeWarning 'Known follow-up: invalid providerKey should return 400 in AI Agent Foundation Hardening MVP.'
 
     $failureStage = 'recent_runs'
     try {
         $recentRuns = Invoke-ApiGet -Path '/api/core/ai-agents/runs/recent?limit=10' -Headers $authHeaders
         Assert-RecentRows -Rows $recentRuns
+        $scenarioResults.recentRunsVerification = 'PASS'
     } catch {
-        $recentRunsErrorMessage = [string]$_.Exception.Message
-        if ($recentRunsErrorMessage -match '\b500\b') {
-            Add-SmokeWarning "Recent runs API returned 500. Falling back to database verification for this smoke run: $($_.Exception.Message)"
+        $recentRunsFailure = $_
+        Add-SmokeWarning "Recent runs API verification failed. Running DB diagnostics only: $($_.Exception.GetType().Name)"
+        try {
             Assert-RecentRowsFromDatabase
-        } else {
-            throw
+        } catch {
+            Add-SmokeWarning "Recent runs DB diagnostic also failed: $($_.Exception.GetType().Name)"
         }
+        throw $recentRunsFailure
     }
-    $scenarioResults.recentRunsVerification = 'PASS'
 
     $failureStage = 'safe_storage'
     Assert-RunRowsAndSchema -BaseRunId $baseRunId
@@ -1011,7 +993,7 @@ try {
 } catch {
     $failure = $_
     $failureType = $_.Exception.GetType().Name
-    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "ERROR: runtime smoke failed at stage '$failureStage' ($failureType)." -ForegroundColor Red
     Collect-SmokeArtifacts
 } finally {
     Stop-MockOpenAiServer -MockServer $mockServer
@@ -1020,7 +1002,7 @@ try {
         try {
             Invoke-ComposeVisible -Arguments @('stop')
         } catch {
-            Add-SmokeWarning "Unable to stop runtime smoke containers: $($_.Exception.Message)"
+            Add-SmokeWarning "Unable to stop runtime smoke containers: $($_.Exception.GetType().Name)"
         }
     }
     Write-SmokeSummary
@@ -1033,7 +1015,7 @@ try {
         try {
             Invoke-ComposeVisible -Arguments @('ps', '-a')
         } catch {
-            Add-SmokeWarning "Unable to list runtime containers: $($_.Exception.Message)"
+            Add-SmokeWarning "Unable to list runtime containers: $($_.Exception.GetType().Name)"
         }
         Write-Host "Smoke mock request log: $mockLogPath"
         Write-Host 'To stop containers without deleting volumes, run: docker compose -p <project> stop'
@@ -1050,7 +1032,7 @@ Write-Host 'provider discovery: PASS'
 Write-Host 'local-openai-compatible runtime: PASS'
 Write-Host 'cloud-openai-compatible runtime: PASS'
 Write-Host 'fallback-template runtime: PASS'
-Write-Host 'missing-provider fallback: PASS'
+Write-Host 'invalid providerKey hardening: KNOWN FOLLOW-UP'
 Write-Host 'recent runs verification: PASS'
 Write-Host 'safe storage verification: PASS'
 Write-Host 'prompt safety verification: PASS'

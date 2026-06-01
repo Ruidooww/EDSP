@@ -5,6 +5,18 @@ on:
   pull_request:
     branches:
       - master
+    paths:
+      - "ai-agent-service/**"
+      - "backend/edsp-core/src/main/java/com/edsp/core/controller/AiAgentController.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/service/AiAgentRunService.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/service/AiAgentContextService.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/service/PythonAiAgentClient.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/config/AiAgentProperties.java"
+      - "backend/edsp-core/src/main/resources/db/migration/V18__ai_agent_platform_foundation.sql"
+      - "docker-compose.yml"
+      - "scripts/verify-ai-agent-runtime-smoke.ps1"
+      - "docs/ai-agent-runtime-smoke-observability.md"
+      - ".github/workflows/ai-agent-runtime-smoke.yml"
 
 permissions:
   contents: read

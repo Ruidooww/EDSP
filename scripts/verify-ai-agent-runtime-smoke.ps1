@@ -186,10 +186,16 @@ function Get-DockerExecutable {
         }
     }
 
-    $defaultDockerPaths = @(
-        'C:\Program Files\Docker\Docker\resources\bin\docker.exe',
-        (Join-Path ${env:ProgramFiles} 'Docker\Docker\resources\bin\docker.exe')
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    $defaultDockerPaths = @()
+    if ($isWindowsPlatform) {
+        $defaultDockerPaths += 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
+        if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+            $defaultDockerPaths += (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe')
+        }
+    }
+    $defaultDockerPaths = $defaultDockerPaths |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique
     foreach ($path in $defaultDockerPaths) {
         if (Test-Path -Path $path) {
             $dockerExecutable = $path

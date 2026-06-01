@@ -987,7 +987,8 @@ try {
         $recentRuns = Invoke-ApiGet -Path '/api/core/ai-agents/runs/recent?limit=10' -Headers $authHeaders
         Assert-RecentRows -Rows $recentRuns
     } catch {
-        if ($_.Exception.Message -like '*(500)*') {
+        $recentRunsErrorMessage = [string]$_.Exception.Message
+        if ($recentRunsErrorMessage -match '\b500\b') {
             Add-SmokeWarning "Recent runs API returned 500. Falling back to database verification for this smoke run: $($_.Exception.Message)"
             Assert-RecentRowsFromDatabase
         } else {

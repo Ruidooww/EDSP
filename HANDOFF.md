@@ -1028,3 +1028,19 @@ Clean master before continuing.
 - Known UI follow-up: the sidebar brand title can wrap onto two lines at the current sider width. Handle this as a separate small frontend-only fix branch so the reviewed theme stage remains unchanged.
 - Recommended immediate follow-up: `EDSP Brand Title Single Line Fix`.
 - Recommended architecture stage after the UI follow-up: `Alert Notification Auto Delivery Readiness MVP`, focused on planning opt-in notification dispatch from existing alerts with strict idempotency and delivery safety boundaries.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `EDSP Brand Title Single Line Fix`
+- Latest feature merge commit: `adeb1c8 merge: edsp brand title single line fix`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for edsp brand title single line fix`
+- Stage branch: `codex/brand-title-single-line-fix`
+- Stage result: PR #20 applied a CSS-only follow-up so the sidebar brand title remains on one line at the existing `230px` sider width.
+- CSS change: reduced brand horizontal padding and gap, changed the sidebar title font size from `16px` to `14px`, and added `white-space: nowrap`.
+- Scope boundary: this stage touched only `frontend/src/styles.css`. It did not modify page business logic, `frontend/src/App.tsx`, backend code, API contracts, migration, workflow, scripts, package files, `docker-compose.yml`, or `AGENTS.md`.
+- Verification: local `mvn -pl edsp-core -am test` passed with 184 tests and 1 expected skip; local `npm.cmd run build` passed with only the existing Vite chunk-size warning; local `docker compose -p edsp config --quiet` passed; local `git diff --check` passed; static width verification confirmed `150px` available title width and approximately `140px` title width.
+- Local Docker verification: rebuilt and recreated only the `frontend` service; `http://127.0.0.1:18080/` returned `200`, and `POST /api/auth/login` through the frontend nginx proxy returned `200`.
+- PR #20 status: EDSP CI success; Transform Runtime Smoke success.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26730448867`; job `https://github.com/Ruidooww/EDSP/actions/runs/26730448867/job/78773316655`; duration `1m58s`; artifact `transform-runtime-smoke-26730448867-1`.
+- Artifact safety: PR #20 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Recommended next stage: `Alert Notification Auto Delivery Readiness MVP`, focused on planning opt-in notification dispatch from existing alerts with strict idempotency and delivery safety boundaries.

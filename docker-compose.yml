@@ -52,12 +52,40 @@ services:
       EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED: ${EDSP_TRANSFORM_REMOTE_SHADOW_ENABLED:-false}
       EDSP_TRANSFORM_REMOTE_BASE_URL: ${EDSP_TRANSFORM_REMOTE_BASE_URL:-http://edsp-transform-service:8085}
       EDSP_TRANSFORM_REMOTE_TIMEOUT_MS: ${EDSP_TRANSFORM_REMOTE_TIMEOUT_MS:-1000}
+      EDSP_AI_AGENT_BASE_URL: ${EDSP_AI_AGENT_BASE_URL:-http://ai-agent-service:18090}
+      EDSP_AI_AGENT_TIMEOUT_MS: ${EDSP_AI_AGENT_TIMEOUT_MS:-8000}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-edsp}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-edsp}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-edsp-demo-password}
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  ai-agent-service:
+    profiles:
+      - ai
+    build:
+      context: ./ai-agent-service
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${EDSP_AI_AGENT_PORT:-18090}:18090"
+    environment:
+      EDSP_AI_FALLBACK_ENABLED: ${EDSP_AI_FALLBACK_ENABLED:-true}
+      EDSP_AI_LOCAL_OPENAI_ENABLED: ${EDSP_AI_LOCAL_OPENAI_ENABLED:-true}
+      EDSP_AI_LOCAL_OPENAI_BASE_URL: ${EDSP_AI_LOCAL_OPENAI_BASE_URL:-http://host.docker.internal:11434/v1/chat/completions}
+      EDSP_AI_LOCAL_OPENAI_API_KEY: ${EDSP_AI_LOCAL_OPENAI_API_KEY:-}
+      EDSP_AI_LOCAL_OPENAI_MODEL: ${EDSP_AI_LOCAL_OPENAI_MODEL:-local-model}
+      EDSP_AI_LOCAL_ALLOW_REMOTE: ${EDSP_AI_LOCAL_ALLOW_REMOTE:-false}
+      EDSP_AI_OLLAMA_ENABLED: ${EDSP_AI_OLLAMA_ENABLED:-false}
+      EDSP_AI_OLLAMA_BASE_URL: ${EDSP_AI_OLLAMA_BASE_URL:-http://host.docker.internal:11434/api/chat}
+      EDSP_AI_OLLAMA_MODEL: ${EDSP_AI_OLLAMA_MODEL:-llama3}
+      EDSP_AI_CLOUD_OPENAI_ENABLED: ${EDSP_AI_CLOUD_OPENAI_ENABLED:-false}
+      EDSP_AI_CLOUD_OPENAI_BASE_URL: ${EDSP_AI_CLOUD_OPENAI_BASE_URL:-}
+      EDSP_AI_CLOUD_OPENAI_API_KEY: ${EDSP_AI_CLOUD_OPENAI_API_KEY:-}
+      EDSP_AI_CLOUD_OPENAI_MODEL: ${EDSP_AI_CLOUD_OPENAI_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   edsp-alert:

@@ -1,5 +1,41 @@
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
+export interface AiAgentProvider {
+  key: string;
+  type: string;
+  enabled: boolean;
+  baseUrlConfigured: boolean;
+  apiKeyConfigured: boolean;
+  modelConfigured: boolean;
+}
+
+export interface AiAgentSection {
+  title: string;
+  content: string;
+}
+
+export interface AiAgentRunResult {
+  agentKey: string;
+  providerKey: string;
+  period: string;
+  theme: string;
+  source: string;
+  status: string;
+  sections: AiAgentSection[];
+  warnings: string[];
+}
+
+export interface AiAgentRecentRun {
+  id: number;
+  agent_key: string;
+  provider_key: string;
+  theme: string;
+  period: string;
+  status: string;
+  source: string;
+  started_at: string;
+}
+
 export interface DataSourceRow {
   id: number;
   name: string;

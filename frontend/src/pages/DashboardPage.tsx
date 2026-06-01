@@ -6,6 +6,7 @@ import {
   LinkOutlined,
   NotificationOutlined,
   ReloadOutlined,
+  RobotOutlined,
   WarningFilled,
 } from '@ant-design/icons';
 import { Button, Card, Progress, Space, Table, Tag, Typography } from 'antd';
@@ -19,7 +20,7 @@ import type {
   OverviewNotificationDeliveryRow,
 } from '../types';
 
-type DashboardNavigationKey = 'alerts' | 'notifications' | 'sources';
+type DashboardNavigationKey = 'alerts' | 'notifications' | 'sources' | 'aiAgents';
 
 interface DashboardPageProps {
   onNavigate?: (page: DashboardNavigationKey) => void;
@@ -676,6 +677,9 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
             </Button>
             <Button block icon={<DatabaseOutlined />} onClick={() => onNavigate?.('sources')}>
               数据源管理
+            </Button>
+            <Button block icon={<RobotOutlined />} onClick={() => onNavigate?.('aiAgents')}>
+              AI 智能体分析
             </Button>
             <div className="stat-list">
               <span><WarningFilled /> 待处置 <b>{openAlerts}</b></span>

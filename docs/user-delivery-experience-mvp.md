@@ -91,3 +91,47 @@ Treatment:
 - Directly technical tools such as manual rule evaluation, notification secret migration checks, and generated alert backfill were placed behind default-collapsed advanced sections.
 - Code identifiers and DTO fields were retained in `types.ts`, API payload construction, utility functions, and normalized schema helpers because they are frontend/backend contract names. Renaming them would break API compatibility and is outside this frontend delivery stage.
 - Source field names from customer systems were retained in metadata and mapping views because they are customer data labels required for implementation validation.
+
+## Post-P1/P2 Engineering Field Re-Audit
+
+After fixing the notification backfill confirmation contract, CodeGraph and keyword fallback scans were re-run.
+
+### CodeGraph scan
+
+- scanned by CodeGraph: yes
+- scan scope: `frontend/src/**`
+- semantic focus: `AdvancedDetailsCollapse`, `AiAgentPage`, `AlertsPage`, `RulesPage`, `NotificationsPage`, `CollectionTasksPage`, and `businessDisplay` mapping helpers
+- default-visible engineering fields found:
+  - `api.ts`: the generic fallback error `Request failed: ${response.status}` was fixed to `服务暂不可用，请稍后重试` (A. Fixed in default user view).
+  - `NotificationsPage`: the user-facing hint `需要输入 endpoint 才能启用` was fixed to `需要输入通道地址才能启用` (A. Fixed in default user view).
+  - `CollectionTasksPage`: the user-facing hint `技术来源已记录` was fixed to `来源已记录` (A. Fixed in default user view).
+- moved to advanced/details and default-collapsed:
+  - `AiAgentPage`: `providerKey`, `source`, `status`, `warnings`, and run metadata are kept in `AdvancedDetailsCollapse` or expandable table rows (B).
+  - `AlertsPage`: `decisionId`, `standardEventId`, `ruleId`, `detailJson`, and manual alert generation are kept in advanced details or a default-collapsed advanced tool (B).
+  - `RulesPage`: `standardEventId`, `ruleId`, `decision`, `riskScore`, `detail JSON`, `riskScoreThreshold`, and `minSeverity` are kept in advanced details or a default-collapsed advanced tool (B).
+  - `NotificationsPage`: `alertId`, `retryOfDeliveryId`, `responseBody`, `payloadJson`, raw delivery payloads, and the notification secret migration tool are kept in advanced details/admin collapse sections (B).
+- code/API-only retained:
+  - `providerKey`, `fallback-template`, `local-openai-compatible`, `cloud-openai-compatible`, `local-ollama-compatible`, raw status keys, query parameters, DTO fields, API paths, and `EXECUTE_NOTIFICATION_SECRET_BACKFILL` remain as frontend/backend contract names (C).
+- customer mapping fields retained:
+  - source system names, external event IDs, standard event business labels, and external API address labels remain visible where they are customer-facing mapping or integration data (D).
+- remaining follow-up: none known for default-visible engineering fields after this scan.
+
+### Keyword fallback scan
+
+- scanned by `Select-String`: yes, with `Get-ChildItem -Recurse` over all `frontend/src` `.tsx`, `.ts`, and `.css` files so top-level files such as `frontend/src/api.ts` are included
+- engineering keyword hits reviewed: yes
+- Chinese/debug keyword hits reviewed: yes
+- result summary:
+  - no remaining default-visible `Request failed`, `Internal Server Error`, `invalid_confirmation`, `unknown error`, `Decision ID`, `raw JSON`, `Shadow Run`, or `Shadow Precheck` hits were found.
+  - raw keys such as `decisionId`, `standardEventId`, `ruleId`, `payloadJson`, `responseBody`, `providerKey`, `riskScore`, and `minSeverity` are retained only in code/API contracts or default-collapsed advanced details.
+  - raw status values such as `warning`, `passed`, `failed`, `completed_with_failures`, `migration_eligible`, `matched`, and `not_matched` are retained as mapping keys in `businessDisplay` or API comparison code; default visible UI uses Chinese labels.
+  - Chinese/debug hits such as `高级`, `技术详情`, `管理员工具`, `规则决策编号（高级）`, `标准化事件编号（高级）`, `通道编号（高级）`, `失败原因`, and `执行结果` were reviewed. Technical identifiers are either marked as advanced/default-collapsed, admin-only, or are business-facing operational labels.
+
+### Fix result
+
+- notification backfill display phrase remains Chinese: `确认迁移`
+- backend API confirmation remains: `EXECUTE_NOTIFICATION_SECRET_BACKFILL`
+- local mismatch error is localized: `确认文字不匹配`
+- execution failure toast is localized: `密钥迁移执行失败：...`
+- backend contract unchanged
+- no backend / migration / workflow / AI runtime / compose changes

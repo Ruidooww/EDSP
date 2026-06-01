@@ -34,9 +34,9 @@ async function errorMessageFromResponse(response: Response): Promise<string> {
       return payload.message;
     }
   } catch {
-    // Keep the stable status fallback when the error body is not JSON.
+    // Keep a stable customer-facing fallback when the error body is not JSON.
   }
-  return `Request failed: ${response.status}`;
+  return '服务暂不可用，请稍后重试';
 }
 
 export async function apiGet<T>(path: string): Promise<T> {

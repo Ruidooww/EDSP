@@ -88,7 +88,8 @@ const CHANNEL_ENABLED_OPTIONS = [
   { value: 'false', label: '停用' },
 ];
 
-const BACKFILL_CONFIRMATION = '确认迁移';
+const BACKFILL_CONFIRMATION_DISPLAY = '确认迁移';
+const BACKFILL_CONFIRMATION_API = 'EXECUTE_NOTIFICATION_SECRET_BACKFILL';
 
 function channelTypeLabel(value: string) {
   return getChannelTypeLabel(value);
@@ -470,15 +471,15 @@ export default function NotificationsPage() {
     if (selectedBackfillChannelIds.length === 0 || selectedBackfillChannelIds.length > 50) {
       return;
     }
-    if (backfillConfirmationInput !== BACKFILL_CONFIRMATION) {
-      message.error('confirmation phrase mismatch');
+    if (backfillConfirmationInput !== BACKFILL_CONFIRMATION_DISPLAY) {
+      message.error('确认文字不匹配');
       return;
     }
     setBackfillExecuteLoading(true);
     try {
       const run = await apiPost<NotificationSecretBackfillRun>('/api/notifications/secret-backfill/execute', {
         channelIds: selectedBackfillChannelIds,
-        confirmation: BACKFILL_CONFIRMATION,
+        confirmation: BACKFILL_CONFIRMATION_API,
         requestedBy: 'manual',
       });
       const detail = await apiGet<NotificationSecretBackfillRun>(`/api/notifications/secret-backfill/runs/${run.id}`);
@@ -489,8 +490,8 @@ export default function NotificationsPage() {
       message.success('密钥迁移任务已完成');
       await Promise.all([load(), loadDryRun(), loadBackfillRuns()]);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'unknown error';
-      message.error(`backfill execution failed: ${errorMessage}`);
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      message.error(`密钥迁移执行失败：${errorMessage}`);
     } finally {
       setBackfillExecuteLoading(false);
     }
@@ -539,7 +540,7 @@ export default function NotificationsPage() {
   const endpointExtra = editingRow?.secret_storage_status === 'legacy_plaintext'
     ? '留空则保留现有密钥；重新输入 Webhook URL 后将转换为加密存储'
     : editingRow?.secret_storage_status === 'missing'
-      ? '需要输入 endpoint 才能启用'
+      ? '需要输入通道地址才能启用'
       : editingRow
         ? '留空则保留现有密钥'
         : undefined;
@@ -1073,7 +1074,7 @@ export default function NotificationsPage() {
           setBackfillConfirmationInput('');
         }}
         confirmLoading={backfillExecuteLoading}
-        okButtonProps={{ disabled: backfillConfirmationInput !== BACKFILL_CONFIRMATION }}
+        okButtonProps={{ disabled: backfillConfirmationInput !== BACKFILL_CONFIRMATION_DISPLAY }}
         okText="执行选中迁移"
         destroyOnHidden
       >
@@ -1089,7 +1090,7 @@ export default function NotificationsPage() {
         <Input
           value={backfillConfirmationInput}
           onChange={(event) => setBackfillConfirmationInput(event.target.value)}
-          placeholder={BACKFILL_CONFIRMATION}
+          placeholder={BACKFILL_CONFIRMATION_DISPLAY}
         />
       </Modal>
 

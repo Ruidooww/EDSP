@@ -342,7 +342,7 @@ export default function CollectionTasksPage() {
       render: (value: string, row) => (
         <div>
           <strong>{value || '来源待确认'}</strong>
-          <span className="table-subtext">{row.source_system ? '技术来源已记录' : '来源待确认'}</span>
+          <span className="table-subtext">{row.source_system ? '来源已记录' : '来源待确认'}</span>
         </div>
       ),
     },

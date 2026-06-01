@@ -1008,3 +1008,23 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26713669517`; job `https://github.com/Ruidooww/EDSP/actions/runs/26713669517/job/78728333541`; duration `2m10s`; artifact `transform-runtime-smoke-26713669517-1`; digest `sha256:c3ef8042849eb2e0942355f417541740ea52bfecca4abcc4ba222fffbeba1f54`.
 - Artifact safety: PR #18 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Recommended next stage: `Alert Notification Auto Delivery Readiness MVP`, focused on planning opt-in notification dispatch from existing alerts with strict idempotency and delivery safety boundaries.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `EDSP Light Clean Theme MVP`
+- Latest feature merge commit: `b6c2dc6 merge: edsp light clean theme mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for edsp light clean theme mvp`
+- Stage branch: `codex/antd-theme-light-clean`
+- Stage result: PR #19 replaced the previously merged dark sidebar direction with a white, lightweight EDSP security product theme without changing page business logic, backend behavior, API contracts, routes, or data flow.
+- Theme boundary: `frontend/src/theme/edspTheme.ts` now keeps the existing Ant Design v5 integration while using teal primary color `#0f9f9a`, white sider tokens, and light workspace background `#f7f8fa`.
+- CSS boundary: `frontend/src/styles.css` now uses a white solid sider, white solid topbar, teal selected menu item with white text and icon, teal brand gradient, light workspace background, and lightweight white card surfaces. Existing severity/status/delivery CSS classes remain available for later page adoption.
+- Scope boundary: this stage touched only `frontend/src/theme/edspTheme.ts` and `frontend/src/styles.css`. `frontend/src/main.tsx` already used `theme={edspTheme}` from the prior theme stage, so no duplicate wiring change was needed.
+- UI stack boundary: Ant Design remains the active frontend component stack. This stage did not introduce Arco, replace AntD, or add npm dependencies.
+- Business boundary: no login flow, rule flow, alert flow, notification flow, transform runtime, sync behavior, ShadowRun behavior, Precheck behavior, activation gate behavior, or PostgreSQL alert concurrency behavior changed.
+- Verification: local `mvn -pl edsp-core -am test` passed with 184 tests and 1 expected skip; `npm.cmd run build` passed with only the existing Vite chunk-size warning; `docker compose -p edsp config --quiet` passed; `git diff --check` passed; local browser verification confirmed the white sider, white topbar, teal selected menu, teal icons, teal brand gradient, and light workspace background.
+- PR #19 status: EDSP CI success; Transform Runtime Smoke success.
+- Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26714854152`; job `https://github.com/Ruidooww/EDSP/actions/runs/26714854152/job/78731509154`; duration `2m13s`; artifact `transform-runtime-smoke-26714854152-1`.
+- Artifact safety: PR #19 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
+- Known UI follow-up: the sidebar brand title can wrap onto two lines at the current sider width. Handle this as a separate small frontend-only fix branch so the reviewed theme stage remains unchanged.
+- Recommended immediate follow-up: `EDSP Brand Title Single Line Fix`.
+- Recommended architecture stage after the UI follow-up: `Alert Notification Auto Delivery Readiness MVP`, focused on planning opt-in notification dispatch from existing alerts with strict idempotency and delivery safety boundaries.

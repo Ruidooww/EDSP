@@ -7,6 +7,7 @@ import {
   shadowValidationResultTag,
   STANDARD_FIELD_LABELS,
 } from '../utils/ingestionPlanLabels';
+import AdvancedDetailsCollapse from '../../../components/AdvancedDetailsCollapse';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanDetailSection from './IngestionPlanDetailSection';
 
@@ -25,7 +26,7 @@ export default function IngestionPlanPrecheckDrawer({
 }: IngestionPlanPrecheckDrawerProps) {
   return (
     <Drawer
-      title={plan ? `试运行前校验 / Shadow Precheck：${plan.candidateTable !== '-' ? plan.candidateTable : plan.name}` : '试运行前校验 / Shadow Precheck'}
+      title={plan ? `试运行前校验：${plan.candidateTable !== '-' ? plan.candidateTable : plan.name}` : '试运行前校验'}
       width={900}
       open={Boolean(report)}
       onClose={onClose}
@@ -45,7 +46,7 @@ export default function IngestionPlanPrecheckDrawer({
 
           <IngestionPlanDetailSection title="阻断项">{renderTextTags(report.blockers || [], '无')}</IngestionPlanDetailSection>
           <IngestionPlanDetailSection title="提醒项">{renderTextTags(report.warnings || [], '无')}</IngestionPlanDetailSection>
-          <IngestionPlanDetailSection title="标准事件预览">
+          <IngestionPlanDetailSection title="标准化事件预览">
             {report.standardEventPreview && Object.keys(report.standardEventPreview).length ? (
               <Descriptions bordered size="small" column={1}>
                 {Object.entries(report.standardEventPreview).map(([field, value]) => (
@@ -56,7 +57,7 @@ export default function IngestionPlanPrecheckDrawer({
               </Descriptions>
             ) : '-'}
           </IngestionPlanDetailSection>
-          <IngestionPlanDetailSection title="校验项">
+          <AdvancedDetailsCollapse title="技术校验项">
             {report.checks?.length ? (
               <div style={{ display: 'grid', gap: 10 }}>
                 {report.checks.map((check, index) => (
@@ -74,7 +75,7 @@ export default function IngestionPlanPrecheckDrawer({
                 ))}
               </div>
             ) : '-'}
-          </IngestionPlanDetailSection>
+          </AdvancedDetailsCollapse>
         </div>
       )}
     </Drawer>

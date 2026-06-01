@@ -1,21 +1,32 @@
 import { ReloadOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Form, Row, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Form, Row, Select, Space, Table, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../api';
+import AdvancedDetailsCollapse from '../components/AdvancedDetailsCollapse';
+import BusinessStatusTag from '../components/BusinessStatusTag';
+import NextStepHint from '../components/NextStepHint';
 import type { AiAgentProvider, AiAgentRecentRun, AiAgentRunResult } from '../types';
+import {
+  formatBusinessTime,
+  getAiRunStatus,
+  getPeriodLabel,
+  getProviderLabel,
+  getSourceLabel,
+  getThemeLabel,
+} from '../utils/businessDisplay';
 
 const periods = [
   { value: 'last_24h', label: '最近 24 小时' },
-  { value: 'last_7_days', label: '最近 7 天' },
-  { value: 'last_30_days', label: '最近 30 天' },
+  { value: 'last_7_days', label: getPeriodLabel('last_7_days') },
+  { value: 'last_30_days', label: getPeriodLabel('last_30_days') },
 ];
 
 const themes = [
-  { value: 'security_overview', label: '安全态势概览' },
-  { value: 'high_risk_alerts', label: '高危告警' },
-  { value: 'rule_effectiveness', label: '规则有效性' },
-  { value: 'sync_pipeline_health', label: '同步链路健康' },
-  { value: 'notification_readiness', label: '通知准备度' },
+  { value: 'security_overview', label: getThemeLabel('security_overview') },
+  { value: 'high_risk_alerts', label: getThemeLabel('high_risk_alerts') },
+  { value: 'rule_effectiveness', label: getThemeLabel('rule_effectiveness') },
+  { value: 'sync_pipeline_health', label: getThemeLabel('sync_pipeline_health') },
+  { value: 'notification_readiness', label: getThemeLabel('notification_readiness') },
 ];
 
 export default function AiAgentPage() {
@@ -60,8 +71,10 @@ export default function AiAgentPage() {
     <div className="ai-agent-page">
       <div className="ops-heading">
         <div>
-          <Typography.Title level={3}>AI 智能体分析</Typography.Title>
-          <Typography.Text type="secondary">基于安全聚合指标生成只读运营建议</Typography.Text>
+          <Typography.Title level={3}>AI 运营建议</Typography.Title>
+          <Typography.Text type="secondary">
+            基于安全告警、规则决策和同步链路生成只读运营建议，不会修改告警状态，也不会发送通知。
+          </Typography.Text>
         </div>
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
       </div>
@@ -70,10 +83,10 @@ export default function AiAgentPage() {
 
       <Card className="ops-card ai-agent-run-panel">
         <Form form={form} layout="inline" initialValues={{ period: 'last_7_days', theme: 'security_overview' }} onFinish={run}>
-          <Form.Item name="providerKey" label="Provider" rules={[{ required: true }]}>
+          <Form.Item name="providerKey" label="分析模型" rules={[{ required: true }]}>
             <Select style={{ width: 230 }} options={providers.map((provider) => ({
               value: provider.key,
-              label: provider.enabled ? provider.key : `${provider.key}（未配置）`,
+              label: getProviderLabel(provider.key, provider.enabled),
               disabled: !provider.enabled,
             }))} />
           </Form.Item>
@@ -86,9 +99,16 @@ export default function AiAgentPage() {
       {result && (
         <section>
           <Space style={{ marginBottom: 12 }}>
-            <Tag color={result.status === 'passed' ? 'success' : 'warning'}>{result.status}</Tag>
-            <Tag>{result.source}</Tag>
+            <BusinessStatusTag status={getAiRunStatus(result.status)} />
+            <BusinessStatusTag status={{ label: getSourceLabel(result.source), color: result.source === 'fallback-template' ? 'warning' : 'success' }} />
           </Space>
+          {result.source === 'fallback-template' || result.status === 'warning' ? (
+            <NextStepHint
+              type="warning"
+              message="本次建议已降级生成"
+        description="当前使用安全模板生成，模型不可用或未配置。内容仍基于系统聚合指标生成，不包含敏感明细数据；可以继续查看建议，也可以联系管理员配置模型。"
+            />
+          ) : null}
           <Row gutter={[12, 12]}>
             {result.sections.map((section) => (
               <Col xs={24} md={12} xl={8} key={section.title}>
@@ -96,18 +116,47 @@ export default function AiAgentPage() {
               </Col>
             ))}
           </Row>
+          <AdvancedDetailsCollapse
+            items={[
+              { label: 'providerKey', value: result.providerKey, code: true },
+              { label: 'source', value: result.source, code: true },
+            { label: 'status', value: result.status, code: true },
+              { label: 'agentKey', value: result.agentKey, code: true },
+              { label: 'period', value: result.period, code: true },
+              { label: 'theme', value: result.theme, code: true },
+              { label: 'warnings', value: result.warnings, code: true },
+            ]}
+          />
         </section>
       )}
 
       <Card className="ops-card" title="最近运行" style={{ marginTop: 16 }}>
         <Table rowKey="id" size="small" pagination={false} dataSource={recent} columns={[
-          { title: '时间', dataIndex: 'started_at' },
-          { title: '主题', dataIndex: 'theme' },
-          { title: '范围', dataIndex: 'period' },
-          { title: 'Provider', dataIndex: 'provider_key' },
-          { title: '来源', dataIndex: 'source' },
-          { title: '状态', dataIndex: 'status' },
-        ]} />
+          { title: '时间', dataIndex: 'started_at', render: formatBusinessTime },
+          { title: '分析主题', dataIndex: 'theme', render: getThemeLabel },
+          { title: '时间范围', dataIndex: 'period', render: getPeriodLabel },
+          { title: '分析模型', dataIndex: 'provider_key', render: (value) => getProviderLabel(value) },
+          { title: '生成方式', dataIndex: 'source', render: getSourceLabel },
+          { title: '状态', dataIndex: 'status', render: (value) => <BusinessStatusTag status={getAiRunStatus(value)} /> },
+        ]}
+        expandable={{
+          expandedRowRender: (row) => (
+            <AdvancedDetailsCollapse
+              title="本次运行技术详情"
+              items={[
+                { label: 'runId', value: row.id, code: true },
+                { label: 'providerKey', value: row.provider_key, code: true },
+                { label: 'source', value: row.source, code: true },
+                { label: 'status', value: row.status, code: true },
+                { label: 'period', value: row.period, code: true },
+                { label: 'theme', value: row.theme, code: true },
+              ]}
+            />
+          ),
+          rowExpandable: () => true,
+        }}
+        locale={{ emptyText: '暂无最近运行。请点击“运行分析”生成第一份 AI 运营建议。' }}
+        />
       </Card>
     </div>
   );

@@ -32,6 +32,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost } from '../api';
 import type { DataSourceRow } from '../types';
+import { getConnectionKindLabel, getDataSourceTypeLabel } from '../utils/businessDisplay';
 
 type SourceType =
   | 'sqlserver'
@@ -241,11 +242,11 @@ function templateStatusTag(template: SourceTemplate) {
 }
 
 function sourceTypeLabel(value: string) {
-  return SOURCE_TYPE_LABEL[value] || value;
+  return SOURCE_TYPE_LABEL[value] || getDataSourceTypeLabel(value);
 }
 
 function connectionKindLabel(value: string) {
-  return CONNECTION_KIND_LABEL[value] || value;
+  return CONNECTION_KIND_LABEL[value] || getConnectionKindLabel(value);
 }
 
 function defaultValues(sourceType: SourceType = 'sqlserver'): Partial<DataSourceFormValues> {
@@ -548,7 +549,7 @@ export default function DataSourcesPage() {
   ];
 
   const tableColumns: ColumnsType<SqlTableRow> = [
-    { title: 'Schema', dataIndex: 'schema_name', width: 110 },
+    { title: '命名空间', dataIndex: 'schema_name', width: 110 },
     { title: '表名', dataIndex: 'table_name' },
     { title: '行数', dataIndex: 'row_count', align: 'right', width: 120 },
     {
@@ -564,7 +565,7 @@ export default function DataSourcesPage() {
   ];
 
   const columnColumns: ColumnsType<SqlColumnRow> = [
-    { title: '#', dataIndex: 'column_id', width: 70 },
+    { title: '序号', dataIndex: 'column_id', width: 70 },
     { title: '字段名', dataIndex: 'column_name' },
     { title: '类型', dataIndex: 'data_type', width: 120 },
     { title: '长度', dataIndex: 'max_length', align: 'right', width: 90 },
@@ -704,7 +705,7 @@ export default function DataSourcesPage() {
                     ]}
                   />
                 </Form.Item>
-                <Form.Item name="headerName" label="认证 Header">
+                <Form.Item name="headerName" label="认证头（高级）">
                   <Input placeholder="Authorization" />
                 </Form.Item>
               </Space>

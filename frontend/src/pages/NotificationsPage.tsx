@@ -7,10 +7,13 @@ import {
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Collapse, Descriptions, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../api';
+import AdvancedDetailsCollapse from '../components/AdvancedDetailsCollapse';
+import BusinessStatusTag from '../components/BusinessStatusTag';
+import NextStepHint from '../components/NextStepHint';
 import type {
   NotificationChannelRow,
   NotificationDeliveryRow,
@@ -20,6 +23,14 @@ import type {
   NotificationSecretBackfillRunItem,
   NotificationSecretBackfillRunListResult,
 } from '../types';
+import {
+  formatBusinessTime,
+  getBackfillRunStatus,
+  getChannelTypeLabel,
+  getDeliveryStatus,
+  getFailureReasonLabel,
+  getSecretStorageStatusLabel,
+} from '../utils/businessDisplay';
 
 interface NotificationChannelFormValues {
   name: string;
@@ -77,14 +88,10 @@ const CHANNEL_ENABLED_OPTIONS = [
   { value: 'false', label: '停用' },
 ];
 
-const BACKFILL_CONFIRMATION = 'EXECUTE_NOTIFICATION_SECRET_BACKFILL';
+const BACKFILL_CONFIRMATION = '确认迁移';
 
 function channelTypeLabel(value: string) {
-  return {
-    webhook: 'Webhook',
-    wecom: '企业微信',
-    feishu: '飞书',
-  }[value] ?? value;
+  return getChannelTypeLabel(value);
 }
 
 function statusTag(status: string) {
@@ -101,31 +108,16 @@ function statusTag(status: string) {
 }
 
 function deliveryStatusTag(status: string) {
-  if (status === 'success') {
-    return <Tag color="success">成功</Tag>;
-  }
-  if (status === 'failed') {
-    return <Tag color="error">失败</Tag>;
-  }
-  return <Tag color="processing">{status}</Tag>;
+  return <BusinessStatusTag status={getDeliveryStatus(status)} />;
 }
 
 function secretStorageStatusTag(status?: string) {
-  if (status === 'encrypted') {
-    return <Tag color="success">已加密</Tag>;
-  }
-  if (status === 'legacy_plaintext') {
-    return <Tag color="warning">待重配</Tag>;
-  }
-  if (status === 'missing') {
-    return <Tag>未配置</Tag>;
-  }
-  return <Tag>{status || '-'}</Tag>;
+  return <BusinessStatusTag status={getSecretStorageStatusLabel(status)} />;
 }
 
 function dryRunStatusTag(status?: string) {
   if (status === 'migration_eligible') {
-    return <Tag color="success">理论可迁移</Tag>;
+    return <Tag color="success">可迁移</Tag>;
   }
   if (status === 'blocked') {
     return <Tag color="error">阻塞</Tag>;
@@ -140,72 +132,23 @@ function dryRunStatusTag(status?: string) {
 }
 
 function blockReasonLabel(reason?: string | null) {
-  return {
-    endpoint_missing: 'endpoint 缺失',
-    endpoint_invalid: 'endpoint 无效',
-    unsupported_channel_type: '不支持的通道类型',
-  }[reason || ''] ?? '-';
+  return getFailureReasonLabel(reason);
 }
 
 function backfillRunStatusTag(status?: string) {
-  if (status === 'completed') {
-    return <Tag color="success">completed</Tag>;
-  }
-  if (status === 'completed_with_failures') {
-    return <Tag color="warning">completed_with_failures</Tag>;
-  }
-  if (status === 'failed') {
-    return <Tag color="error">failed</Tag>;
-  }
-  if (status === 'running') {
-    return <Tag color="processing">running</Tag>;
-  }
-  return <Tag>{status || '-'}</Tag>;
+  return <BusinessStatusTag status={getBackfillRunStatus(status)} />;
 }
 
 function backfillItemStatusTag(status?: string) {
-  if (status === 'migrated') {
-    return <Tag color="success">migrated</Tag>;
-  }
-  if (status === 'skipped') {
-    return <Tag>skipped</Tag>;
-  }
-  if (status === 'failed') {
-    return <Tag color="error">failed</Tag>;
-  }
-  return <Tag>{status || '-'}</Tag>;
+  return <BusinessStatusTag status={getBackfillRunStatus(status)} />;
 }
 
 function backfillFailureReasonLabel(reason?: string | null) {
-  return {
-    not_found: 'not_found',
-    already_encrypted: 'already_encrypted',
-    not_legacy_plaintext: 'not_legacy_plaintext',
-    endpoint_missing: 'endpoint_missing',
-    endpoint_invalid: 'endpoint_invalid',
-    unsupported_channel_type: 'unsupported_channel_type',
-    notification_secret_key_missing: 'notification_secret_key_missing',
-    notification_secret_key_invalid: 'notification_secret_key_invalid',
-    notification_secret_store_failed: 'notification_secret_store_failed',
-    unexpected_error: 'unexpected_error',
-  }[reason || ''] ?? '-';
+  return getFailureReasonLabel(reason);
 }
 
 function formatTime(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  const normalizedValue = typeof value === 'number' && value < 100000000000 ? value * 1000 : value;
-  const date = new Date(normalizedValue);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatBusinessTime(value);
 }
 
 function payloadText(value?: NotificationDeliveryRow['payload_json']) {
@@ -543,7 +486,7 @@ export default function NotificationsPage() {
       setBackfillConfirmOpen(false);
       setBackfillConfirmationInput('');
       setSelectedBackfillChannelIds([]);
-      message.success(`backfill run #${run.id} completed`);
+      message.success('密钥迁移任务已完成');
       await Promise.all([load(), loadDryRun(), loadBackfillRuns()]);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'unknown error';
@@ -707,7 +650,7 @@ export default function NotificationsPage() {
       render: (value: string) => <Typography.Text code ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text>,
     },
     {
-      title: 'Dry Run',
+      title: '检查结果',
       dataIndex: 'dryRunStatus',
       width: 130,
       render: dryRunStatusTag,
@@ -728,42 +671,42 @@ export default function NotificationsPage() {
 
   const backfillRunItemColumns: ColumnsType<NotificationSecretBackfillRunItem> = [
     {
-      title: 'Channel ID',
+      title: '通道编号（高级）',
       dataIndex: 'channel_id',
       width: 100,
     },
     {
-      title: 'Type',
+      title: '通道类型',
       dataIndex: 'channel_type',
       width: 110,
       render: (value?: string | null) => value ? <Tag color="blue">{channelTypeLabel(value)}</Tag> : '-',
     },
     {
-      title: 'Item Status',
+      title: '处理状态',
       dataIndex: 'item_status',
       width: 120,
       render: backfillItemStatusTag,
     },
     {
-      title: 'Reason',
+      title: '原因',
       dataIndex: 'failure_reason',
       width: 190,
       render: backfillFailureReasonLabel,
     },
     {
-      title: 'Before',
+      title: '迁移前',
       dataIndex: 'before_secret_storage_status',
       width: 150,
       render: secretStorageStatusTag,
     },
     {
-      title: 'After',
+      title: '迁移后',
       dataIndex: 'after_secret_storage_status',
       width: 150,
       render: secretStorageStatusTag,
     },
     {
-      title: 'Endpoint',
+      title: '通道地址',
       dataIndex: 'endpoint_masked',
       width: 220,
       ellipsis: true,
@@ -778,9 +721,7 @@ export default function NotificationsPage() {
       render: (value: string, row) => (
         <div>
           <strong>{value}</strong>
-          <span className="table-subtext">
-            {row.alert_title || '未关联告警'} {row.alert_id ? `/ #${row.alert_id}` : ''}
-          </span>
+          <span className="table-subtext">{row.alert_title || '未关联告警'}</span>
         </div>
       ),
     },
@@ -802,7 +743,7 @@ export default function NotificationsPage() {
       render: deliveryStatusTag,
     },
     {
-      title: 'HTTP',
+      title: '响应状态',
       dataIndex: 'response_code',
       width: 90,
       render: (value?: number) => value ?? '-',
@@ -812,7 +753,7 @@ export default function NotificationsPage() {
       dataIndex: 'failure_type',
       width: 130,
       ellipsis: true,
-      render: (value?: string | null) => nullableText(value),
+      render: (value?: string | null) => getFailureReasonLabel(value),
     },
     {
       title: '失败原因',
@@ -836,22 +777,6 @@ export default function NotificationsPage() {
       dataIndex: 'retry_count',
       width: 100,
       render: (value?: number) => nullableText(value),
-    },
-    {
-      title: 'Retry Of',
-      dataIndex: 'retry_of_delivery_id',
-      width: 110,
-      render: (value?: number | null) => nullableText(value),
-    },
-    {
-      title: '响应',
-      dataIndex: 'response_body',
-      ellipsis: true,
-      render: (value?: string) => (
-        <Typography.Text code ellipsis>
-          {responseText(value)}
-        </Typography.Text>
-      ),
     },
     {
       title: '发送时间',
@@ -897,122 +822,133 @@ export default function NotificationsPage() {
         className="form-hint"
         type="info"
         showIcon
-        message="告警手动触发通知后会在这里显示"
+        message="通知中心用于查看通道状态和手动触发后的发送记录；系统不会在这里自动扩大通知范围。"
       />
+      <NextStepHint description="先确认通知通道已启用；发送失败时查看失败原因，必要时重新配置通道地址后再重试。" />
 
-      <Card
-        size="small"
-        className="form-hint"
-        title="密钥回填 Dry Run"
-        extra={
-          <Space>
-            <Button
-              type="primary"
-              disabled={selectedBackfillChannelIds.length === 0 || selectedBackfillChannelIds.length > 50}
-              onClick={() => setBackfillConfirmOpen(true)}
-            >
-              执行选中迁移
-            </Button>
-            <Button icon={<ReloadOutlined />} onClick={() => loadDryRun()} loading={dryRunLoading}>
-              刷新 dry-run
-            </Button>
-            <Button onClick={showLegacyChannels}>查看 legacy 通道</Button>
-          </Space>
-        }
-      >
-        <Alert
-          className="form-hint"
-          type="info"
-          showIcon
-          message="这里只展示 legacy plaintext 通道的理论迁移资格，不执行 backfill，不清理历史数据。"
-        />
-        <Space className="form-hint" wrap>
-          <Select
-            style={{ width: 140 }}
-            value={dryRunEnabled}
-            options={CHANNEL_ENABLED_OPTIONS}
-            onChange={(value) => void updateDryRunEnabled(value)}
-          />
-          <Select
-            style={{ width: 160 }}
-            value={dryRunChannelType}
-            options={DELIVERY_CHANNEL_TYPE_OPTIONS}
-            onChange={(value) => void updateDryRunChannelType(value)}
-          />
-          <InputNumber
-            min={1}
-            max={500}
-            precision={0}
-            placeholder="limit"
-            value={dryRunLimit ?? undefined}
-            onChange={(value) => setDryRunLimit(typeof value === 'number' ? value : null)}
-          />
-          <Button type="primary" onClick={applyDryRunFilters} loading={dryRunLoading}>
-            查询
-          </Button>
-          <Button onClick={resetDryRunFilters}>查看全部</Button>
-        </Space>
-        <Space className="form-hint" wrap>
-          <Tag>通道总数 {dryRun?.summary.totalChannels ?? 0}</Tag>
-          <Tag color="warning">legacy {dryRun?.summary.legacyPlaintext ?? 0}</Tag>
-          <Tag color="success">理论可迁移 {dryRun?.summary.migrationEligible ?? 0}</Tag>
-          <Tag color="error">阻塞 {dryRun?.summary.blocked ?? 0}</Tag>
-          <Tag color="blue">已加密 {dryRun?.summary.encrypted ?? 0}</Tag>
-          <Tag>missing {dryRun?.summary.missing ?? 0}</Tag>
-          <Tag>endpoint 缺失 {dryRun?.blockReasons.endpoint_missing ?? 0}</Tag>
-          <Tag>endpoint 无效 {dryRun?.blockReasons.endpoint_invalid ?? 0}</Tag>
-          <Tag>类型不支持 {dryRun?.blockReasons.unsupported_channel_type ?? 0}</Tag>
-          {dryRun?.truncated ? <Tag color="warning">明细已按 limit 截断</Tag> : <Tag>明细未截断</Tag>}
-          {selectedBackfillChannelIds.length > 50 ? <Tag color="error">单次最多 50 个通道</Tag> : null}
-        </Space>
-        <Table<NotificationSecretBackfillDryRunItem>
-          rowKey="id"
-          size="small"
-          loading={dryRunLoading}
-          dataSource={dryRun?.items ?? []}
-          columns={dryRunColumns}
-          rowSelection={{
-            selectedRowKeys: selectedBackfillChannelIds,
-            onChange: (keys) => setSelectedBackfillChannelIds(keys.map((key) => Number(key))),
-            getCheckboxProps: (record) => ({
-              disabled: !(record.migrationEligible === true && record.dryRunStatus === 'migration_eligible'),
-            }),
-          }}
-          scroll={{ x: 1230 }}
-          pagination={{ pageSize: 5 }}
-          locale={{ emptyText: '暂无 dry-run 明细' }}
-        />
-        {lastBackfillRun ? (
-          <Card size="small" className="form-hint" title={`最近执行 run #${lastBackfillRun.id}`}>
-            <Space wrap className="form-hint">
-              {backfillRunStatusTag(lastBackfillRun.status)}
-              <Tag>requested {lastBackfillRun.total_requested}</Tag>
-              <Tag color="success">eligible {lastBackfillRun.eligible_count}</Tag>
-              <Tag color="success">migrated {lastBackfillRun.migrated_count}</Tag>
-              <Tag>skipped {lastBackfillRun.skipped_count}</Tag>
-              <Tag color={lastBackfillRun.failed_count ? 'error' : 'default'}>failed {lastBackfillRun.failed_count}</Tag>
-            </Space>
-            <Table<NotificationSecretBackfillRunItem>
-              rowKey="id"
-              size="small"
-              dataSource={lastBackfillRun.items ?? []}
-              columns={backfillRunItemColumns}
-              pagination={{ pageSize: 5 }}
-              scroll={{ x: 1040 }}
-            />
-          </Card>
-        ) : null}
-        {backfillRuns.length > 0 ? (
-          <Space className="form-hint" wrap>
-            <Typography.Text type="secondary">最近 runs</Typography.Text>
-            {backfillRuns.map((run) => (
-              <Tag key={run.id}>
-                #{run.id} {run.status} / migrated {run.migrated_count}
-              </Tag>
-            ))}
-          </Space>
-        ) : null}
-      </Card>
+      <Collapse
+        className="advanced-details-collapse form-hint"
+        items={[
+          {
+            key: 'secret-backfill',
+            label: '管理员工具：通知密钥迁移检查',
+            children: (
+              <Card
+                size="small"
+                title="通知密钥迁移检查"
+                extra={
+                  <Space>
+                    <Button
+                      type="primary"
+                      disabled={selectedBackfillChannelIds.length === 0 || selectedBackfillChannelIds.length > 50}
+                      onClick={() => setBackfillConfirmOpen(true)}
+                    >
+                      执行选中迁移
+                    </Button>
+                    <Button icon={<ReloadOutlined />} onClick={() => loadDryRun()} loading={dryRunLoading}>
+                      刷新检查结果
+                    </Button>
+                    <Button onClick={showLegacyChannels}>查看待重配通道</Button>
+                  </Space>
+                }
+              >
+                <Alert
+                  className="form-hint"
+                  type="info"
+                  showIcon
+                  message="该工具只面向管理员排查历史通道密钥，不属于日常通知发送流程。"
+                />
+                <Space className="form-hint" wrap>
+                  <Select
+                    style={{ width: 140 }}
+                    value={dryRunEnabled}
+                    options={CHANNEL_ENABLED_OPTIONS}
+                    onChange={(value) => void updateDryRunEnabled(value)}
+                  />
+                  <Select
+                    style={{ width: 160 }}
+                    value={dryRunChannelType}
+                    options={DELIVERY_CHANNEL_TYPE_OPTIONS}
+                    onChange={(value) => void updateDryRunChannelType(value)}
+                  />
+                  <InputNumber
+                    min={1}
+                    max={500}
+                    precision={0}
+                    placeholder="明细上限"
+                    value={dryRunLimit ?? undefined}
+                    onChange={(value) => setDryRunLimit(typeof value === 'number' ? value : null)}
+                  />
+                  <Button type="primary" onClick={applyDryRunFilters} loading={dryRunLoading}>
+                    查询
+                  </Button>
+                  <Button onClick={resetDryRunFilters}>查看全部</Button>
+                </Space>
+                <Space className="form-hint" wrap>
+                  <Tag>通道总数 {dryRun?.summary.totalChannels ?? 0}</Tag>
+                  <Tag color="warning">待重配 {dryRun?.summary.legacyPlaintext ?? 0}</Tag>
+                  <Tag color="success">可迁移 {dryRun?.summary.migrationEligible ?? 0}</Tag>
+                  <Tag color="error">阻塞 {dryRun?.summary.blocked ?? 0}</Tag>
+                  <Tag color="blue">已加密 {dryRun?.summary.encrypted ?? 0}</Tag>
+                  <Tag>未配置 {dryRun?.summary.missing ?? 0}</Tag>
+                  <Tag>通道地址缺失 {dryRun?.blockReasons.endpoint_missing ?? 0}</Tag>
+                  <Tag>通道地址无效 {dryRun?.blockReasons.endpoint_invalid ?? 0}</Tag>
+                  <Tag>类型不支持 {dryRun?.blockReasons.unsupported_channel_type ?? 0}</Tag>
+                  {dryRun?.truncated ? <Tag color="warning">明细已按上限截断</Tag> : <Tag>明细未截断</Tag>}
+                  {selectedBackfillChannelIds.length > 50 ? <Tag color="error">单次最多 50 个通道</Tag> : null}
+                </Space>
+                <Table<NotificationSecretBackfillDryRunItem>
+                  rowKey="id"
+                  size="small"
+                  loading={dryRunLoading}
+                  dataSource={dryRun?.items ?? []}
+                  columns={dryRunColumns}
+                  rowSelection={{
+                    selectedRowKeys: selectedBackfillChannelIds,
+                    onChange: (keys) => setSelectedBackfillChannelIds(keys.map((key) => Number(key))),
+                    getCheckboxProps: (record) => ({
+                      disabled: !(record.migrationEligible === true && record.dryRunStatus === 'migration_eligible'),
+                    }),
+                  }}
+                  scroll={{ x: 1230 }}
+                  pagination={{ pageSize: 5 }}
+                  locale={{ emptyText: '暂无迁移检查明细' }}
+                />
+                {lastBackfillRun ? (
+                  <Card size="small" className="form-hint" title="最近执行结果">
+                    <Space wrap className="form-hint">
+                      {backfillRunStatusTag(lastBackfillRun.status)}
+                      <Tag>请求 {lastBackfillRun.total_requested}</Tag>
+                      <Tag color="success">可执行 {lastBackfillRun.eligible_count}</Tag>
+                      <Tag color="success">已迁移 {lastBackfillRun.migrated_count}</Tag>
+                      <Tag>已跳过 {lastBackfillRun.skipped_count}</Tag>
+                      <Tag color={lastBackfillRun.failed_count ? 'error' : 'default'}>失败 {lastBackfillRun.failed_count}</Tag>
+                    </Space>
+                    <Table<NotificationSecretBackfillRunItem>
+                      rowKey="id"
+                      size="small"
+                      dataSource={lastBackfillRun.items ?? []}
+                      columns={backfillRunItemColumns}
+                      pagination={{ pageSize: 5 }}
+                      scroll={{ x: 1040 }}
+                    />
+                  </Card>
+                ) : null}
+                {backfillRuns.length > 0 ? (
+                  <Space className="form-hint" wrap>
+                    <Typography.Text type="secondary">最近执行</Typography.Text>
+                    {backfillRuns.map((run) => (
+                      <Tag key={run.id}>
+                        {getBackfillRunStatus(run.status).label} / 已迁移 {run.migrated_count}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : null}
+              </Card>
+            ),
+          },
+        ]}
+      />
 
       <Typography.Title level={5} className="section-subtitle">
         通知通道
@@ -1059,20 +995,6 @@ export default function NotificationsPage() {
           value={deliveryChannelType}
           options={DELIVERY_CHANNEL_TYPE_OPTIONS}
           onChange={setDeliveryChannelType}
-        />
-        <InputNumber
-          min={1}
-          precision={0}
-          placeholder="Channel ID"
-          value={deliveryChannelId ?? undefined}
-          onChange={(value) => setDeliveryChannelId(typeof value === 'number' ? value : null)}
-        />
-        <InputNumber
-          min={1}
-          precision={0}
-          placeholder="Alert ID"
-          value={deliveryAlertId ?? undefined}
-          onChange={(value) => setDeliveryAlertId(typeof value === 'number' ? value : null)}
         />
         <Button type="primary" onClick={applyDeliveryFilters}>
           查询
@@ -1159,7 +1081,7 @@ export default function NotificationsPage() {
           className="form-hint"
           type="warning"
           showIcon
-          message="该操作会把选中的 legacy plaintext endpoint 加密迁移到 secret storage。成功后会清空这些通道的 endpoint_url。该操作不会清理历史 config_json 或 notification_deliveries。"
+          message="该操作会把选中的历史明文通道地址迁移到加密存储。成功后会清空这些通道的明文地址；不会清理历史配置或发送记录。"
         />
         <Typography.Paragraph>
           已选择 {selectedBackfillChannelIds.length} 个通道。请输入确认短语以继续。
@@ -1180,29 +1102,23 @@ export default function NotificationsPage() {
               <Descriptions.Item label="通道">
                 {activeDelivery.channel_name || '-'} / {channelTypeLabel(activeDelivery.channel_type || 'webhook')}
               </Descriptions.Item>
-              <Descriptions.Item label="关联告警">
-                {activeDelivery.alert_title || '-'} {activeDelivery.alert_id ? `/#${activeDelivery.alert_id}` : ''}
-              </Descriptions.Item>
+              <Descriptions.Item label="关联告警">{activeDelivery.alert_title || '-'}</Descriptions.Item>
               <Descriptions.Item label="HTTP 状态">{activeDelivery.response_code ?? '-'}</Descriptions.Item>
-              <Descriptions.Item label="失败类型">{nullableText(activeDelivery.failure_type)}</Descriptions.Item>
+              <Descriptions.Item label="失败类型">{getFailureReasonLabel(activeDelivery.failure_type)}</Descriptions.Item>
               <Descriptions.Item label="失败原因">{nullableText(activeDelivery.failure_reason)}</Descriptions.Item>
               <Descriptions.Item label="是否可重试">{retryableTag(activeDelivery.retryable)}</Descriptions.Item>
               <Descriptions.Item label="重试次数">{nullableText(activeDelivery.retry_count)}</Descriptions.Item>
-              <Descriptions.Item label="Retry Of">{nullableText(activeDelivery.retry_of_delivery_id)}</Descriptions.Item>
               <Descriptions.Item label="发送时间">{formatTime(activeDelivery.created_at)}</Descriptions.Item>
             </Descriptions>
-            <div>
-              <Typography.Text strong>已脱敏响应预览</Typography.Text>
-              <Typography.Paragraph className="json-preview">
-                <pre>{responseText(activeDelivery.response_body)}</pre>
-              </Typography.Paragraph>
-            </div>
-            <div>
-              <Typography.Text strong>已脱敏载荷预览</Typography.Text>
-              <Typography.Paragraph className="json-preview">
-                <pre>{payloadText(activeDelivery.payload_json)}</pre>
-              </Typography.Paragraph>
-            </div>
+            <AdvancedDetailsCollapse
+              title="技术详情"
+              items={[
+                { label: 'alertId', value: activeDelivery.alert_id, code: true },
+                { label: 'retryOfDeliveryId', value: activeDelivery.retry_of_delivery_id, code: true },
+                { label: 'responseBody', value: responseText(activeDelivery.response_body), code: true },
+                { label: 'payloadJson', value: payloadText(activeDelivery.payload_json), code: true },
+              ]}
+            />
           </Space>
         )}
       </Drawer>

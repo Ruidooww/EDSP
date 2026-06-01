@@ -70,8 +70,8 @@ const navItems: MenuProps['items'] = [
   { key: 'alerts', icon: <BellOutlined />, label: '告警中心' },
   { key: 'rules', icon: <AuditOutlined />, label: '规则中心' },
   { key: 'notifications', icon: <NotificationOutlined />, label: '通知中心' },
-  { key: 'aiAgents', icon: <RobotOutlined />, label: '智能体分析' },
-  { key: 'reports', icon: <FileExcelOutlined />, label: '报表' },
+  { key: 'aiAgents', icon: <RobotOutlined />, label: 'AI 运营建议' },
+  { key: 'reports', icon: <FileExcelOutlined />, label: '报表交付' },
   { key: 'settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
@@ -147,7 +147,7 @@ function targetLabel(type?: string, id?: string) {
   if (!id) {
     return label;
   }
-  return /^\d+$/.test(id) ? `${label} #${id}` : `${label}：${id}`;
+  return /^\d+$/.test(id) ? `${label}记录` : `${label}：${id}`;
 }
 
 function parseAuditDetail(value: AuditLogRow['detail_json']) {
@@ -277,8 +277,8 @@ function LoginPage({ onLogin }: { onLogin: (profile: UserProfile) => void }) {
 
       <Card className="login-card">
         <div className="login-card-title">
-          <Typography.Title level={3}>登录后台</Typography.Title>
-          <span>使用演示管理员账号进入安全运营工作台</span>
+          <Typography.Title level={3}>登录工作台</Typography.Title>
+          <span>使用管理员账号进入安全运营工作台</span>
         </div>
         <Form<LoginFormValues>
           form={form}
@@ -448,9 +448,9 @@ function App() {
                 平台正常
               </Tag>
               <Tag className="status-chip warning" icon={<WarningFilled />}>
-                外部源待配置
+                外部接入待配置
               </Tag>
-              <Badge count={3} size="small">
+              <Badge dot>
                 <Button type="text" shape="circle" icon={<BellOutlined />} />
               </Badge>
               <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenuClick }} trigger={['click']}>
@@ -483,12 +483,12 @@ function App() {
             <Space wrap>
               {(profile?.roles || ['ADMIN']).map((role) => (
                 <Tag key={role} color="blue">
-                  {role}
+                  {role === 'ADMIN' ? '管理员' : role}
                 </Tag>
               ))}
             </Space>
           </Descriptions.Item>
-          <Descriptions.Item label="登录模式">演示登录</Descriptions.Item>
+          <Descriptions.Item label="登录模式">本地账号登录</Descriptions.Item>
         </Descriptions>
       </Modal>
 

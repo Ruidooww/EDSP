@@ -16,6 +16,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Form,
   Input,
   InputNumber,
@@ -34,6 +35,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../api';
+import NextStepHint from '../components/NextStepHint';
 import type {
   CollectionTaskRow,
   DataSourceRow,
@@ -42,6 +44,14 @@ import type {
   Severity,
   StandardEventRow,
 } from '../types';
+import {
+  formatBusinessTime,
+  getCollectionRunTypeLabel,
+  getDataSourceTypeLabel,
+  getEventTypeLabel,
+  getSeverityColor,
+  getSeverityLabel,
+} from '../utils/businessDisplay';
 
 interface TaskFormValues {
   dataSourceId: number;
@@ -55,20 +65,7 @@ interface TaskFormValues {
 }
 
 function formatTime(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  const normalizedValue = typeof value === 'number' && value < 100000000000 ? value * 1000 : value;
-  const date = new Date(normalizedValue);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatBusinessTime(value);
 }
 
 function statusTag(value?: string) {
@@ -91,19 +88,7 @@ function statusTag(value?: string) {
 }
 
 function sourceTypeLabel(value?: string) {
-  const labels: Record<string, string> = {
-    sqlserver: 'SQL Server',
-    mssql: 'SQL Server',
-    mysql: 'MySQL',
-    postgresql: 'PostgreSQL',
-    oracle: 'Oracle',
-    http_api: 'HTTP API',
-    webhook: 'Webhook',
-    file_import: '文件导入',
-    security_platform: '安全平台',
-    database: '数据库',
-  };
-  return value ? labels[value] || value : '-';
+  return getDataSourceTypeLabel(value);
 }
 
 function taskTypeLabel(value?: string) {
@@ -128,23 +113,11 @@ function scheduleLabel(row: CollectionTaskRow) {
 }
 
 function severityColor(value?: Severity | string) {
-  return {
-    critical: 'red',
-    high: 'red',
-    medium: 'orange',
-    low: 'gold',
-    info: 'cyan',
-  }[value ?? ''] ?? 'default';
+  return getSeverityColor(value);
 }
 
 function severityLabel(value?: Severity | string) {
-  return {
-    critical: '严重',
-    high: '高危',
-    medium: '中危',
-    low: '低危',
-    info: '提示',
-  }[value ?? ''] ?? (value || '-');
+  return getSeverityLabel(value);
 }
 
 function taskDefaults(source?: DataSourceRow): Partial<TaskFormValues> {
@@ -222,7 +195,7 @@ export default function CollectionTasksPage() {
     try {
       JSON.parse(values.configJson || '{}');
     } catch {
-      message.error('任务参数必须是合法 JSON');
+      message.error('高级参数格式不正确，请检查后再保存');
       return;
     }
 
@@ -335,12 +308,12 @@ export default function CollectionTasksPage() {
       dataIndex: 'task_name',
       render: (value: string, row) => (
         <div>
-          <strong>{value || `任务 #${row.task_id || '-'}`}</strong>
+          <strong>{value || '任务待命名'}</strong>
           <span className="table-subtext">{row.data_source_name || '-'}</span>
         </div>
       ),
     },
-    { title: '类型', dataIndex: 'run_type', width: 100 },
+    { title: '类型', dataIndex: 'run_type', width: 100, render: getCollectionRunTypeLabel },
     { title: '读取', dataIndex: 'read_count', align: 'right', width: 90 },
     { title: '成功', dataIndex: 'success_count', align: 'right', width: 90 },
     { title: '失败', dataIndex: 'failed_count', align: 'right', width: 90 },
@@ -368,20 +341,20 @@ export default function CollectionTasksPage() {
       dataIndex: 'data_source_name',
       render: (value: string, row) => (
         <div>
-          <strong>{value || row.source_system || '-'}</strong>
-          <span className="table-subtext">{row.source_system || '-'}</span>
+          <strong>{value || '来源待确认'}</strong>
+          <span className="table-subtext">{row.source_system ? '技术来源已记录' : '来源待确认'}</span>
         </div>
       ),
     },
-    { title: '外部 ID', dataIndex: 'external_id', width: 180, render: (value) => value || '-' },
-    { title: '事件类型', dataIndex: 'event_type', width: 150, render: (value) => value || '-' },
+    { title: '外部事件编号', dataIndex: 'external_id', width: 180, render: (value) => value || '-' },
+    { title: '事件类型', dataIndex: 'event_type', width: 150, render: getEventTypeLabel },
     { title: '发生时间', dataIndex: 'occurred_at', width: 150, render: formatTime },
     { title: '状态', dataIndex: 'status', width: 120, render: statusTag },
     {
       title: '标准事件',
       dataIndex: 'standard_event_id',
       width: 110,
-      render: (value?: number) => (value ? <Tag color="success">#{value}</Tag> : <Tag>待标准化</Tag>),
+      render: (value?: number) => (value ? <Tag color="success">已标准化</Tag> : <Tag>待标准化</Tag>),
     },
   ];
 
@@ -391,9 +364,9 @@ export default function CollectionTasksPage() {
       dataIndex: 'event_type',
       render: (value: string, row) => (
         <div>
-          <strong>{value}</strong>
+          <strong>{getEventTypeLabel(value)}</strong>
           <span className="table-subtext">
-            {row.source_system} / {row.external_id || '-'}
+            {row.external_id ? `外部编号 ${row.external_id}` : '外部编号待确认'}
           </span>
         </div>
       ),
@@ -421,7 +394,7 @@ export default function CollectionTasksPage() {
       <div className="ops-heading">
         <div>
           <h3 className="ant-typography">采集任务</h3>
-          <span>统一管理心跳检测、增量采集、实时接收、游标和原始事件标准化链路</span>
+          <span>统一管理外部系统接收、周期采集、实时推送和事件标准化链路</span>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>
@@ -433,6 +406,12 @@ export default function CollectionTasksPage() {
         </Space>
       </div>
 
+      <NextStepHint
+        type="info"
+        message="演示建议"
+        description="先确认数据源可用，再创建采集任务；执行后可在运行记录和事件明细中查看接收、标准化和失败情况。"
+      />
+
       <div className="collection-summary-grid">
         <Card className="ops-card">
           <Statistic title="采集任务" value={tasks.length} prefix={<DatabaseOutlined />} />
@@ -441,10 +420,10 @@ export default function CollectionTasksPage() {
           <Statistic title="运行中" value={runningCount} prefix={<CloudSyncOutlined />} valueStyle={{ color: '#137c72' }} />
         </Card>
         <Card className="ops-card">
-          <Statistic title="原始事件" value={rawEvents.length} prefix={<FieldTimeOutlined />} />
+          <Statistic title="接收事件" value={rawEvents.length} prefix={<FieldTimeOutlined />} />
         </Card>
         <Card className="ops-card">
-          <Statistic title="标准事件" value={standardEvents.length} prefix={<SafetyCertificateOutlined />} />
+          <Statistic title="标准化事件" value={standardEvents.length} prefix={<SafetyCertificateOutlined />} />
         </Card>
       </div>
 
@@ -484,7 +463,7 @@ export default function CollectionTasksPage() {
               },
               {
                 key: 'raw',
-                label: 'Raw 事件',
+                label: '接收事件明细',
                 children: (
                   <Table<RawEventRow>
                     rowKey="id"
@@ -493,13 +472,13 @@ export default function CollectionTasksPage() {
                     columns={rawColumns}
                     pagination={{ pageSize: 8 }}
                     scroll={{ x: 1020 }}
-                    locale={{ emptyText: '暂无 Raw 事件。采集适配器写入原始事件后会展示在这里。' }}
+                    locale={{ emptyText: '暂无接收事件。采集任务读取外部系统数据后会展示在这里。' }}
                   />
                 ),
               },
               {
                 key: 'standard',
-                label: '标准事件',
+                label: '标准化事件',
                 children: (
                   <Table<StandardEventRow>
                     rowKey="id"
@@ -508,7 +487,7 @@ export default function CollectionTasksPage() {
                     columns={standardColumns}
                     pagination={{ pageSize: 8 }}
                     scroll={{ x: 1040 }}
-                    locale={{ emptyText: '暂无标准事件。Raw 事件标准化后会进入统一事件模型。' }}
+                    locale={{ emptyText: '暂无标准化事件。接收事件完成标准化后会进入统一事件模型。' }}
                   />
                 ),
               },
@@ -599,9 +578,20 @@ export default function CollectionTasksPage() {
               />
             </Form.Item>
           </Space>
-          <Form.Item name="configJson" label="任务参数 JSON">
-            <Input.TextArea rows={4} placeholder='例如：{"cursorField":"updated_at","batchSize":500}' />
-          </Form.Item>
+          <Collapse
+            className="advanced-details-collapse"
+            items={[
+              {
+                key: 'advanced-task-params',
+                label: '高级参数',
+                children: (
+                  <Form.Item name="configJson" label="任务参数（实施人员使用）">
+                    <Input.TextArea rows={4} placeholder='例如：{"cursorField":"updated_at","batchSize":500}' />
+                  </Form.Item>
+                ),
+              },
+            ]}
+          />
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch />
           </Form.Item>

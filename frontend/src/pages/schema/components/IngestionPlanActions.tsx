@@ -94,7 +94,7 @@ export default function IngestionPlanActions({
       )}
       {canShadowValidate && (
         <Button size="small" icon={<SafetyCertificateOutlined />} loading={busy} onClick={() => onShadowValidate(row)}>
-          Shadow Precheck
+          试运行前校验
         </Button>
       )}
       {canShadowRun && (
@@ -114,7 +114,7 @@ export default function IngestionPlanActions({
       )}
       {isActive && activation && (
         <Button size="small" icon={<SyncOutlined />} loading={busy} onClick={() => onSyncOnce(row, activation)}>
-          手动同步一次
+          立即同步一次
         </Button>
       )}
       {isActive && activation && (

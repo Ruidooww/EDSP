@@ -1,11 +1,11 @@
-import { Button, Card, Descriptions, Form, InputNumber, Select, Space, Switch, Tag, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Form, InputNumber, Select, Space, Switch, Tag, message } from 'antd';
 
 export default function SettingsPage() {
   const [form] = Form.useForm();
 
   async function saveSettings() {
     await form.validateFields();
-    message.success('系统设置已保存到当前工作台');
+    message.info('当前版本仅展示推荐运行参数，暂未写入系统配置。');
   }
 
   return (
@@ -13,18 +13,24 @@ export default function SettingsPage() {
       <div className="ops-heading">
         <div>
           <h3 className="ant-typography">系统设置</h3>
-          <span>配置平台运行、采集默认值、安全策略和通知默认行为</span>
+          <span>查看平台运行建议、采集默认值、安全策略和通知默认行为</span>
         </div>
         <Button type="primary" onClick={saveSettings}>
-          保存设置
+          预览设置
         </Button>
       </div>
 
       <div className="settings-grid">
         <Card className="ops-card" title="平台信息">
+          <Alert
+            className="form-hint"
+            type="info"
+            showIcon
+            message="这里展示的是交付演示参数。正式系统配置保存接口开放后，才会写入后端配置。"
+          />
           <Descriptions bordered column={1} size="small">
             <Descriptions.Item label="系统名称">数据安全预警分析平台</Descriptions.Item>
-            <Descriptions.Item label="后端架构">Java 21 / Spring Boot 微服务</Descriptions.Item>
+            <Descriptions.Item label="服务形态">本地化部署的模块化服务</Descriptions.Item>
             <Descriptions.Item label="运行模式">
               <Tag color="blue">本地化部署</Tag>
             </Descriptions.Item>

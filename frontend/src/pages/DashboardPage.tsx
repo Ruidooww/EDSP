@@ -19,6 +19,14 @@ import type {
   OverviewLifecycleEventRow,
   OverviewNotificationDeliveryRow,
 } from '../types';
+import {
+  formatBusinessTime,
+  getAlertStatus,
+  getChannelTypeLabel,
+  getFailureReasonLabel,
+  getSeverityColor,
+  getSeverityLabel,
+} from '../utils/businessDisplay';
 
 type DashboardNavigationKey = 'alerts' | 'notifications' | 'sources' | 'aiAgents';
 
@@ -188,97 +196,27 @@ function formatDateTime(value?: string | number) {
 }
 
 function formatTime(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  const date = toDate(value);
-  if (!date) {
-    return String(value);
-  }
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatBusinessTime(value);
 }
 
 function severityLabel(severity?: string) {
-  switch (severity?.toLowerCase()) {
-    case 'critical':
-    case 'high':
-      return '高危';
-    case 'medium':
-      return '中危';
-    case 'low':
-      return '低危';
-    case 'info':
-    case 'tip':
-      return '提示';
-    default:
-      return severity || '未分级';
-  }
+  return getSeverityLabel(severity);
 }
 
 function severityColor(severity?: string) {
-  switch (severityLabel(severity)) {
-    case '高危':
-      return 'red';
-    case '中危':
-      return 'orange';
-    case '低危':
-      return 'gold';
-    case '提示':
-      return 'cyan';
-    default:
-      return 'default';
-  }
+  return getSeverityColor(severity);
 }
 
 function alertStatusLabel(status?: string) {
-  switch (status?.toLowerCase()) {
-    case 'open':
-    case 'pending':
-      return '未处理';
-    case 'acknowledged':
-      return '已确认';
-    case 'closed':
-    case 'resolved':
-    case 'done':
-      return '已关闭';
-    case 'processing':
-    case 'running':
-      return '处理中';
-    default:
-      return status || '-';
-  }
+  return getAlertStatus(status).label;
 }
 
 function alertStatusColor(status?: string) {
-  switch (status?.toLowerCase()) {
-    case 'open':
-    case 'pending':
-      return 'error';
-    case 'acknowledged':
-      return 'success';
-    case 'closed':
-    case 'resolved':
-    case 'done':
-      return 'default';
-    case 'processing':
-    case 'running':
-      return 'processing';
-    default:
-      return 'default';
-  }
+  return getAlertStatus(status).color;
 }
 
 function channelTypeLabel(value?: string) {
-  return {
-    webhook: 'Webhook',
-    wecom: '企业微信',
-    feishu: '飞书',
-  }[value || ''] ?? (value || '-');
+  return getChannelTypeLabel(value);
 }
 
 function lifecycleActionLabel(value?: string) {
@@ -298,7 +236,7 @@ function lifecycleActionLabel(value?: string) {
 }
 
 function lifecycleAlertTitle(row: OverviewLifecycleEventRow) {
-  return row.alertTitle ?? row.alert_title ?? `告警 #${row.alertId ?? row.alert_id ?? '-'}`;
+  return row.alertTitle ?? row.alert_title ?? '告警待命名';
 }
 
 function lifecycleOperator(row: OverviewLifecycleEventRow) {
@@ -314,7 +252,7 @@ function deliveryCreatedAt(row: OverviewNotificationDeliveryRow) {
 }
 
 function deliveryFailureTypeLabel(value?: string | null) {
-  return value || '-';
+  return getFailureReasonLabel(value);
 }
 
 const alertColumns: ColumnsType<OverviewAlertRow> = [
@@ -349,7 +287,7 @@ const lifecycleColumns: ColumnsType<OverviewLifecycleEventRow> = [
     render: (_, row) => (
       <div>
         <strong>{lifecycleAlertTitle(row)}</strong>
-        <span className="table-subtext">#{row.alertId ?? row.alert_id ?? '-'}</span>
+        <span className="table-subtext">告警记录已关联</span>
       </div>
     ),
   },
@@ -378,7 +316,7 @@ const failedDeliveryColumns: ColumnsType<OverviewNotificationDeliveryRow> = [
     render: (title: string, row) => (
       <div>
         <strong>{title}</strong>
-        <span className="table-subtext">{row.alert_title || row.channel_name || `Delivery #${row.id}`}</span>
+        <span className="table-subtext">{row.alert_title || row.channel_name || '通知记录待命名'}</span>
       </div>
     ),
   },
@@ -429,7 +367,7 @@ function FailureTypeSummary({ data }: { data: Record<string, number> }) {
       {rows.map(([type, count]) => (
         <span key={type}>
           <i className="dot orange" />
-          {type}
+          {getFailureReasonLabel(type)}
           <b>{count}</b>
         </span>
       ))}
@@ -628,7 +566,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
             size="small"
             loading={loading}
             pagination={false}
-            locale={{ emptyText: '暂无生命周期事件' }}
+            locale={{ emptyText: '暂无处置动态' }}
           />
         </Card>
       </section>
@@ -679,7 +617,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
               数据源管理
             </Button>
             <Button block icon={<RobotOutlined />} onClick={() => onNavigate?.('aiAgents')}>
-              AI 智能体分析
+              AI 运营建议
             </Button>
             <div className="stat-list">
               <span><WarningFilled /> 待处置 <b>{openAlerts}</b></span>

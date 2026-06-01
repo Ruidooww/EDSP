@@ -12,6 +12,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Drawer,
   Empty,
   Form,
@@ -29,6 +30,9 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../api';
+import AdvancedDetailsCollapse from '../components/AdvancedDetailsCollapse';
+import BusinessStatusTag from '../components/BusinessStatusTag';
+import NextStepHint from '../components/NextStepHint';
 import type {
   AlertGenerationRunResult,
   AlertLifecycleAction,
@@ -40,6 +44,14 @@ import type {
   NotificationChannelRow,
   NotificationDeliveryRow,
 } from '../types';
+import {
+  formatBusinessTime,
+  getAlertStatus,
+  getDeliveryStatus,
+  getEventTypeLabel,
+  getSeverityColor,
+  getSeverityLabel,
+} from '../utils/businessDisplay';
 
 interface AlertNotificationFormValues {
   channelId: number;
@@ -54,60 +66,23 @@ interface AlertLifecycleFormValues {
 type AlertStatusFilter = 'all' | 'open' | 'acknowledged' | 'closed';
 
 function severityLabel(value?: string) {
-  return {
-    critical: '严重',
-    high: '高危',
-    medium: '中危',
-    low: '低危',
-    info: '提示',
-  }[value ?? ''] ?? (value || '-');
+  return getSeverityLabel(value);
 }
 
 function severityColor(value?: string) {
-  return {
-    critical: 'red',
-    high: 'red',
-    medium: 'orange',
-    low: 'gold',
-    info: 'cyan',
-  }[value ?? ''] ?? 'default';
+  return getSeverityColor(value);
 }
 
 function statusLabel(value?: string) {
-  return {
-    open: '开放',
-    acknowledged: '已确认',
-    processing: '处理中',
-    resolved: '已确认',
-    closed: '已关闭',
-  }[value ?? ''] ?? (value || '-');
+  return getAlertStatus(value).label;
 }
 
 function statusColor(value?: string) {
-  return {
-    open: 'warning',
-    acknowledged: 'success',
-    processing: 'processing',
-    resolved: 'success',
-    closed: 'default',
-  }[value ?? ''] ?? 'default';
+  return getAlertStatus(value).color;
 }
 
 function formatTime(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  const normalizedValue = typeof value === 'number' && value < 100000000000 ? value * 1000 : value;
-  const date = new Date(normalizedValue);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatBusinessTime(value);
 }
 
 function detailText(value?: AlertRow['detail_json'] | AlertRow['detail']) {
@@ -165,7 +140,15 @@ function notificationChannelTypeLabel(value?: string) {
 }
 
 function timelineAction(row: AlertTimelineRow) {
-  return row.action ?? row.eventType ?? row.event_type ?? '-';
+  const value = row.action ?? row.eventType ?? row.event_type;
+  return {
+    acknowledge: '确认告警',
+    acknowledged: '确认告警',
+    assign: '指派处理',
+    assigned: '指派处理',
+    close: '关闭告警',
+    closed: '关闭告警',
+  }[value ?? ''] ?? '生命周期更新';
 }
 
 function timelineOperator(row: AlertTimelineRow) {
@@ -181,13 +164,16 @@ function timelineCreatedAt(row: AlertTimelineRow) {
 }
 
 function deliveryStatusColor(status?: string) {
-  if (status === 'success') {
-    return 'success';
-  }
-  if (status === 'failed' || status === 'error') {
-    return 'error';
-  }
-  return 'processing';
+  return getDeliveryStatus(status).color;
+}
+
+function alertSourceLabel(row: AlertRow) {
+  const source = row.sourceSystem || row.source_system;
+  return source || '来源待确认';
+}
+
+function alertTypeLabel(row: AlertRow) {
+  return getEventTypeLabel(row.alertType || row.alert_type);
 }
 
 function compactText(value?: string | number | null, width = 140) {
@@ -273,7 +259,7 @@ export default function AlertsPage() {
         decisionId: values.decisionId,
       });
       const action = result.action === 'existing' ? '已存在' : '已创建';
-      message.success(`告警${action}，ID：${result.id ?? '-'}，decisionId：${result.decisionId ?? values.decisionId}`);
+      message.success(`告警${action}，可在列表中查看处置进展。`);
       form.resetFields();
       await load();
     } finally {
@@ -289,7 +275,7 @@ export default function AlertsPage() {
 
   function openNotificationModal(row: AlertRow) {
     if (row.status !== 'open') {
-      message.warning('只有 open alert 可以手动发送通知');
+      message.warning('只有开放状态的告警可以手动发送通知');
       return;
     }
     setNotificationRow(row);
@@ -430,7 +416,7 @@ export default function AlertsPage() {
         <div className="alert-title-cell">
           <strong>{title}</strong>
           <span className="table-subtext alert-subtitle-cell">
-            {row.sourceSystem || row.source_system || 'unknown'} / {row.alertType || row.alert_type || 'generic'}
+            {alertSourceLabel(row)} / {alertTypeLabel(row)}
           </span>
         </div>
       ),
@@ -448,8 +434,6 @@ export default function AlertsPage() {
       render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
     },
     { title: '规则', width: 220, ellipsis: true, render: (_, row) => compactText(ruleName(row), 200) },
-    { title: 'Decision ID', width: 120, render: (_, row) => compactText(decisionId(row), 100) },
-    { title: 'Standard Event', width: 150, render: (_, row) => compactText(standardEventId(row), 130) },
     { title: '指派给', width: 130, ellipsis: true, render: (_, row) => compactText(assignedTo(row), 110) },
     { title: '用户', dataIndex: 'actor', width: 150, ellipsis: true, render: (value) => compactText(value, 130) },
     {
@@ -497,7 +481,10 @@ export default function AlertsPage() {
           className="form-hint"
           type="info"
           showIcon
-          message="本阶段只处理 alert 生命周期：确认、指派、关闭与 open alert 手动发送通知；不自动发送通知，不做重试、升级、通知编排。"
+          message="告警处置支持确认、指派、关闭和手动通知。系统不会在本页面自动发送通知。"
+        />
+        <NextStepHint
+          description="优先处理高危和开放状态告警。打开详情后查看来源、主体、资产、证据和处置建议，再选择确认、指派或关闭。"
         />
         <Space className="form-hint" wrap>
           <Typography.Text type="secondary">状态筛选</Typography.Text>
@@ -507,34 +494,63 @@ export default function AlertsPage() {
             onChange={setStatusFilter}
             options={[
               { value: 'all', label: '全部' },
-              { value: 'open', label: 'Open' },
-              { value: 'acknowledged', label: 'Acknowledged' },
-              { value: 'closed', label: 'Closed' },
+              { value: 'open', label: '开放' },
+              { value: 'acknowledged', label: '已确认' },
+              { value: 'closed', label: '已关闭' },
             ]}
           />
         </Space>
-        <Card size="small" className="section-card" title="手动生成告警">
-          <Form form={form} layout="inline" onFinish={generateAlert}>
-            <Form.Item
-              name="decisionId"
-              label="Decision ID"
-              rules={[{ required: true, message: '请输入 matched alert_decision 的 ID' }]}
-            >
-              <InputNumber min={1} precision={0} placeholder="123" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={generating}>
-              从决策生成告警
-            </Button>
-          </Form>
-        </Card>
+        <Collapse
+          className="advanced-details-collapse form-hint"
+          items={[
+            {
+              key: 'manual-alert-generation',
+              label: '高级工具：从规则决策生成告警',
+              children: (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">
+                    用于管理员对已命中的规则决策补生成告警。系统正式同步链路会自动处理新命中的决策。
+                  </Typography.Text>
+                  <Form form={form} layout="inline" onFinish={generateAlert}>
+                    <Form.Item
+                      name="decisionId"
+                      label="规则决策编号（高级）"
+                      rules={[{ required: true, message: '请输入规则决策编号' }]}
+                    >
+                      <InputNumber min={1} precision={0} placeholder="例如：123" />
+                    </Form.Item>
+                    <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={generating}>
+                      生成告警
+                    </Button>
+                  </Form>
+                </Space>
+              ),
+            },
+          ]}
+        />
         <Table<AlertRow>
           className="alerts-table"
           rowKey={alertId}
           loading={loading}
           dataSource={rows}
           columns={columns}
-          scroll={{ x: 2200 }}
-          locale={{ emptyText: '暂无告警。可先在规则评估页生成 matched alert_decisions，再按 Decision ID 手动生成告警。' }}
+          scroll={{ x: 1900 }}
+          expandable={{
+            expandedRowRender: (row) => (
+              <AdvancedDetailsCollapse
+                title="告警技术详情"
+                items={[
+            { label: 'decisionId', value: decisionId(row), code: true },
+            { label: 'standardEventId', value: standardEventId(row), code: true },
+            { label: 'ruleId', value: ruleId(row), code: true },
+                  { label: 'sourceSystem', value: row.sourceSystem || row.source_system, code: true },
+                  { label: 'alertType', value: row.alertType || row.alert_type, code: true },
+                  { label: 'externalId', value: row.externalId || row.external_id, code: true },
+                ]}
+              />
+            ),
+          }}
+          locale={{ emptyText: '暂无匹配告警。当前筛选条件下没有告警，可切换状态范围，或等待规则决策链路生成告警。' }}
         />
       </Card>
       <Drawer
@@ -551,37 +567,38 @@ export default function AlertsPage() {
               <Tag color={severityColor(activeRow.severity)}>{severityLabel(activeRow.severity)}</Tag>
               <Tag color={statusColor(activeRow.status)}>{statusLabel(activeRow.status)}</Tag>
             </Space>
-            <div className="detail-grid">
-              <span>Decision ID</span>
-              <strong>{decisionId(activeRow) ?? '-'}</strong>
-              <span>Standard Event</span>
-              <strong>{standardEventId(activeRow) ?? '-'}</strong>
-              <span>Rule</span>
-              <strong>{ruleName(activeRow)}</strong>
-              <span>Rule ID</span>
-              <strong>{ruleId(activeRow) ?? '-'}</strong>
-              <span>Assigned To</span>
-              <strong>{assignedTo(activeRow) || '-'}</strong>
-              <span>Source</span>
-              <strong>{activeRow.sourceSystem || activeRow.source_system || '-'}</strong>
-              <span>External ID</span>
-              <strong>{activeRow.externalId || activeRow.external_id || '-'}</strong>
-              <span>Event Type</span>
-              <strong>{activeRow.alertType || activeRow.alert_type || '-'}</strong>
-              <span>Actor</span>
-              <strong>{activeRow.actor || '-'}</strong>
-              <span>Asset</span>
-              <strong>{activeRow.assetRef || activeRow.asset_ref || '-'}</strong>
-              <span>Subject</span>
-              <strong>{activeRow.subjectRef || activeRow.subject_ref || '-'}</strong>
-              <span>Occurred At</span>
-              <strong>{formatTime(activeRow.occurredAt || activeRow.occurred_at)}</strong>
-              <span>Updated At</span>
-              <strong>{formatTime(updatedAt(activeRow))}</strong>
+            <div className="business-summary-grid">
+              {[
+                ['来源系统', alertSourceLabel(activeRow)],
+                ['事件类型', alertTypeLabel(activeRow)],
+                ['涉及主体', activeRow.actor || activeRow.subjectRef || activeRow.subject_ref || '-'],
+                ['涉及资产', activeRow.assetRef || activeRow.asset_ref || '-'],
+                ['相关规则', ruleName(activeRow)],
+                ['指派处理', assignedTo(activeRow) || '暂未指派'],
+                ['发生时间', formatTime(activeRow.occurredAt || activeRow.occurred_at)],
+                ['更新时间', formatTime(updatedAt(activeRow))],
+              ].map(([label, value]) => (
+                <div className="business-summary-item" key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
             </div>
-            <Typography.Paragraph className="json-preview">
-              <pre>{detailText(activeRow.detail || activeRow.detail_json)}</pre>
-            </Typography.Paragraph>
+            <NextStepHint
+              description="请先确认告警是否真实，再指派处理人跟进。若确认已处置，可关闭告警；如属于误报，在备注中说明原因。"
+            />
+            <AdvancedDetailsCollapse
+              title="高级字段"
+              items={[
+                { label: 'decisionId', value: decisionId(activeRow), code: true },
+                { label: 'standardEventId', value: standardEventId(activeRow), code: true },
+                { label: 'ruleId', value: ruleId(activeRow), code: true },
+                { label: 'sourceSystem', value: activeRow.sourceSystem || activeRow.source_system, code: true },
+                { label: 'externalId', value: activeRow.externalId || activeRow.external_id, code: true },
+                { label: 'alertType', value: activeRow.alertType || activeRow.alert_type, code: true },
+                { label: 'detailJson', value: detailText(activeRow.detail || activeRow.detail_json), code: true },
+              ]}
+            />
             <Typography.Title level={5}>生命周期时间线</Typography.Title>
             {timeline.length > 0 ? (
               <Timeline
@@ -592,7 +609,7 @@ export default function AlertsPage() {
                     <Space direction="vertical" size={2}>
                       <Space wrap>
                         <Tag>{timelineAction(item)}</Tag>
-                        <Typography.Text>{timelineOperator(item)}</Typography.Text>
+                        <Typography.Text>{timelineOperator(item) === '-' ? '系统记录' : timelineOperator(item)}</Typography.Text>
                         {timelineAssignee(item) ? (
                           <Typography.Text type="secondary">指派给 {timelineAssignee(item)}</Typography.Text>
                         ) : null}
@@ -634,7 +651,7 @@ export default function AlertsPage() {
             <Form form={notificationForm} layout="vertical" onFinish={sendNotification}>
               <Form.Item
                 name="channelId"
-                label="Notification Channel"
+                label="通知通道"
                 rules={[{ required: true, message: '请选择一个已启用的通知通道' }]}
               >
                 <Select
@@ -686,7 +703,7 @@ export default function AlertsPage() {
                   title: '状态',
                   dataIndex: 'status',
                   width: 90,
-                  render: (value) => <Tag color={deliveryStatusColor(value)}>{value || '-'}</Tag>,
+                  render: (value) => <Tag color={deliveryStatusColor(value)}>{getDeliveryStatus(value).label}</Tag>,
                 },
                 {
                   title: '发送时间',
@@ -727,15 +744,15 @@ export default function AlertsPage() {
             <Form form={lifecycleForm} layout="vertical" onFinish={submitLifecycle} initialValues={{ operatorName: 'admin' }}>
               <Form.Item
                 name="operatorName"
-                label="Operator"
-                rules={[{ required: true, message: '请输入 operatorName' }]}
+                hidden
+          rules={[{ required: true, message: '请输入操作者' }]}
               >
                 <Input placeholder="admin" />
               </Form.Item>
               {lifecycleAction === 'assign' ? (
                 <Form.Item
                   name="assignee"
-                  label="Assignee"
+                  label="指派给"
                   rules={[{ required: true, whitespace: true, message: '请输入 assignee' }]}
                 >
                   <Input placeholder="例如：admin 或 oncall-user" />
@@ -743,7 +760,7 @@ export default function AlertsPage() {
               ) : null}
               <Form.Item
                 name="note"
-                label="Note"
+                label="处置说明"
                 rules={
                   lifecycleAction === 'close'
                     ? [{ required: true, whitespace: true, message: '关闭告警必须填写 note' }]

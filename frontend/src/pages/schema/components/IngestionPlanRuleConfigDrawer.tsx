@@ -2,6 +2,7 @@ import { Alert, Button, Drawer, Form, Input, Select, Segmented, Space, Table, Ty
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import type { IngestionPlanMappingRuleUpdateRequest } from '../../../types';
+import { STANDARD_FIELD_LABELS } from '../utils/ingestionPlanLabels';
 import type { NormalizedPlanMapping } from '../utils/normalizeIngestionPlan';
 
 type RuleKind = 'none' | 'trim' | 'lower' | 'upper' | 'defaultIfBlank' | 'valueMap';
@@ -57,6 +58,10 @@ function nextRowId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function fieldLabel(field?: string) {
+  return field ? STANDARD_FIELD_LABELS[field] || field : '-';
+}
+
 export default function IngestionPlanRuleConfigDrawer({
   open,
   mapping,
@@ -109,37 +114,37 @@ export default function IngestionPlanRuleConfigDrawer({
 
   function validateValueMap() {
     if (rows.length > 200) {
-      message.error('valueMap supports at most 200 entries.');
+      message.error('值映射最多支持 200 条。');
       return false;
     }
     for (const row of rows) {
       if (!row.sourceValue) {
-        message.error('valueMap source value is required.');
+        message.error('请输入来源值。');
         return false;
       }
       if (!row.mappedValue) {
-        message.error('valueMap mapped value is required.');
+        message.error('请输入转换后的值。');
         return false;
       }
       if (row.sourceValue.length > 200) {
-        message.error('valueMap source value must be 200 characters or fewer.');
+        message.error('来源值不能超过 200 个字符。');
         return false;
       }
       if (row.mappedValue.length > 500) {
-        message.error('valueMap mapped value must be 500 characters or fewer.');
+        message.error('转换后的值不能超过 500 个字符。');
         return false;
       }
     }
     if (duplicateKeys.size) {
-      message.error('valueMap source values must be unique.');
+      message.error('来源值不能重复。');
       return false;
     }
     if (onMissing === 'useDefault' && !missingDefaultValue) {
-      message.error('defaultValue is required when onMissing is useDefault.');
+      message.error('请选择兜底值时必须填写默认值。');
       return false;
     }
     if (missingDefaultValue.length > 500) {
-      message.error('defaultValue must be 500 characters or fewer.');
+      message.error('默认值不能超过 500 个字符。');
       return false;
     }
     return true;
@@ -150,7 +155,7 @@ export default function IngestionPlanRuleConfigDrawer({
       return;
     }
     if (active) {
-      message.warning('Active plans cannot be edited directly.');
+      message.warning('已启用方案不能直接修改，请先生成新草稿。');
       return;
     }
 
@@ -160,7 +165,7 @@ export default function IngestionPlanRuleConfigDrawer({
       transformRule = null;
     } else if (selectedRule === 'defaultIfBlank') {
       if (!defaultValue) {
-        message.error('defaultIfBlank value is required.');
+        message.error('请输入默认值。');
         return;
       }
       transformRule = `defaultIfBlank:${defaultValue}`;
@@ -188,7 +193,7 @@ export default function IngestionPlanRuleConfigDrawer({
 
   const columns: ColumnsType<ValueMapRow> = [
     {
-      title: 'Source value',
+      title: '来源值',
       dataIndex: 'sourceValue',
       render: (_, row) => (
         <Input
@@ -200,7 +205,7 @@ export default function IngestionPlanRuleConfigDrawer({
       ),
     },
     {
-      title: 'Mapped value',
+      title: '转换后的值',
       dataIndex: 'mappedValue',
       render: (_, row) => (
         <Input
@@ -215,7 +220,7 @@ export default function IngestionPlanRuleConfigDrawer({
       width: 88,
       render: (_, row) => (
         <Button danger type="text" onClick={() => removeRow(row.id)}>
-          Remove
+          移除
         </Button>
       ),
     },
@@ -223,16 +228,16 @@ export default function IngestionPlanRuleConfigDrawer({
 
   return (
     <Drawer
-      title="Configure transform rule"
+      title="配置字段转换规则"
       width={720}
       open={open}
       onClose={onClose}
       destroyOnClose
       extra={(
         <Space>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>取消</Button>
           <Button type="primary" loading={saving} disabled={active} onClick={save}>
-            Save rule
+            保存规则
           </Button>
         </Space>
       )}
@@ -241,43 +246,43 @@ export default function IngestionPlanRuleConfigDrawer({
         <Alert
           showIcon
           type="warning"
-          message="Active plan cannot be edited"
-          description="Create a new draft before changing mapping rules."
+          message="已启用方案不能直接修改"
+          description="请先生成新草稿，再调整字段转换规则。"
           style={{ marginBottom: 16 }}
         />
       )}
       <Alert
         showIcon
         type="info"
-        message="Rule changes are saved to plan_json.fieldMappingDetails."
-        description="Run Shadow Run again to verify the new rule before activation."
+        message="字段转换规则只影响当前推荐接入方案。"
+        description="保存后请重新执行试运行，验证通过后再启用方案。"
         style={{ marginBottom: 16 }}
       />
       <Form layout="vertical">
-        <Form.Item label="Mapping">
+        <Form.Item label="字段映射">
           <Space size={[8, 8]} wrap>
-            <Typography.Text code>{mapping?.sourceField || '-'}</Typography.Text>
-            <Typography.Text>to</Typography.Text>
-            <Typography.Text code>{mapping?.standardField || '-'}</Typography.Text>
+            <Typography.Text code>{fieldLabel(mapping?.sourceField)}</Typography.Text>
+            <Typography.Text>转换为</Typography.Text>
+            <Typography.Text code>{fieldLabel(mapping?.standardField)}</Typography.Text>
           </Space>
         </Form.Item>
-        <Form.Item label="Transform rule">
+        <Form.Item label="转换方式">
           <Segmented<RuleKind>
             value={selectedRule}
             onChange={setSelectedRule}
             options={[
-              { label: 'None', value: 'none' },
-              { label: 'Trim', value: 'trim' },
-              { label: 'Lower', value: 'lower' },
-              { label: 'Upper', value: 'upper' },
-              { label: 'Default', value: 'defaultIfBlank' },
-              { label: 'valueMap', value: 'valueMap' },
+              { label: '不转换', value: 'none' },
+              { label: '去除空格', value: 'trim' },
+              { label: '转小写', value: 'lower' },
+              { label: '转大写', value: 'upper' },
+              { label: '空值兜底', value: 'defaultIfBlank' },
+              { label: '值映射', value: 'valueMap' },
             ]}
           />
         </Form.Item>
 
         {selectedRule === 'defaultIfBlank' && (
-          <Form.Item label="Default value" required>
+          <Form.Item label="默认值" required>
             <Input
               value={defaultValue}
               maxLength={500}
@@ -292,8 +297,8 @@ export default function IngestionPlanRuleConfigDrawer({
               <Alert
                 showIcon
                 type="warning"
-                message="Empty values map"
-                description="All source values will follow onMissing behavior."
+                message="尚未配置值映射"
+                description="未列出的来源值会按照下方兜底策略处理。"
               />
             )}
             <Table<ValueMapRow>
@@ -308,20 +313,20 @@ export default function IngestionPlanRuleConfigDrawer({
               onClick={() => setRows((current) => [...current, { id: nextRowId(), sourceValue: '', mappedValue: '' }])}
               disabled={rows.length >= 200}
             >
-              Add mapping
+              新增映射
             </Button>
-            <Form.Item label="onMissing">
+            <Form.Item label="未匹配值处理">
               <Select<OnMissing>
                 value={onMissing}
                 options={[
-                  { label: 'keepOriginal', value: 'keepOriginal' },
-                  { label: 'useDefault', value: 'useDefault' },
+                  { label: '保留原值', value: 'keepOriginal' },
+                  { label: '使用默认值', value: 'useDefault' },
                 ]}
                 onChange={setOnMissing}
               />
             </Form.Item>
             {onMissing === 'useDefault' && (
-              <Form.Item label="defaultValue" required>
+              <Form.Item label="默认值" required>
                 <Input
                   value={missingDefaultValue}
                   maxLength={500}

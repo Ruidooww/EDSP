@@ -6,6 +6,7 @@ import {
   shadowValidationResultTag,
   STANDARD_FIELD_LABELS,
 } from '../utils/ingestionPlanLabels';
+import AdvancedDetailsCollapse from '../../../components/AdvancedDetailsCollapse';
 import type { NormalizedIngestionPlan } from '../utils/normalizeIngestionPlan';
 import IngestionPlanDetailSection from './IngestionPlanDetailSection';
 
@@ -60,7 +61,7 @@ export default function IngestionPlanShadowRunReportDrawer({
   const summary = report?.summary;
   return (
     <Drawer
-      title={plan ? `Shadow Run 试运行报告：${plan.candidateTable !== '-' ? plan.candidateTable : plan.name}` : 'Shadow Run 试运行报告'}
+      title={plan ? `试运行报告：${plan.candidateTable !== '-' ? plan.candidateTable : plan.name}` : '试运行报告'}
       width={960}
       open={Boolean(run)}
       onClose={onClose}
@@ -101,7 +102,7 @@ export default function IngestionPlanShadowRunReportDrawer({
           <IngestionPlanDetailSection title="阻断项">{renderTextTags(report?.blockers || [], '无')}</IngestionPlanDetailSection>
           <IngestionPlanDetailSection title="失败原因统计">{renderErrorsByType(report)}</IngestionPlanDetailSection>
 
-          <IngestionPlanDetailSection title="校验项">
+          <AdvancedDetailsCollapse title="技术校验项">
             {report?.checks?.length ? (
               <div style={{ display: 'grid', gap: 10 }}>
                 {report.checks.map((check, index) => (
@@ -119,7 +120,7 @@ export default function IngestionPlanShadowRunReportDrawer({
                 ))}
               </div>
             ) : '-'}
-          </IngestionPlanDetailSection>
+          </AdvancedDetailsCollapse>
 
           <IngestionPlanDetailSection title="样本预览">
             {report?.samples?.length ? (
@@ -133,9 +134,9 @@ export default function IngestionPlanShadowRunReportDrawer({
                     </Space>
                     {!!sample.errors?.length && <div>{renderTextTags(sample.errors)}</div>}
                     {!!sample.warnings?.length && <div>{renderTextTags(sample.warnings)}</div>}
-                    <Typography.Text type="secondary">源字段预览</Typography.Text>
+                    <Typography.Text type="secondary">来源字段预览</Typography.Text>
                     {renderRecord(sample.sourcePreview)}
-                    <Typography.Text type="secondary">标准事件预览</Typography.Text>
+                    <Typography.Text type="secondary">标准化事件预览</Typography.Text>
                     {renderRecord(sample.standardEventPreview)}
                   </div>
                 ))}
@@ -143,9 +144,9 @@ export default function IngestionPlanShadowRunReportDrawer({
             ) : '-'}
           </IngestionPlanDetailSection>
 
-          <IngestionPlanDetailSection title="预览策略">
+          <AdvancedDetailsCollapse title="预览策略">
             <Typography.Text style={{ wordBreak: 'break-word' }}>{formatUnknownValue(report?.previewPolicy) || '-'}</Typography.Text>
-          </IngestionPlanDetailSection>
+          </AdvancedDetailsCollapse>
         </div>
       )}
     </Drawer>

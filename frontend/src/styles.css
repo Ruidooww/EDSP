@@ -145,9 +145,9 @@ body {
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   height: 86px;
-  padding: 18px 18px 14px;
+  padding: 18px 14px 14px;
 }
 
 .brand-mark {
@@ -166,8 +166,9 @@ body {
 .brand h4.ant-typography {
   margin: 0;
   color: #1c1f26;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.1;
+  white-space: nowrap;
 }
 
 .brand span {

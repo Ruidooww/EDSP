@@ -1044,3 +1044,51 @@ Clean master before continuing.
 - Transform Runtime Smoke run: `https://github.com/Ruidooww/EDSP/actions/runs/26730448867`; job `https://github.com/Ruidooww/EDSP/actions/runs/26730448867/job/78773316655`; duration `1m58s`; artifact `transform-runtime-smoke-26730448867-1`.
 - Artifact safety: PR #20 runtime smoke artifact was inspected and contains nested `summary.json` only. No DB dump, complete raw row, source config, complete env, or secret-like content is included.
 - Recommended next stage: `Alert Notification Auto Delivery Readiness MVP`, focused on planning opt-in notification dispatch from existing alerts with strict idempotency and delivery safety boundaries.
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `EDSP AI Agent Platform Foundation With Docker Compose MVP`
+- Latest feature merge commit: `ddd6687 merge: ai agent platform foundation compose mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for ai agent platform foundation compose mvp`
+- Stage branch: `codex/ai-agent-platform-foundation-compose-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/21`
+- Stage result: introduced a read-only AI agent platform foundation with an optional Python service, Java gateway, frontend entry, and safe run audit table, without changing alert lifecycle or notification delivery behavior.
+- Python service: added `ai-agent-service` with FastAPI endpoints `GET /health`, `GET /agent/providers`, and `POST /agent/runs`.
+- Provider registry: supports `local-openai-compatible`, `local-ollama-compatible` (placeholder), `cloud-openai-compatible`, and `fallback-template`.
+- Compose integration: added `ai-agent-service` as an independent optional service in `docker-compose.yml` with `profiles: ["ai"]`, localhost-bound host port, and no default startup dependency for existing services.
+- Java gateway: added `AiAgentController`, `AiAgentRunService`, `AiAgentContextService`, `PythonAiAgentClient`, and `AiAgentProperties` in `edsp-core`.
+- Frontend: added `frontend/src/pages/AiAgentPage.tsx` and navigation entries from sidebar and dashboard shortcut.
+- Audit migration: added `V18__ai_agent_platform_foundation.sql` with `ai_agent_runs` for safe summaries only.
+- Safe aggregation boundary: only allowlisted aggregate counts are sent to Python (`rawEventCount`, `standardEventCount`, decision/alert/sync/notification counts); no raw row or payload body is sent.
+- Prompt/response safety: Python prompt guard rejects forbidden fields (`payload_json`, `normalized_json`, `extra_json`, `config_json`, `endpoint`, `secret`, `token`, `password`); response guard blocks URL/SQL/secret-like leakage patterns; Java client applies a second-pass safety check and fallback.
+- Secret boundary: provider discovery returns only safe booleans (`baseUrlConfigured`, `apiKeyConfigured`, `modelConfigured`) and does not return raw endpoint URLs or API keys.
+- Runtime fallback boundary: on Python timeout/5xx/invalid response/unavailable provider, Java returns safe fallback sections (`source=java-fallback`) to avoid blank UI.
+- No action boundary: this stage does not close/reopen/acknowledge/assign alerts, does not write `notification_deliveries`, and does not call notification dispatch services.
+- No cross-module scope drift: no changes in `edsp-alert`, `edsp-transform`, `edsp-transform-service`, or `edsp-transform-contract`.
+- Verification (local):
+  - `python -m compileall .` passed.
+  - `python -m pytest` passed (`7 passed`).
+  - `mvn -pl edsp-core -am test` passed (`190 tests`, `0 fail`, `1 skipped`).
+  - `npm.cmd run build` passed (only existing Vite chunk-size warning).
+  - `docker compose -p edsp config --quiet` passed.
+  - `docker compose --profile ai -p edsp_ai_agent_smoke config --quiet` passed.
+  - `docker compose --profile ai -p edsp_ai_agent_smoke build ai-agent-service` passed.
+  - `docker compose --profile ai -p edsp_ai_agent_smoke up -d ai-agent-service` passed.
+  - `Invoke-RestMethod http://127.0.0.1:18090/health` returned `{\"status\":\"ok\",\"service\":\"ai-agent-service\",\"version\":\"foundation-compose-mvp\"}`.
+  - `docker compose -p edsp_ai_agent_smoke stop ai-agent-service` passed.
+  - `git diff --check` passed.
+- PR checks:
+  - EDSP CI: success.
+  - Transform Runtime Smoke: success.
+- PR runtime smoke sample:
+  - Run URL: `https://github.com/Ruidooww/EDSP/actions/runs/26739397706`
+  - Job URL: `https://github.com/Ruidooww/EDSP/actions/runs/26739397706/job/78799558538`
+  - Duration: `2m10s`
+  - Artifact: `transform-runtime-smoke-26739397706-1`
+  - Digest: `sha256:0cad3559eba07dea2503529f08126c9537e9c08aac65eb97fbb7cae8ff01d039`
+  - Artifact safety: inspected and contains nested `summary.json` only; no DB dump, complete raw row, source config, complete env, or secret-like content.
+- Known risks:
+  - This stage is foundation-only and does not include RAG, autonomous alert actions, auto notification dispatch, file reading, or arbitrary SQL execution.
+  - Local/cloud provider availability depends on external model service readiness; fallback is intentionally retained as a default-safe path.
+  - Credentials are environment-only and not managed through UI in this stage.
+- Recommended next stage: `AI Agent Runtime Smoke Verification MVP` (full compose with `--profile ai`, end-to-end backend-to-python calls, provider mode checks, and artifact safety validation).

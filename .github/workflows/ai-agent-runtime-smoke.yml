@@ -1,0 +1,55 @@
+﻿name: AI Agent Runtime Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "ai-agent-service/**"
+      - "backend/edsp-core/src/main/java/com/edsp/core/controller/AiAgentController.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/service/AiAgentRunService.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/service/AiAgentContextService.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/service/PythonAiAgentClient.java"
+      - "backend/edsp-core/src/main/java/com/edsp/core/config/AiAgentProperties.java"
+      - "backend/edsp-core/src/main/resources/db/migration/V18__ai_agent_platform_foundation.sql"
+      - "docker-compose.yml"
+      - "scripts/verify-ai-agent-runtime-smoke.ps1"
+      - "docs/ai-agent-runtime-smoke-observability.md"
+      - ".github/workflows/ai-agent-runtime-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ai-agent-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show tool versions
+        shell: pwsh
+        run: |
+          docker --version
+          docker compose version
+          python --version
+          $PSVersionTable.PSVersion
+
+      - name: Validate Docker Compose config
+        run: docker compose -p edsp config --quiet
+
+      - name: Run AI agent runtime smoke
+        shell: pwsh
+        run: ./scripts/verify-ai-agent-runtime-smoke.ps1 -CiMode -FrontendPort 18140 -AiAgentPort 18145 -MockPort 11435 -CollectLogsOnFailure -FinalAction Stop -ReadyAttempts 90
+
+      - name: Upload AI agent runtime smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-agent-runtime-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: logs/ai-agent-runtime-smoke/**
+          retention-days: 7
+          if-no-files-found: warn

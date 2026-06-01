@@ -1092,3 +1092,46 @@ Clean master before continuing.
   - Local/cloud provider availability depends on external model service readiness; fallback is intentionally retained as a default-safe path.
   - Credentials are environment-only and not managed through UI in this stage.
 - Recommended next stage: `AI Agent Runtime Smoke Verification MVP` (full compose with `--profile ai`, end-to-end backend-to-python calls, provider mode checks, and artifact safety validation).
+
+## Current Stage Status (latest)
+- Current stable branch: `master`
+- Current stage: `AI Agent Runtime Smoke Verification MVP`
+- Latest feature merge commit: `afd6563 merge: ai agent runtime smoke verification mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for ai agent runtime smoke verification mvp`
+- Stage branch: `codex/ai-agent-runtime-smoke-verification-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/22`
+- Stage result: added a non-required AI agent runtime smoke workflow and a local verification script for the optional Docker Compose AI profile. The smoke verifies the real frontend proxy, gateway, core, Python service, provider modes, safe fallback, recent-run API, persistence summary, and artifact safety boundaries.
+- Workflow: added `.github/workflows/ai-agent-runtime-smoke.yml` with `workflow_dispatch` and scoped `pull_request` triggers. The workflow remains a non-required PR check and uploads only restricted smoke artifacts.
+- Smoke asset: added `scripts/verify-ai-agent-runtime-smoke.ps1` and `docs/ai-agent-runtime-smoke-observability.md`. The script uses an isolated Compose project, localhost-bound ports, a host-local OpenAI-compatible mock, safe summary checks, and `docker compose stop` cleanup without deleting containers or volumes.
+- Runtime coverage: verified provider discovery, local OpenAI-compatible success, cloud OpenAI-compatible mock success, safe `fallback-template`, Java fallback behavior, persisted safe summary fields, recent runs API success, and prompt / response safety boundaries.
+- Controller hardening: `AiAgentController.recent(...)` now declares `@RequestParam(name = "limit", defaultValue = "10")`, so the production build compiled without Java parameter metadata still binds `GET /api/core/ai-agents/runs/recent?limit=10` correctly.
+- Failure semantics: the smoke now fails when the frontend-visible recent-runs API fails. Direct database inspection is diagnostics-only and cannot convert an API regression into a passing result.
+- Artifact boundary: success artifacts contain `summary.json` only. Controlled failures may additionally contain `restricted-diagnostics.json`. Artifacts do not contain full Docker logs, raw rows, payload bodies, source config, complete env, endpoint URLs, API keys, passwords, tokens, JDBC URLs, stack traces, or secret-like values. Failure messages are redacted.
+- Scope boundary: this stage does not change alert lifecycle behavior, notification delivery behavior, autonomous actions, RAG, file reading, arbitrary SQL execution, frontend business behavior, transform runtime behavior, migration, default Compose startup, or required checks.
+- Verification (local):
+  - `mvn -pl edsp-core -am test` passed (`191 tests`, `0 failures`, `1 skipped`).
+  - `npm.cmd run build` passed with only the existing Vite chunk-size warning.
+  - `docker compose -p edsp config --quiet` passed.
+  - `docker compose --profile ai -p edsp_ai_agent_smoke config --quiet` passed.
+  - Local AI agent runtime smoke passed with the real recent-runs API route.
+  - Controlled preflight failure artifact safety verification passed.
+  - `git diff --check` passed.
+- PR checks:
+  - EDSP CI: success.
+  - Transform Runtime Smoke: success.
+  - AI Agent Runtime Smoke: success.
+- AI Agent Runtime Smoke sample:
+  - Run URL: `https://github.com/Ruidooww/EDSP/actions/runs/26753429713`
+  - Job URL: `https://github.com/Ruidooww/EDSP/actions/runs/26753429713/job/78846984905`
+  - Duration: `1m47s`
+  - Artifact: `ai-agent-runtime-smoke-26753429713-1`
+  - Artifact safety: inspected and contains `summary.json` only. No DB dump, full Docker logs, raw row, payload body, source config, complete env, endpoint URL, API key, password, token, JDBC URL, stack trace, or secret-like content is included.
+- Transform Runtime Smoke sample:
+  - Run URL: `https://github.com/Ruidooww/EDSP/actions/runs/26753429688`
+  - Job URL: `https://github.com/Ruidooww/EDSP/actions/runs/26753429688/job/78846984782`
+  - Duration: `2m06s`
+- Known risks:
+  - Invalid non-empty `providerKey` currently requires a separate hardening stage so the gateway returns `400` without calling Python and without silently falling back.
+  - Provider-specific text summary storage remains JSON-text compatible; optional JSONB schema hardening should remain a separate migration stage if needed.
+  - Local and cloud providers still depend on external OpenAI-compatible service readiness.
+- Recommended next stage: `AI Agent Foundation Hardening MVP`, focused on invalid `providerKey -> 400`, no Python call, no fallback, and targeted regression coverage. Keep optional JSONB schema hardening separate unless explicitly scoped.

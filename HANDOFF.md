@@ -1198,3 +1198,56 @@ Suggested focus areas:
 - safer request/response boundary
 - provider/fallback behavior should remain auditable
 - no backend behavior expansion beyond contract hardening
+
+## Current Stage Status (latest)
+
+- Current stable branch: `master`
+- Current stage: `AI Agent Provider Configuration Readiness UI MVP`
+- Latest feature merge commit: `da610c3 merge: ai agent provider configuration readiness ui mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for ai agent provider configuration readiness ui mvp`
+- Stage branch: `codex/ai-agent-provider-configuration-readiness-ui-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/25`
+- Stage result: added customer-facing AI provider readiness display and connection testing without adding browser-side credential persistence, database credential persistence, migration, workflow, or Docker Compose changes.
+- Java gateway:
+  - added `GET /api/core/ai-agent-provider-configs`
+  - added `POST /api/core/ai-agent-provider-configs/{providerKey}/test`
+  - unknown or non-testable provider keys return `400 invalid_ai_provider_key`
+  - provider discovery returns safe readiness fields, masks, customer-facing display names, and safe messages only
+- Python AI agent service:
+  - added `POST /agent/providers/{provider_key}/test`
+  - OpenAI-compatible connection tests use the fixed minimal prompt `Return OK only.`
+  - provider tests return safe status and customer-facing messages without raw URL, raw header, raw request body, raw model response, stack trace, or secret values
+  - built-in `fallback-template` readiness test returns passed without external network access
+- Frontend:
+  - system settings now include a `大模型接入` readiness card with configuration status, enabled status, recent test result, connection test action, integration guide, and `前往 AI 运营建议` navigation
+  - the integration guide shows masked environment examples only; API key values remain `********`
+  - AI operation advice now loads readiness data from `/api/core/ai-agent-provider-configs`
+  - unavailable enterprise cloud models are disabled and shown with customer-facing setup guidance
+  - provider keys remain available only where required for API execution or default-collapsed technical details; default-visible labels remain customer-facing
+- Secret boundary:
+  - provider credentials remain deployment-environment-only in this stage
+  - no UI write endpoint was added
+  - no raw API key, bearer token, Authorization header, raw endpoint URL, raw prompt, or raw provider response is written to frontend storage, API responses, audit logs, or `ai_agent_runs`
+  - `frontend/src` storage scan found only the existing login token handling in `frontend/src/api.ts`; no AI provider credential storage was added
+- Scope boundary:
+  - no migration
+  - no `docker-compose.yml` changes
+  - no workflow changes
+  - no alert lifecycle or notification delivery behavior changes
+  - no RAG, autonomous actions, file reading, arbitrary SQL execution, or AI provider secure persistence
+- Verification (local):
+  - `mvn -pl edsp-core -am test` passed (`196 tests`, `0 failures`, `1 skipped`)
+  - `npm.cmd run build` passed with only the existing Vite chunk-size warning
+  - `python -m pytest -q` passed (`11 tests`, `4` FastAPI deprecation warnings)
+  - `docker compose -p edsp config --quiet` passed
+  - `docker compose --profile ai -p edsp config --quiet` passed
+  - `git diff --check` passed
+- PR checks:
+  - EDSP CI: success
+  - Transform Runtime Smoke: success
+  - AI Agent Runtime Smoke: success
+- Known risks:
+  - local and enterprise cloud provider availability still depends on external OpenAI-compatible service readiness
+  - credentials are intentionally not stored through the UI; secure persistence remains a separate explicitly scoped stage
+  - browser visual smoke was not run in the implementation session because the in-app browser control tool was unavailable; frontend build and CI passed
+- Recommended next stage: `AI Agent Provider Secure Persistence MVP`, focused on encrypted server-side provider credential storage, explicit write authorization, audit-safe updates, masked readback, and migration compatibility.

@@ -1,9 +1,10 @@
 import json
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
 
-from app.models import AgentRunRequest
+from app.models import AgentRunRequest, ProviderTestResponse
 from app.providers.base import Provider, ProviderUnavailable
 from app.safety.prompt_guard import build_safe_prompt
 from app.safety.response_guard import validate_sections
@@ -58,3 +59,51 @@ class OpenAiCompatibleProvider(Provider):
             return sections
         except Exception as exc:
             raise ProviderUnavailable("provider_unavailable") from exc
+
+    def test_connection(self, display_name: str) -> ProviderTestResponse:
+        descriptor = self.descriptor()
+        if not self.enabled:
+            return self._test_result(display_name, "failed", "模型配置未启用，请联系管理员检查部署环境变量。")
+        if not descriptor["baseUrlConfigured"] or not descriptor["modelConfigured"]:
+            return self._test_result(display_name, "failed", "模型接口未配置，请联系管理员检查部署环境变量。")
+        if self.provider_type == "cloud" and not descriptor["apiKeyConfigured"]:
+            return self._test_result(display_name, "failed", "模型接口未配置，请联系管理员检查部署环境变量。")
+        if not descriptor["enabled"]:
+            return self._test_result(display_name, "failed", "模型接口不可用，请检查接口地址和模型名称。")
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            response = httpx.post(
+                self.base_url,
+                headers=headers,
+                json={"model": self.model, "messages": [{"role": "user", "content": "Return OK only."}]},
+                timeout=10,
+            )
+            response.raise_for_status()
+            return self._test_result(display_name, "passed", "模型连接测试通过。")
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response is not None else 0
+            if status_code in {401, 403}:
+                message = "认证失败，请检查 API Key。"
+            elif status_code == 404:
+                message = "模型或接口路径不可用，请检查接口地址和模型名称。"
+            else:
+                message = "模型连接测试失败，请检查配置。"
+            return self._test_result(display_name, "failed", message)
+        except httpx.TimeoutException:
+            return self._test_result(display_name, "failed", "连接超时，请稍后重试或检查网络。")
+        except httpx.RequestError:
+            return self._test_result(display_name, "failed", "接口不可达，请检查接口地址。")
+        except Exception:
+            return self._test_result(display_name, "failed", "模型连接测试失败，请检查配置。")
+
+    def _test_result(self, display_name: str, status: str, message: str) -> ProviderTestResponse:
+        return ProviderTestResponse(
+            providerKey=self.key,
+            displayName=display_name,
+            status=status,
+            message=message,
+            testedAt=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )

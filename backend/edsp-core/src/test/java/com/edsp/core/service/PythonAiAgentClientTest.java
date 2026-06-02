@@ -103,4 +103,33 @@ class PythonAiAgentClientTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void providerTestResponseIsSanitized() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/agent/providers/cloud-openai-compatible/test", exchange -> {
+            var body = """
+                {"providerKey":"cloud-openai-compatible","displayName":"cloud-openai-compatible",
+                "status":"failed","message":"Authorization Bearer demo-key failed at https://model.example/path?api_key=demo-key",
+                "testedAt":"2026-06-02T00:00:00Z"}
+                """;
+            exchange.sendResponseHeaders(200, body.getBytes(StandardCharsets.UTF_8).length);
+            exchange.getResponseBody().write(body.getBytes(StandardCharsets.UTF_8));
+            exchange.close();
+        });
+        server.start();
+        try {
+            var client = new PythonAiAgentClient(
+                new ObjectMapper(), new AiAgentProperties("http://127.0.0.1:" + server.getAddress().getPort(), 1000, true)
+            );
+            var result = client.testProvider("cloud-openai-compatible");
+
+            assertEquals("failed", result.status());
+            assertEquals(false, result.message().toLowerCase().contains("demo-key"));
+            assertEquals(false, result.message().toLowerCase().contains("authorization"));
+            assertEquals(false, result.message().toLowerCase().contains("https://"));
+        } finally {
+            server.stop(0);
+        }
+    }
 }

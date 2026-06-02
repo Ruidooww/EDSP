@@ -5,7 +5,7 @@ import { apiGet, apiPost } from '../api';
 import AdvancedDetailsCollapse from '../components/AdvancedDetailsCollapse';
 import BusinessStatusTag from '../components/BusinessStatusTag';
 import NextStepHint from '../components/NextStepHint';
-import type { AiAgentProvider, AiAgentRecentRun, AiAgentRunResult } from '../types';
+import type { AiAgentProviderConfig, AiAgentRecentRun, AiAgentRunResult } from '../types';
 import {
   formatBusinessTime,
   getAiRunStatus,
@@ -29,8 +29,21 @@ const themes = [
   { value: 'notification_readiness', label: getThemeLabel('notification_readiness') },
 ];
 
+function providerReady(provider: AiAgentProviderConfig) {
+  if (provider.providerType === 'fallback') {
+    return true;
+  }
+  if (!provider.enabled || !provider.baseUrlConfigured || !provider.modelConfigured) {
+    return false;
+  }
+  if (provider.providerKey === 'cloud-openai-compatible') {
+    return provider.apiKeyConfigured;
+  }
+  return true;
+}
+
 export default function AiAgentPage() {
-  const [providers, setProviders] = useState<AiAgentProvider[]>([]);
+  const [providers, setProviders] = useState<AiAgentProviderConfig[]>([]);
   const [recent, setRecent] = useState<AiAgentRecentRun[]>([]);
   const [result, setResult] = useState<AiAgentRunResult>();
   const [loading, setLoading] = useState(false);
@@ -38,13 +51,18 @@ export default function AiAgentPage() {
 
   const load = async () => {
     const [providerRows, recentRows] = await Promise.all([
-      apiGet<AiAgentProvider[]>('/api/core/ai-agents/providers'),
+      apiGet<AiAgentProviderConfig[]>('/api/core/ai-agent-provider-configs'),
       apiGet<AiAgentRecentRun[]>('/api/core/ai-agents/runs/recent?limit=10'),
     ]);
     setProviders(providerRows);
     setRecent(recentRows);
-    if (!form.getFieldValue('providerKey')) {
-      form.setFieldValue('providerKey', providerRows.find((provider) => provider.enabled)?.key ?? 'fallback-template');
+    const currentProviderKey = form.getFieldValue('providerKey');
+    const currentProvider = providerRows.find((provider) => provider.providerKey === currentProviderKey);
+    if (!currentProviderKey || (currentProvider && !providerReady(currentProvider))) {
+      form.setFieldValue(
+        'providerKey',
+        providerRows.find((provider) => providerReady(provider))?.providerKey ?? 'fallback-template'
+      );
     }
   };
 
@@ -80,14 +98,24 @@ export default function AiAgentPage() {
       </div>
 
       <Alert type="info" showIcon message="智能体只读取聚合指标，不会修改告警状态，也不会发送通知。" />
+      {providers.some((provider) => provider.providerKey === 'cloud-openai-compatible' && !providerReady(provider)) ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: 12 }}
+          message="企业云模型尚未完成接入"
+          description="请先到系统设置的大模型接入区域完成部署环境变量配置并测试连接。安全模板生成仍可使用。"
+        />
+      ) : null}
 
       <Card className="ops-card ai-agent-run-panel">
         <Form form={form} layout="inline" initialValues={{ period: 'last_7_days', theme: 'security_overview' }} onFinish={run}>
           <Form.Item name="providerKey" label="分析模型" rules={[{ required: true }]}>
             <Select style={{ width: 230 }} options={providers.map((provider) => ({
-              value: provider.key,
-              label: getProviderLabel(provider.key, provider.enabled),
-              disabled: !provider.enabled,
+              value: provider.providerKey,
+              label: providerReady(provider) ? provider.displayName : `${provider.displayName}（请先完成接入）`,
+              disabled: !providerReady(provider),
+              title: provider.configureHint,
             }))} />
           </Form.Item>
           <Form.Item name="period" label="时间范围"><Select style={{ width: 150 }} options={periods} /></Form.Item>

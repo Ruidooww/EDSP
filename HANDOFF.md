@@ -1251,3 +1251,49 @@ Suggested focus areas:
   - credentials are intentionally not stored through the UI; secure persistence remains a separate explicitly scoped stage
   - browser visual smoke was not run in the implementation session because the in-app browser control tool was unavailable; frontend build and CI passed
 - Recommended next stage: `AI Agent Provider Secure Persistence MVP`, focused on encrypted server-side provider credential storage, explicit write authorization, audit-safe updates, masked readback, and migration compatibility.
+
+## Current Stage Status (latest)
+
+- Current stable branch: `master`
+- Current stage: `AI Agent Run History UI MVP`
+- Latest feature merge commit: `40e6382 merge: ai agent run history ui mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for ai agent run history ui mvp`
+- Stage branch: `codex/ai-agent-run-history-ui-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/26`
+- Stage result: added a customer-facing AI analysis history page and safe list/detail APIs backed by `ai_agent_runs`, without adding agent capabilities or exposing prompt and response bodies.
+- Java gateway:
+  - added `GET /api/core/ai-agents/runs`
+  - added `GET /api/core/ai-agents/runs/{id}`
+  - list filters support `status`, `source`, `providerKey`, `theme`, and `period`
+  - list `limit` is clamped to `1..100`
+  - detail responses use allowlisted metric keys, safe section titles, safe warning codes, safe error codes, and operational timestamps only
+- AI run persistence:
+  - existing AI execution now stores generated section titles alongside `sectionCount`
+  - generated section bodies are not stored in `ai_agent_runs`
+  - existing safe input summary behavior remains unchanged
+- Frontend:
+  - added sidebar navigation `AI 分析记录`
+  - added a `查看运行记录` action on the AI operation advice page
+  - added customer-facing filters, history table, safe detail drawer, and default-collapsed safe troubleshooting details
+  - old runs without persisted section titles remain compatible and display `暂无章节标题`
+- Safety boundary:
+  - history responses and UI do not expose raw prompt text, raw model response bodies, section body content, endpoint URLs, API keys, bearer tokens, secrets, `payload_json`, `normalized_json`, `extra_json`, or `config_json`
+  - no alert lifecycle mutation, notification dispatch, RAG, file reading, shell execution, or arbitrary SQL capability was added
+  - no migration, workflow, Docker Compose, `AGENTS.md`, or backend module ownership change was introduced
+- Verification (local):
+  - `mvn -pl edsp-core -am test` passed (`201 tests`, `0 failures`, `1 skipped`)
+  - `npm.cmd run build` passed with only the existing Vite chunk-size warning
+  - `python -m pytest` passed (`11 tests`, `4` FastAPI dependency deprecation warnings)
+  - `docker compose -p edsp config --quiet` passed
+  - `docker compose --profile ai -p edsp config --quiet` passed
+  - `git diff --check` passed
+  - local Docker/browser smoke passed after rebuilding `edsp-core` and `frontend`: sidebar entry, AI page entry button, list table, safe detail drawer, desktop layout, narrow layout, generated run `#11`, persisted safe section titles, and forbidden visible field scan
+- PR checks:
+  - EDSP CI: success
+  - Docker Compose build: success
+  - Transform Runtime Smoke: success
+  - AI Agent Runtime Smoke: success
+- Known risks:
+  - historical rows created before this stage do not contain section titles; the UI intentionally degrades to `暂无章节标题`
+  - local and enterprise cloud provider availability still depends on external OpenAI-compatible service readiness
+- Recommended next stage: `AI Agent Security Review / Prompt Injection Guard MVP`, focused on explicit policy categories, prompt injection corpus coverage, response safety fallback, no unsafe persistence, and audit-safe warning codes.

@@ -1482,3 +1482,46 @@ Suggested next-stage focus:
 - Do not expose raw payload, raw prompt, raw response, secrets, config JSON, normalized JSON, extra JSON, endpoint values, or authorization headers.
 - Verify prompt injection guard cannot be bypassed through retrieved context.
 - Keep RAG readiness separate from full vector database implementation unless explicitly approved.
+
+## Current Stage Status (latest)
+
+- Current stable branch: `master`
+- Current stage: `AI Agent RAG Readiness MVP`
+- Latest feature merge commit: `28af43c merge: ai agent rag readiness mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for ai agent rag readiness mvp`
+- Stage branch: `codex/ai-agent-rag-readiness-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/29`
+- Stage result: completed a docs-only safe RAG readiness assessment without implementing ingestion, retrieval, embeddings, vector storage, file upload, runtime APIs, migration, Docker Compose services, or workflow changes.
+- Candidate knowledge sources:
+  - allow reviewed public product docs, sanitized SOPs, sanitized rule explanations, sanitized alert handling playbooks, sanitized architecture docs, and non-secret API usage docs
+  - use a dedicated reviewed path such as `docs/knowledge-base/**` for a later curated-docs MVP
+  - forbid `.env`, secrets, raw source configs, database dumps, raw event payloads, private files, complete logs, notification endpoints, webhook URLs, authorization headers, payload JSON, config JSON, raw prompts, and raw model responses
+- RAG security contract:
+  - classify every future document as `public`, `internal-sanitized`, or `restricted`
+  - enforce ingestion allowlists, exclusion patterns, redaction before indexing, provenance metadata, and safe retrieval audit summaries
+  - treat retrieved text as untrusted input and preserve existing prompt, response, redaction, and Java persistence guards
+  - default to at most `5` retrieved chunks and `2,000` retrieved tokens per request in a later implementation
+  - fail closed when classification, provenance, redaction, or retrieval limits cannot be verified
+  - never allow retrieved text to trigger lifecycle mutation, notification dispatch, rule mutation, SQL execution, shell execution, file access, or raw payload retrieval
+- Storage assessment:
+  - keep `No RAG yet` as the current option
+  - prefer PostgreSQL `pgvector` as the later curated-docs candidate only after explicit migration approval
+  - do not use an external managed vector DB as the first EDSP RAG implementation
+- Scope boundary:
+  - no vector DB
+  - no embeddings
+  - no RAG runtime or RAG API endpoints
+  - no file ingestion or file upload
+  - no indexing job
+  - no migration
+  - no Docker Compose vector service
+  - no workflow changes
+- Verification:
+  - `mvn -pl edsp-core -am test` passed (`202 tests`, `0 failures`, `1 skipped`)
+  - `npm.cmd run build` passed with only the existing Vite chunk-size warning
+  - `docker compose -p edsp config --quiet` passed
+  - `git diff --check` passed
+  - docs-only boundary check passed: only `docs/ai-agent-rag-readiness.md`
+- Review:
+  - no unresolved P0 or P1 findings
+- Recommended next stage: `User Behavior Baseline Readiness MVP`, focused on safe entity-key assessment, aggregate feature candidates, privacy and data minimization, baseline windows, and a deterministic SQL/Java-first implementation path.

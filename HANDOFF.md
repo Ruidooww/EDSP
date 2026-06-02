@@ -1351,3 +1351,134 @@ Suggested focus areas:
   - policy detection remains deterministic pattern-based hardening, not a semantic model-security system
   - local and enterprise cloud provider availability still depends on external OpenAI-compatible service readiness
 - Recommended next stage: `AI Agent RAG Readiness MVP`, focused on retrieval boundaries, source allowlists, chunk metadata, citation-safe summaries, and keeping all AI actions read-only.
+
+## AI Agent Run History UI MVP
+
+Status: Completed and merged
+
+PR:
+
+- PR #26: feat: add AI agent run history UI MVP
+
+Merge commit:
+
+- 40e6382a63444c02b14a9630e92ef13bfa8477ed
+
+Scope:
+
+- Added customer-facing AI 分析记录 navigation.
+- Added read-only AI agent run history list and detail APIs backed by `ai_agent_runs`.
+- Added AI run history filters and safe detail drawer.
+- Added safe operational summary display for provider, source, status, period, theme, warning count, and section count.
+- Persisted generated section titles only.
+- Kept raw prompt text and raw model response bodies out of persisted run history and UI.
+- Kept endpoint, API key, secret, payload JSON, normalized JSON, extra JSON, and config JSON out of history responses and UI.
+- Added documentation for AI run history safety boundary.
+- Did not add lifecycle mutation, notification dispatch, RAG, risk scoring, or provider runtime behavior changes.
+
+Safety boundary:
+
+- History responses expose safe operational summaries only.
+- No raw prompt is stored or displayed by this stage.
+- No raw model response body is stored or displayed by this stage.
+- No endpoint, API key, secret, payload JSON, normalized JSON, extra JSON, or config JSON is exposed.
+- Technical values remain either mapped to customer-facing labels or kept in safe/default-collapsed technical details.
+
+Validation:
+
+- mvn -pl edsp-core -am test: 201 tests, 0 failures, 1 skipped
+- npm.cmd run build
+- python -m pytest: 11 passed
+- docker compose -p edsp config --quiet
+- docker compose --profile ai -p edsp config --quiet
+- git diff --check
+- local container/browser smoke completed for list page, AI page entry, safe detail drawer, desktop and narrow viewport, new run section titles, and forbidden visible field scan
+
+Follow-up:
+
+- AI run history can later support export or richer analytics, but only after security boundaries remain intact.
+
+## AI Agent Security Guard MVP
+
+Status: Completed and merged
+
+PR:
+
+- PR #27: feat: add AI agent security guard
+
+Merge commit:
+
+- 4ce1d53bd406d2c0999d1da07c3c8fa8aa8daafa
+
+Scope:
+
+- Added explicit Python AI safety policy for prompt injection and unsafe response detection.
+- Added redaction coverage for credentials, endpoints, HTTP URLs, JDBC URLs, payload JSON, and config JSON.
+- Added Java final-response validation so unsafe Python output is replaced with fixed safe sections before persistence.
+- Kept unsafe model text out of `ai_agent_runs`.
+- Preserved the read-only AI boundary.
+- Did not add lifecycle mutation, notification dispatch, SQL execution, DB migration, workflow changes, or Compose changes.
+
+Attack corpus covered:
+
+- API key exfiltration
+- Bearer token exfiltration
+- SQL execution requests
+- raw payload requests
+- webhook and notification trigger requests
+- alert lifecycle mutation claims
+- file and shell access requests
+- endpoint, URL, JDBC URL, and unsupported administrator identity claims
+- safe negative raw-payload summary regression coverage
+
+Fallback behavior:
+
+- Python provider response guard uses the existing safe template fallback with `provider_fallback_used`.
+- Java persistence guard uses fixed `ai_agent_response_guard_fallback` warning and error code.
+- Unsafe model text is never persisted to `ai_agent_runs`.
+
+Validation:
+
+- python -m compileall .
+- python -m pytest: 35 passed
+- mvn -pl edsp-core -am test: 202 passed, 1 skipped
+- npm.cmd run build
+- docker compose --profile ai -p edsp_ai_security_guard config --quiet
+- docker compose --profile ai -p edsp_ai_security_guard build ai-agent-service
+- scripts/verify-ai-agent-runtime-smoke.ps1
+- git diff --check
+
+Current AI Agent platform capability after this stage:
+
+- AI platform foundation service is available.
+- AI runtime smoke verification is available.
+- AI provider configuration readiness UI is available.
+- AI run history list and detail view are available.
+- AI run history stores and displays only safe summaries.
+- API key and secret exposure are blocked from customer-facing AI views.
+- Prompt injection and unsafe response guardrails are in place.
+- Java final-response validation protects persisted AI run history.
+- AI remains read-only and cannot close alerts, send notifications, mutate rules, execute SQL, or perform automated actions.
+
+Known constraints:
+
+- This stage does not implement RAG.
+- This stage does not implement page-based API key persistence.
+- This stage does not implement vector storage.
+- This stage does not implement user behavior baseline.
+- This stage does not implement AI risk scoring to alert decisions.
+- This stage does not allow AI to directly mutate business state.
+
+Next recommended stage:
+
+- AI Agent RAG Readiness MVP
+
+Suggested next-stage focus:
+
+- Define safe RAG source contract.
+- Define source reference structure.
+- Add read-only knowledge source readiness APIs.
+- Restrict RAG inputs to safe summaries only.
+- Do not expose raw payload, raw prompt, raw response, secrets, config JSON, normalized JSON, extra JSON, endpoint values, or authorization headers.
+- Verify prompt injection guard cannot be bypassed through retrieved context.
+- Keep RAG readiness separate from full vector database implementation unless explicitly approved.

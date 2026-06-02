@@ -53,6 +53,13 @@ def test_policy_declares_all_required_categories():
     assert {category.value for category in PolicyCategory} == EXPECTED_POLICY_CATEGORIES
 
 
+def test_response_policy_allows_safe_negative_raw_payload_summary():
+    summary = "No raw payload data was exposed."
+
+    assert evaluate_text(summary) == ()
+    assert validate_sections([{"title": "Sync Path", "content": summary}])
+
+
 def test_unsafe_model_output_falls_back_without_returning_attack(monkeypatch):
     class FakeResponse:
         def raise_for_status(self):

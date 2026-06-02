@@ -57,7 +57,7 @@ TEXT_RULES = (
         PolicyCategory.RAW_PAYLOAD_REQUEST,
         re.compile(
             r"(?i)(payload_json|normalized_json|extra_json|config_json|\braw[_ -]?events?\b|"
-            r"\braw[_ -]?payload\b|\bsource[_ -]?config\b|\bprovider[_ -]?config\b|\bmodel[_ -]?config\b)"
+            r"(?<!no )\braw[_ -]?payload\b|\bsource[_ -]?config\b|\bprovider[_ -]?config\b|\bmodel[_ -]?config\b)"
         ),
     ),
     (

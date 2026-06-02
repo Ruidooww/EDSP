@@ -1525,3 +1525,62 @@ Suggested next-stage focus:
 - Review:
   - no unresolved P0 or P1 findings
 - Recommended next stage: `User Behavior Baseline Readiness MVP`, focused on safe entity-key assessment, aggregate feature candidates, privacy and data minimization, baseline windows, and a deterministic SQL/Java-first implementation path.
+
+## Current Stage Status (latest)
+
+- Current stable branch: `master`
+- Current stage: `User Behavior Baseline Readiness MVP`
+- Latest feature merge commit: `dfcfc07 merge: user behavior baseline readiness mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for user behavior baseline readiness mvp`
+- Stage branch: `codex/user-behavior-baseline-readiness-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/30`
+- Stage result: completed a docs-only safe user or entity behavior baseline readiness assessment without implementing baseline tables, migrations, computation jobs, schedulers, scoring endpoints, alert decision writes, AI-generated risk scores, raw timeline export, PII enrichment, frontend pages, Docker Compose changes, workflow changes, or AI agent service changes.
+- Current normalized-event evidence:
+  - `standard_events.source_system`, `standard_events.occurred_at`, `standard_events.severity`, `standard_events.actor`, `standard_events.subject_type`, and `standard_events.subject_ref` are first-class columns
+  - `alert_decisions.standard_event_id`, `alert_decisions.decision`, and `alert_decisions.severity` support deterministic matched-decision aggregates after joining normalized events
+  - `alerts.standard_event_id`, `alerts.alert_decision_id`, `alerts.status`, and `alerts.severity` support deterministic alert aggregates after joining normalized events
+  - `ingestion_plan_sync_runs.data_source_id`, `ingestion_plan_sync_runs.status`, and count fields support source-level sync quality summaries only
+- Candidate entity-key assessment:
+  - `source_system` is available as a safe grouping dimension, not a user identity
+  - `user_id`, `account_id`, `employee_id`, `device_id`, `department`, and `role` remain `needs follow-up`
+  - metadata candidate recognition is not a stable baseline identity contract
+  - `actor`, `subject_type`, and `subject_ref` require an approved mapping contract before use as a stable pseudonymous entity key
+- Safe aggregate feature candidates:
+  - event count per entity per day
+  - high-risk event count per entity per day
+  - after-hours ratio
+  - source-system diversity
+  - alert count per entity
+  - matched-decision count per entity
+  - source-level failed-sync summaries
+  - severity distribution
+- Privacy and data-minimization contract:
+  - use aggregate-only storage and model context
+  - prefer pseudonymous entity keys
+  - do not enrich PII without explicit approval
+  - do not export raw payloads or raw user timelines to a model
+  - do not aggregate unreviewed `normalized_json` or `extra_json` blobs
+  - keep device and user baselines distinct
+- Recommended future baseline path:
+  - approve a versioned pseudonymous entity mapping contract
+  - validate deterministic SQL aggregates against normalized events
+  - add Java-owned idempotent daily aggregate persistence only in a separately approved stage with an explicit migration
+  - add AI explanation only after deterministic aggregates and scoring are approved
+- Scope boundary:
+  - no machine-learning model
+  - no baseline computation job
+  - no scheduler
+  - no scoring endpoint
+  - no alert decision write path
+  - no migration
+  - no raw timeline export
+  - no PII enrichment
+- Verification:
+  - `mvn -pl edsp-core -am test` passed (`202 tests`, `0 failures`, `1 skipped`)
+  - `npm.cmd run build` passed with only the existing Vite chunk-size warning
+  - `docker compose -p edsp config --quiet` passed
+  - `git diff --check` passed
+  - docs-only boundary check passed: only `docs/user-behavior-baseline-readiness.md`
+- Review:
+  - no unresolved P0 or P1 findings
+- Recommended next stage: `AI Risk Scoring To Alert Decisions MVP`, gated on an approved deterministic entity and aggregate feature contract and preserving the rule that alerts are not written directly.

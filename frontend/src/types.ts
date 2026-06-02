@@ -52,6 +52,35 @@ export interface AiAgentRecentRun {
   started_at: string;
 }
 
+export interface AiAgentRunHistoryRow {
+  id: number;
+  agentKey: string;
+  providerKey: string;
+  theme: string;
+  period: string;
+  status: string;
+  source: string;
+  sectionCount: number;
+  warningCount: number;
+  startedAt?: string | number | null;
+  finishedAt?: string | number | null;
+  durationMs?: number | null;
+}
+
+export interface AiAgentRunHistoryDetail extends AiAgentRunHistoryRow {
+  modelName?: string | null;
+  inputSummary: {
+    metricKeys: string[];
+    sensitiveFieldsExcluded: boolean;
+  };
+  outputSummary: {
+    sectionCount: number;
+    titles: string[];
+  };
+  warnings: string[];
+  errorCode?: string | null;
+}
+
 export interface DataSourceRow {
   id: number;
   name: string;

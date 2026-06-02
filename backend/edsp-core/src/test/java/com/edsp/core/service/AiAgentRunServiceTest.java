@@ -1,6 +1,7 @@
 package com.edsp.core.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import com.edsp.core.config.AiAgentProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,6 +37,12 @@ class AiAgentRunServiceTest {
         assertEquals("fallback-template", result.source());
         assertEquals(1L, jdbcTemplate.queryForObject("select count(*) from ai_agent_runs", Long.class));
         assertEquals(1, service.recent(10).size());
+        var outputSummary = jdbcTemplate.queryForObject(
+            "select output_summary_json from ai_agent_runs limit 1",
+            String.class
+        );
+        assertEquals(true, outputSummary.contains("\"titles\":[\"安全态势概览\"]"));
+        assertFalse(outputSummary.contains("安全聚合摘要"));
     }
 
     private static class StubContextService extends AiAgentContextService {

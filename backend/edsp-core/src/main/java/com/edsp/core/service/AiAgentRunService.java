@@ -49,7 +49,10 @@ public class AiAgentRunService {
             """,
             request.agentKey(), request.providerKey(), request.theme(), request.period(),
             response.status(), response.source(), json(context),
-            json(Map.of("sectionCount", response.sections().size())),
+            json(Map.of(
+                "sectionCount", response.sections().size(),
+                "titles", response.sections().stream().map(PythonAiAgentClient.Section::title).toList()
+            )),
             json(response.warnings()), startedAt, Timestamp.from(Instant.now())
         );
         return response;

@@ -3,6 +3,7 @@ import {
   Alert as AntAlert,
   Button,
   Card,
+  Collapse,
   Form,
   Input,
   InputNumber,
@@ -18,8 +19,9 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost, apiPut } from '../api';
+import AdvancedDetailsCollapse from '../components/AdvancedDetailsCollapse';
+import NextStepHint from '../components/NextStepHint';
 import type {
-  RuleDecision,
   RuleEvaluationDecisionRow,
   RuleEvaluationRunRequest,
   RuleEvaluationRunResult,
@@ -27,6 +29,15 @@ import type {
   RuleRow,
   Severity,
 } from '../types';
+import {
+  formatBusinessTime,
+  getEventTypeLabel,
+  getRuleDecisionColor,
+  getRuleDecisionLabel,
+  getRuleScenarioLabel,
+  getSeverityColor,
+  getSeverityLabel,
+} from '../utils/businessDisplay';
 
 interface RuleFormValues {
   name: string;
@@ -56,36 +67,23 @@ interface StructuredRuleExpression {
 }
 
 const eventTypeOptions = [
-  { value: 'file_operation', label: 'file_operation' },
-  { value: 'file_transfer', label: 'file_transfer' },
-  { value: 'device_operation', label: 'device_operation' },
-  { value: 'data_access', label: 'data_access' },
-  { value: 'account_activity', label: 'account_activity' },
+  { value: 'file_operation', label: getEventTypeLabel('file_operation') },
+  { value: 'file_transfer', label: getEventTypeLabel('file_transfer') },
+  { value: 'device_operation', label: getEventTypeLabel('device_operation') },
+  { value: 'data_access', label: getEventTypeLabel('data_access') },
+  { value: 'account_activity', label: getEventTypeLabel('account_activity') },
 ];
 
 const severityOptions: Array<{ value: Severity; label: string }> = [
-  { value: 'critical', label: 'critical' },
-  { value: 'high', label: 'high' },
-  { value: 'medium', label: 'medium' },
-  { value: 'low', label: 'low' },
-  { value: 'info', label: 'info' },
+  { value: 'critical', label: getSeverityLabel('critical') },
+  { value: 'high', label: getSeverityLabel('high') },
+  { value: 'medium', label: getSeverityLabel('medium') },
+  { value: 'low', label: getSeverityLabel('low') },
+  { value: 'info', label: getSeverityLabel('info') },
 ];
 
-const decisionColors: Record<RuleDecision, string> = {
-  matched: 'red',
-  not_matched: 'default',
-  skipped: 'gold',
-  error: 'volcano',
-};
-
 function severityColor(value?: string) {
-  return {
-    critical: 'red',
-    high: 'orange',
-    medium: 'gold',
-    low: 'green',
-    info: 'cyan',
-  }[value ?? ''] ?? 'default';
+  return getSeverityColor(value);
 }
 
 function ruleEventType(row: RuleRow) {
@@ -101,7 +99,7 @@ function decisionRuleId(row: RuleEvaluationDecisionRow) {
 }
 
 function decisionRuleName(row: RuleEvaluationDecisionRow) {
-  return row.ruleName ?? row.rule_name ?? `#${decisionRuleId(row) ?? '-'}`;
+  return row.ruleName ?? row.rule_name ?? '规则待确认';
 }
 
 function decisionRiskScore(row: RuleEvaluationDecisionRow) {
@@ -140,19 +138,16 @@ function parseRuleExpression(expression: string): Partial<StructuredRuleExpressi
 }
 
 function formatDate(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  return new Date(value).toLocaleString();
+  return formatBusinessTime(value);
 }
 
 function evaluationSummary(result?: RuleEvaluationRunResult) {
   if (!result) {
     return '尚未执行';
   }
-  return `evaluated ${result.evaluatedCount}, matched ${result.matchedCount ?? 0}, not_matched ${
+  return `已评估 ${result.evaluatedCount} 条事件，命中 ${result.matchedCount ?? 0} 条，未命中 ${
     result.notMatchedCount ?? 0
-  }, skipped ${result.skippedCount ?? 0}, error ${result.errorCount ?? 0}`;
+  } 条，跳过 ${result.skippedCount ?? 0} 条，异常 ${result.errorCount ?? 0} 条`;
 }
 
 export default function RulesPage() {
@@ -169,7 +164,7 @@ export default function RulesPage() {
     () =>
       rows
         .filter((row) => row.enabled)
-        .map((row) => ({ value: row.id, label: `${row.name} (#${row.id})` })),
+        .map((row) => ({ value: row.id, label: row.name })),
     [rows],
   );
 
@@ -261,75 +256,85 @@ export default function RulesPage() {
       render: (value: string, row) => (
         <div>
           <strong>{value}</strong>
-          <span className="table-subtext">{ruleEventType(row)}</span>
+          <span className="table-subtext">{getEventTypeLabel(ruleEventType(row))}</span>
         </div>
       ),
     },
     {
-      title: '配置',
+      title: '适用场景',
       dataIndex: 'expression',
-      width: 240,
-      render: (expression: string) => {
-        const model = parseRuleExpression(expression);
-        return (
-          <div>
-            <span>riskScore &gt;= {model.threshold?.value ?? '-'}</span>
-            <span className="table-subtext">minSeverity: {model.minSeverity ?? '-'}</span>
-          </div>
-        );
-      },
+      width: 260,
+      render: (_, row) => getRuleScenarioLabel(row),
     },
     {
-      title: '输出等级',
+      title: '风险等级',
       dataIndex: 'severity',
       width: 110,
-      render: (value) => <Tag color={severityColor(value)}>{value}</Tag>,
+      render: (value) => <Tag color={severityColor(value)}>{getSeverityLabel(value)}</Tag>,
     },
     {
-      title: '状态',
+      title: '启用状态',
       dataIndex: 'enabled',
-      width: 90,
-      render: (value, row) => <Switch size="small" checked={value} onChange={(checked) => toggleEnabled(row, checked)} />,
+      width: 160,
+      render: (value, row) => (
+        <Space direction="vertical" size={2}>
+          <Switch size="small" checked={value} onChange={(checked) => toggleEnabled(row, checked)} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {value ? '参与自动规则决策' : '暂不参与自动规则决策'}
+          </Typography.Text>
+        </Space>
+      ),
     },
   ];
 
   const decisionColumns: ColumnsType<RuleEvaluationDecisionRow> = [
     {
-      title: 'standardEventId',
-      width: 150,
-      render: (_, row) => decisionStandardEventId(row) ?? '-',
-    },
-    {
       title: '规则',
       render: (_, row) => decisionRuleName(row),
     },
     {
-      title: 'decision',
+      title: '评估结果',
       width: 130,
       dataIndex: 'decision',
-      render: (value: RuleDecision) => <Tag color={decisionColors[value] ?? 'default'}>{value}</Tag>,
+      render: (value: string) => <Tag color={getRuleDecisionColor(value)}>{getRuleDecisionLabel(value)}</Tag>,
     },
     {
-      title: 'reason',
+      title: '原因',
       dataIndex: 'reason',
       width: 190,
       render: (value?: string) => value ?? '-',
     },
     {
-      title: 'severity',
+      title: '风险等级',
       dataIndex: 'severity',
       width: 110,
-      render: (value?: string) => <Tag color={severityColor(value)}>{value ?? '-'}</Tag>,
+      render: (value?: string) => <Tag color={severityColor(value)}>{getSeverityLabel(value)}</Tag>,
     },
     {
-      title: 'riskScore',
+      title: '风险评分',
       width: 110,
       render: (_, row) => decisionRiskScore(row) ?? '-',
     },
     {
-      title: 'createdAt',
+      title: '生成时间',
       width: 190,
       render: (_, row) => formatDate(decisionCreatedAt(row)),
+    },
+    {
+      title: '技术详情',
+      width: 160,
+      render: (_, row) => (
+        <AdvancedDetailsCollapse
+          title="技术详情"
+          items={[
+            { label: 'standardEventId', value: decisionStandardEventId(row), code: true },
+            { label: 'ruleId', value: decisionRuleId(row), code: true },
+            { label: 'decision', value: row.decision, code: true },
+            { label: 'riskScore', value: decisionRiskScore(row), code: true },
+            { label: 'detail JSON', value: row.detail ?? row.detailJson ?? row.detail_json, code: true },
+          ]}
+        />
+      ),
     },
   ];
 
@@ -353,8 +358,9 @@ export default function RulesPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="本阶段只写入 alert_decisions，不创建 alerts，不触发通知。"
+          message="风险规则用于判断标准化事件是否达到告警条件。规则评估不会直接发送通知。"
         />
+        <NextStepHint description="优先确认高危规则是否启用；如需排查单条标准化事件，可展开下方高级工具补充评估。" />
 
         <Table<RuleRow>
           rowKey="id"
@@ -362,41 +368,73 @@ export default function RulesPage() {
           dataSource={rows}
           columns={ruleColumns}
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 720 }}
-          locale={{ emptyText: '暂无规则' }}
+          scroll={{ x: 820 }}
+          expandable={{
+            expandedRowRender: (row) => {
+              const model = parseRuleExpression(row.expression);
+              return (
+                <AdvancedDetailsCollapse
+                  title="高级规则条件"
+                  items={[
+                    { label: 'expression', value: row.expression, code: true },
+                    { label: 'ruleId', value: row.id, code: true },
+                    { label: 'riskScoreThreshold', value: model.threshold?.value, code: true },
+                    { label: 'minSeverity', value: model.minSeverity, code: true },
+                    { label: 'eventType', value: ruleEventType(row), code: true },
+                  ]}
+                />
+              );
+            },
+            rowExpandable: () => true,
+          }}
+          locale={{ emptyText: '暂无规则。请先新增风险规则，或等待系统导入规则模板。' }}
         />
       </Card>
 
-      <Card className="ops-card" title="手动执行规则评估">
-        <Form layout="inline" form={evaluationForm} onFinish={runEvaluation}>
-          <Form.Item
-            name="standardEventId"
-            label="standardEventId"
-            rules={[{ required: true, message: '请输入 standardEventId' }]}
-          >
-            <InputNumber min={1} precision={0} style={{ width: 180 }} />
-          </Form.Item>
-          <Form.Item name="ruleId" label="ruleId">
-            <Select
-              allowClear
-              showSearch
-              options={ruleOptions}
-              placeholder="全部启用规则"
-              style={{ width: 240 }}
-              optionFilterProp="label"
-            />
-          </Form.Item>
-          <Form.Item name="operatorName" label="operatorName">
-            <Input placeholder="ops-user" style={{ width: 160 }} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />}>
-              执行规则评估
-            </Button>
-          </Form.Item>
-        </Form>
-        <Typography.Text className="table-subtext">{evaluationSummary(lastResult)}</Typography.Text>
-      </Card>
+      <Collapse
+        className="advanced-details-collapse"
+        items={[
+          {
+            key: 'manual-rule-evaluation',
+            label: '高级工具：立即执行规则评估',
+            children: (
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <Typography.Text type="secondary">
+                  用于运营管理员对指定标准事件进行补评估。普通告警处理无需使用该工具。
+                </Typography.Text>
+                <Form layout="inline" form={evaluationForm} onFinish={runEvaluation} initialValues={{ operatorName: 'admin' }}>
+                  <Form.Item
+                    name="standardEventId"
+                    label="标准化事件编号（高级）"
+                    rules={[{ required: true, message: '请输入标准化事件编号' }]}
+                  >
+                    <InputNumber min={1} precision={0} style={{ width: 220 }} placeholder="例如：123，可从技术详情复制" />
+                  </Form.Item>
+                  <Form.Item name="ruleId" label="规则范围">
+                    <Select
+                      allowClear
+                      showSearch
+                      options={ruleOptions}
+                      placeholder="全部启用规则"
+                      style={{ width: 240 }}
+                      optionFilterProp="label"
+                    />
+                  </Form.Item>
+                  <Form.Item name="operatorName" hidden>
+                    <Input />
+                  </Form.Item>
+                  <Form.Item>
+                    <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />}>
+                      执行规则评估
+                    </Button>
+                  </Form.Item>
+                </Form>
+                <Typography.Text className="table-subtext">{evaluationSummary(lastResult)}</Typography.Text>
+              </Space>
+            ),
+          },
+        ]}
+      />
 
       <Card className="ops-card" title="最近评估结果">
         <Table<RuleEvaluationDecisionRow>
@@ -405,31 +443,31 @@ export default function RulesPage() {
           dataSource={decisions}
           columns={decisionColumns}
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 980 }}
-          locale={{ emptyText: '暂无评估结果' }}
+          scroll={{ x: 1080 }}
+          locale={{ emptyText: '暂无评估结果。规则命中后会在这里显示最近决策结果。' }}
         />
       </Card>
 
       <Modal title="新增规则" open={open} onOk={submit} onCancel={() => setOpen(false)} okText="保存" width={680}>
         <Form layout="vertical" form={form}>
           <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
-            <Input placeholder="例如：High risk file operation" />
+            <Input placeholder="例如：敏感文件外发风险" />
           </Form.Item>
 
           <div className="rule-form-grid">
-            <Form.Item name="eventType" label="event_type" rules={[{ required: true, message: '请选择 event_type' }]}>
+            <Form.Item name="eventType" label="适用事件类型" rules={[{ required: true, message: '请选择事件类型' }]}>
               <Select options={eventTypeOptions} suffixIcon={<SafetyCertificateOutlined />} />
             </Form.Item>
-            <Form.Item name="severity" label="decision severity" rules={[{ required: true, message: '请选择输出等级' }]}>
+            <Form.Item name="severity" label="输出风险等级" rules={[{ required: true, message: '请选择输出等级' }]}>
               <Select options={severityOptions} />
             </Form.Item>
           </div>
 
           <div className="rule-form-grid">
-            <Form.Item name="minSeverity" label="minSeverity" rules={[{ required: true, message: '请选择 minSeverity' }]}>
+            <Form.Item name="minSeverity" label="最低事件等级" rules={[{ required: true, message: '请选择最低事件等级' }]}>
               <Select options={severityOptions} />
             </Form.Item>
-            <Form.Item name="threshold" label="riskScore 阈值" rules={[{ required: true, message: '请输入阈值' }]}>
+            <Form.Item name="threshold" label="风险评分阈值" rules={[{ required: true, message: '请输入阈值' }]}>
               <InputNumber min={0} max={100} precision={0} addonBefore=">=" />
             </Form.Item>
           </div>

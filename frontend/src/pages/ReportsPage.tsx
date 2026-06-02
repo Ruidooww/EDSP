@@ -7,11 +7,15 @@ import {
   SafetyCertificateOutlined,
   ScheduleOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Checkbox, Form, Input, Modal, Progress, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Checkbox, Form, Input, Modal, Progress, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost } from '../api';
+import AdvancedDetailsCollapse from '../components/AdvancedDetailsCollapse';
+import BusinessStatusTag from '../components/BusinessStatusTag';
+import NextStepHint from '../components/NextStepHint';
 import type { OverviewData, ReportJobRow } from '../types';
+import { formatBusinessTime, getPeriodLabel, getReportStatus } from '../utils/businessDisplay';
 
 interface ReportFormValues {
   title: string;
@@ -62,33 +66,11 @@ function reportTypeLabel(value: string) {
 }
 
 function statusTag(value: string) {
-  if (['completed', 'success', 'done'].includes(value)) {
-    return <Tag color="success">已生成</Tag>;
-  }
-  if (['running', 'processing'].includes(value)) {
-    return <Tag color="processing">生成中</Tag>;
-  }
-  if (['failed', 'error'].includes(value)) {
-    return <Tag color="error">失败</Tag>;
-  }
-  return <Tag>待生成</Tag>;
+  return <BusinessStatusTag status={getReportStatus(value)} />;
 }
 
 function formatTime(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  const normalizedValue = typeof value === 'number' && value < 100000000000 ? value * 1000 : value;
-  const date = new Date(normalizedValue);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatBusinessTime(value);
 }
 
 export default function ReportsPage() {
@@ -126,7 +108,7 @@ export default function ReportsPage() {
       reportType: type,
       period: 'today',
       scope: 'all',
-      includeRaw: true,
+      includeRaw: false,
       recipients: '',
     });
     setOpen(true);
@@ -160,7 +142,7 @@ export default function ReportsPage() {
 
   function downloadReport(row: ReportJobRow) {
     if (!row.file_path) {
-      message.info('该任务还没有生成文件');
+      message.info('该报表尚未生成文件，请稍后刷新或重新生成');
       return;
     }
     window.open(row.file_path, '_blank');
@@ -200,7 +182,19 @@ export default function ReportsPage() {
     {
       title: '文件',
       dataIndex: 'file_path',
-      render: (value) => value ? <Typography.Text code>{value}</Typography.Text> : <Tag>未生成</Tag>,
+      render: (value, row) => value ? (
+        <Space direction="vertical" size={4}>
+          <Tag color="success">文件已准备</Tag>
+          <AdvancedDetailsCollapse
+            title="文件技术详情"
+            items={[
+              { label: 'file_path', value: row.file_path, code: true },
+              { label: 'reportType', value: row.report_type, code: true },
+              { label: 'status', value: row.status, code: true },
+            ]}
+          />
+        </Space>
+      ) : <Tag>未生成</Tag>,
     },
     {
       title: '操作',
@@ -218,18 +212,18 @@ export default function ReportsPage() {
     <div className="reports-page">
       <div className="ops-heading">
         <div>
-          <h3 className="ant-typography">报表中心</h3>
-          <span>生成运营汇总、告警处置、外部接入巡检和审计材料</span>
+          <h3 className="ant-typography">报表交付</h3>
+          <span>下载安全运营日报、告警处置跟踪、通知投递统计和合规审计材料。</span>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新
           </Button>
           <Button icon={<CloudDownloadOutlined />} href="/api/reports/exports/empty-template">
-            空模板
+            下载空模板
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreate()}>
-            新建任务
+            生成演示报告
           </Button>
         </Space>
       </div>
@@ -274,13 +268,14 @@ export default function ReportsPage() {
       </Card>
 
       <Card className="ops-card" title="报表任务">
+        <NextStepHint description="没有可下载文件时，请先从常用模板生成报表；生成失败时可重新生成后再下载交付。" />
         <Table<ReportJobRow>
           rowKey="id"
           loading={loading}
           dataSource={rows}
           columns={columns}
           scroll={{ x: 920 }}
-          locale={{ emptyText: '暂无报表任务，可以先从上方模板创建。' }}
+          locale={{ emptyText: '暂无报表任务。可以先从上方模板创建第一份交付报表。' }}
         />
       </Card>
 
@@ -300,7 +295,7 @@ export default function ReportsPage() {
             reportType: 'risk_summary',
             period: 'today',
             scope: 'all',
-            includeRaw: true,
+            includeRaw: false,
           }}
         >
           <Form.Item name="title" label="报表名称" rules={[{ required: true, message: '请输入报表名称' }]}>
@@ -314,8 +309,8 @@ export default function ReportsPage() {
               <Select
                 options={[
                   { value: 'today', label: '今日' },
-                  { value: 'last_7_days', label: '近 7 天' },
-                  { value: 'last_30_days', label: '近 30 天' },
+                  { value: 'last_7_days', label: getPeriodLabel('last_7_days') },
+                  { value: 'last_30_days', label: getPeriodLabel('last_30_days') },
                   { value: 'custom', label: '自定义周期' },
                 ]}
               />
@@ -331,7 +326,7 @@ export default function ReportsPage() {
             </Form.Item>
           </Space>
           <Form.Item name="includeRaw" valuePropName="checked">
-            <Checkbox>包含明细数据 Sheet</Checkbox>
+            <Checkbox>包含明细数据 Sheet（高级交付）</Checkbox>
           </Form.Item>
           <Form.Item name="recipients" label="发送对象">
             <Input.TextArea rows={3} placeholder="可填写接收人或邮箱，多个用换行或逗号分隔" />

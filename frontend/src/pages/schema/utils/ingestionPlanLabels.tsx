@@ -2,7 +2,7 @@ import { Space, Tag } from 'antd';
 import type { ReactNode } from 'react';
 
 export const STANDARD_FIELD_LABELS: Record<string, string> = {
-  externalId: '外部告警 ID',
+  externalId: '外部告警编号',
   title: '告警标题',
   severity: '风险等级',
   occurredAt: '发生时间',
@@ -10,7 +10,7 @@ export const STANDARD_FIELD_LABELS: Record<string, string> = {
   assetRef: '资产 / 终端',
   alertType: '事件类型',
   'detail.phone': '敏感手机号',
-  'detail.raw': '原始内容',
+  'detail.raw': '扩展详情',
   'detail.sourceFile': '来源文件',
 };
 

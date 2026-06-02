@@ -22,7 +22,7 @@ const SIGNAL_LABELS: Record<string, string> = {
   actor: '账号 / 操作人',
   asset_ref: '资产 / 终端',
   title: '告警标题',
-  external_id: '外部事件 ID',
+  external_id: '外部事件编号',
   policy_name: '策略 / 规则',
   result: '处理结果',
   subject_ref: '目标对象',
@@ -123,7 +123,7 @@ export default function IngestionPlanReasonDrawer({
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {plan.reasons.map((reason) => <li key={reason}>{reason}</li>)}
               </ul>
-            ) : '后端未返回详细原因'}
+            ) : '系统暂未返回详细原因'}
           </IngestionPlanDetailSection>
           <IngestionPlanDetailSection title="模板信号依据">
             {renderTemplateSignalSection(plan)}
@@ -139,7 +139,9 @@ export default function IngestionPlanReasonDrawer({
                       {renderWrappedTag(STANDARD_FIELD_LABELS[mapping.standardField] || mapping.standardField || '-', 'success')}
                       {mapping.confidence !== undefined && <Typography.Text type="secondary">{formatConfidence(mapping.confidence)}</Typography.Text>}
                     </Space>
-                    <Typography.Text type="secondary" style={{ wordBreak: 'break-word' }}>{mapping.reason || mapping.transformRule || '未返回单字段原因'}</Typography.Text>
+                    <Typography.Text type="secondary" style={{ wordBreak: 'break-word' }}>
+                      {mapping.reason || (mapping.transformRule ? '已配置转换规则' : '未返回单字段原因')}
+                    </Typography.Text>
                   </div>
                 ))}
               </div>

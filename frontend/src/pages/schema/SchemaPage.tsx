@@ -98,13 +98,13 @@ const FIELD_PRESETS: Record<MetadataCollectValues['collectMode'], SuggestedField
     { fieldName: 'alertName', fieldType: 'string', nullable: false, sampleValue: '邮件外发包含敏感附件', description: '接口告警名称', standardField: 'title', transformRule: '直接映射' },
     { fieldName: 'level', fieldType: 'string', nullable: false, sampleValue: 'medium', description: '接口风险等级', standardField: 'severity', transformRule: '等级标准化' },
     { fieldName: 'operator', fieldType: 'string', nullable: true, sampleValue: 'lisi', description: '操作账号', standardField: 'actor', transformRule: '直接映射' },
-    { fieldName: 'payload', fieldType: 'json', nullable: true, sampleValue: '{}', description: '原始扩展内容', standardField: 'detail.raw', transformRule: '保留原始 JSON' },
+    { fieldName: 'payload', fieldType: 'json', nullable: true, sampleValue: '{}', description: '扩展内容', standardField: 'detail.raw', transformRule: '保留扩展详情' },
   ],
   file_sample: [
     { fieldName: 'source_file', fieldType: 'varchar', nullable: false, sampleValue: '2026-05-audit.csv', description: '来源文件', standardField: 'detail.sourceFile', transformRule: '写入详情' },
     { fieldName: 'row_hash', fieldType: 'varchar', nullable: false, sampleValue: 'b3c7e9', description: '行指纹', standardField: 'externalId', transformRule: '作为去重键' },
     { fieldName: 'event_time', fieldType: 'datetime', nullable: true, sampleValue: '2026-05-20 10:00:00', description: '事件时间', standardField: 'occurredAt', transformRule: '时间格式转换' },
-    { fieldName: 'raw_payload', fieldType: 'text', nullable: true, sampleValue: '{}', description: '原始内容', standardField: 'detail.raw', transformRule: '保留原始行' },
+    { fieldName: 'raw_payload', fieldType: 'text', nullable: true, sampleValue: '{}', description: '扩展内容', standardField: 'detail.raw', transformRule: '保留扩展详情' },
   ],
   manual_patch: [
     { fieldName: 'external_id', fieldType: 'varchar', nullable: false, sampleValue: 'MANUAL-001', description: '外部编号', standardField: 'externalId', transformRule: '直接映射' },
@@ -201,6 +201,15 @@ function scanStatusTag(value?: string) {
     return <Tag color="error">失败</Tag>;
   }
   return <Tag>{value || '未开始'}</Tag>;
+}
+
+function scanTypeLabel(value?: string) {
+  return {
+    auto_scan: '自动结构发现',
+    sample_json: '样例解析',
+    file_sample: '文件样例',
+    manual_patch: '人工补录',
+  }[value || ''] ?? '结构发现';
 }
 
 function changeTypeTag(value?: string) {
@@ -486,13 +495,13 @@ export default function SchemaPage() {
         payload,
       );
       await loadPlans();
-      message.success('规则已保存。请重新执行 Shadow Run 后再激活。');
+      message.success('规则已保存。请重新执行试运行后再启用。');
     } catch (error) {
       const messageText = error instanceof Error ? error.message : '';
       if (messageText.includes('409')) {
-        message.error('Active plans cannot be edited directly. Create a new draft before changing rules.');
+        message.error('已启用方案不能直接修改，请先生成新草稿后再调整规则。');
       } else {
-        message.error(messageText || 'Rule save failed.');
+        message.error(messageText || '规则保存失败。');
       }
       throw error;
     } finally {
@@ -508,9 +517,9 @@ export default function SchemaPage() {
       });
       setShadowValidationPlan(row);
       setShadowValidationReport(report);
-      message.success('试运行前校验 / Shadow Precheck 已完成');
+      message.success('试运行前校验已完成');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '试运行前校验 / Shadow Precheck 失败');
+      message.error(error instanceof Error ? error.message : '试运行前校验失败');
     } finally {
       setPlanActionId(null);
     }
@@ -525,7 +534,7 @@ export default function SchemaPage() {
       if (precheck.result !== 'passed' && precheck.result !== 'warning') {
         setShadowValidationPlan(row);
         setShadowValidationReport(precheck);
-        message.warning('试运行前校验未通过，未创建 Shadow Run');
+        message.warning('试运行前校验未通过，未创建试运行记录');
         return;
       }
       const run = await apiPost<IngestionPlanShadowRunRow>(`/api/core/ingestion-plans/${row.id}/shadow-runs`, {
@@ -536,12 +545,12 @@ export default function SchemaPage() {
       setShadowRunPlan(row);
       setShadowRunReport(run);
       if (run.status === 'failed' || run.status === 'blocked') {
-        message.warning('Shadow Run 已完成，请查看报告中的异常原因');
+        message.warning('试运行已完成，请查看报告中的异常原因');
       } else {
-        message.success('Shadow Run 试运行已完成');
+        message.success('试运行已完成');
       }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Shadow Run 试运行失败');
+      message.error(error instanceof Error ? error.message : '试运行失败');
     } finally {
       setPlanActionId(null);
     }
@@ -579,7 +588,7 @@ export default function SchemaPage() {
     const planStatus = normalizePlan(row).status;
     const shadowRunId = getShadowRunId(latestShadowRun);
     if (!shadowRunId || !canActivatePlan(planStatus, latestShadowRun, currentActivation)) {
-      message.warning('只有最新 Shadow Run status 为 passed，且方案状态为 approved 或 shadow_ready 时才允许启用');
+      message.warning('只有最新试运行通过，且方案已批准或已进入试运行准备时才允许启用');
       return;
     }
 
@@ -587,7 +596,7 @@ export default function SchemaPage() {
       title: '启用方案',
       content: (
         <div>
-          <p>将基于 Shadow Run #{shadowRunId} 启用当前推荐接入方案。</p>
+          <p>将基于最新通过的试运行记录启用当前推荐接入方案。</p>
           <p>启用后仅生成启用审计记录，不会立即采集数据或产生告警。</p>
         </div>
       ),
@@ -599,14 +608,14 @@ export default function SchemaPage() {
           await apiPost<IngestionPlanActivationRow>(`/api/core/ingestion-plans/${row.id}/activations`, {
             shadowRunId,
             operatorName: 'admin',
-            reason: 'Activation gate confirmed in frontend',
+            reason: '前端确认启用门禁',
           });
           message.success('方案已启用，仅生成启用审计记录');
           await loadPlans();
         } catch (error) {
           const messageText = error instanceof Error ? error.message : '';
           if (isStaleShadowRunActivationError(messageText)) {
-            message.error('当前 Shadow Run 已过期，请重新执行 Shadow Run 后再激活。');
+            message.error('当前试运行记录已过期，请重新执行试运行后再启用。');
           } else {
             message.error(messageText || '方案启用失败');
           }
@@ -621,7 +630,7 @@ export default function SchemaPage() {
     const planId = getActivationPlanId(activation);
     Modal.confirm({
       title: '停用方案',
-      content: '停用只会调用 deactivate 接口，不会修改 Precheck / Shadow Run / 状态机。',
+      content: '停用只会更新启用记录，不会修改校验记录、试运行报告或方案审核状态。',
       okText: '停用',
       okButtonProps: { danger: true },
       cancelText: '取消',
@@ -630,7 +639,7 @@ export default function SchemaPage() {
         try {
           await apiPost<IngestionPlanActivationRow>(`/api/core/ingestion-plan-activations/${activation.id}/deactivate`, {
             operatorName: 'admin',
-            reason: 'Deactivated in frontend',
+            reason: '前端停用方案',
           });
           message.success('方案已停用');
           await loadPlans();
@@ -645,16 +654,16 @@ export default function SchemaPage() {
 
   function syncOncePlan(row: IngestionPlanRow, activation: IngestionPlanActivationRow) {
     if (!canSyncOnce(activation)) {
-      message.warning('只有 active activation 可以执行手动同步一次');
+      message.warning('只有已启用方案可以立即同步一次');
       return;
     }
 
     Modal.confirm({
-      title: '手动同步一次',
+      title: '立即同步一次',
       content: (
         <div>
-          <p>将通过 active activation #{activation.id} 执行一次正式同步。</p>
-          <p>本操作会写入 raw_events / standard_events，并为新增 standard_events 自动生成 alert_decisions；不会创建 alerts，也不会触发 notifications。</p>
+          <p>将基于当前已启用方案执行一次正式同步。</p>
+          <p>本操作只负责接收外部事件、完成标准化并执行规则评估；不会直接创建告警，也不会触发通知。</p>
         </div>
       ),
       okText: '执行同步',
@@ -678,7 +687,7 @@ export default function SchemaPage() {
           } else if (run.status === 'blocked' || run.status === 'failed') {
             message.error('手动同步未通过，请查看同步结果');
           } else {
-            message.success('手动同步完成，已写入 raw_events / standard_events 并评估新增事件规则');
+            message.success('同步完成，已接收外部事件、完成标准化并评估新增事件规则');
           }
         } catch (error) {
           message.error(error instanceof Error ? error.message : '手动同步失败');
@@ -705,7 +714,7 @@ export default function SchemaPage() {
     schedule?: IngestionPlanSyncScheduleRow | null,
   ) {
     if (!canSyncOnce(activation)) {
-      message.warning('只有 active activation 可以配置定时同步');
+      message.warning('只有已启用方案可以配置定时同步');
       return;
     }
     syncScheduleForm.setFieldsValue({
@@ -744,7 +753,7 @@ export default function SchemaPage() {
   function pauseSyncSchedule(row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) {
     Modal.confirm({
       title: '暂停定时同步',
-      content: '暂停后不会执行该 schedule；next_run_at 会保留，后续可恢复。',
+      content: '暂停后将停止自动执行，后续可随时恢复。',
       okText: '暂停',
       cancelText: '取消',
       onOk: async () => {
@@ -767,7 +776,7 @@ export default function SchemaPage() {
   function resumeSyncSchedule(row: IngestionPlanRow, schedule: IngestionPlanSyncScheduleRow) {
     Modal.confirm({
       title: '恢复定时同步',
-      content: '恢复后 next_run_at 会设置为当前时间，轮询器会尽快执行一次。',
+      content: '恢复后系统会尽快安排下一次同步。',
       okText: '恢复',
       cancelText: '取消',
       onOk: async () => {
@@ -997,7 +1006,7 @@ export default function SchemaPage() {
       render: (value: string, row) => (
         <div>
           <strong>{value}</strong>
-          <span className="table-subtext">{row.scan_type}</span>
+          <span className="table-subtext">{scanTypeLabel(row.scan_type)}</span>
         </div>
       ),
     },
@@ -1189,7 +1198,7 @@ export default function SchemaPage() {
           type="info"
           showIcon
           message="定时同步边界"
-          description="执行后会写入 raw_events / standard_events，并为新增 standard_events 自动生成 alert_decisions；不会创建 alerts，也不会触发 notifications。"
+          description="执行后只负责接收外部事件、完成标准化并执行规则评估；不会直接创建告警，也不会触发通知。"
         />
         <Form form={syncScheduleForm} layout="vertical">
           <Form.Item

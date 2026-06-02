@@ -1161,6 +1161,61 @@ body {
   padding: 16px 24px 10px !important;
 }
 
+.advanced-details-collapse.ant-collapse {
+  background: #ffffff;
+  border: 1px solid #e4ebf4;
+  border-radius: 9px;
+}
+
+.advanced-details-collapse .ant-collapse-header {
+  color: #4b5565 !important;
+  font-weight: 600;
+}
+
+.advanced-details-body {
+  min-width: 0;
+}
+
+.next-step-hint {
+  margin: 12px 0;
+}
+
+.business-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.business-summary-item {
+  min-width: 0;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e4ebf4;
+  border-radius: 8px;
+}
+
+.business-summary-item span {
+  display: block;
+  color: #7a8798;
+  font-size: 12px;
+}
+
+.business-summary-item strong {
+  display: block;
+  margin-top: 5px;
+  color: #111827;
+  overflow-wrap: anywhere;
+}
+
+.delivery-placeholder {
+  padding: 18px;
+  color: #697586;
+  text-align: center;
+  background: #f8fafc;
+  border: 1px dashed #d7e0ec;
+  border-radius: 10px;
+}
+
 .advanced-config-note {
   display: block;
   margin-bottom: 14px;

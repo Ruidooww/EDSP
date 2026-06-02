@@ -16,7 +16,17 @@ import { Button, Card, Collapse, Form, InputNumber, Select, Space, Steps, Table,
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiPost } from '../api';
+import NextStepHint from '../components/NextStepHint';
 import type { AlertRow, DataSourceRow, NotificationChannelRow, Severity } from '../types';
+import {
+  formatBusinessTime,
+  getAlertStatus,
+  getConnectionKindLabel,
+  getDataSourceTypeLabel,
+  getEventTypeLabel,
+  getSeverityColor,
+  getSeverityLabel,
+} from '../utils/businessDisplay';
 
 interface IntegrationFormValues {
   dataSourceId: number;
@@ -48,23 +58,11 @@ function encode(value: string | number) {
 }
 
 function severityColor(value?: Severity | string) {
-  return {
-    critical: 'red',
-    high: 'red',
-    medium: 'orange',
-    low: 'gold',
-    info: 'cyan',
-  }[value ?? ''] ?? 'default';
+  return getSeverityColor(value);
 }
 
 function severityLabel(value?: Severity | string) {
-  return {
-    critical: '严重',
-    high: '高危',
-    medium: '中危',
-    low: '低危',
-    info: '提示',
-  }[value ?? ''] ?? (value || '-');
+  return getSeverityLabel(value);
 }
 
 function statusTag(status?: string) {
@@ -78,24 +76,15 @@ function statusTag(status?: string) {
 }
 
 function formatTime(value?: string | number) {
-  if (!value) {
-    return '-';
-  }
-  const normalizedValue = typeof value === 'number' && value < 100000000000 ? value * 1000 : value;
-  const date = new Date(normalizedValue);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatBusinessTime(value);
 }
 
 function isDemoSource(source?: DataSourceRow) {
   return !!source && (source.name.toLowerCase().includes('demo') || source.source_type === 'database');
+}
+
+function alertSourceLabel(value?: string) {
+  return value ? '外部系统已记录' : '来源待确认';
 }
 
 export default function AlertSyncPage() {
@@ -251,7 +240,6 @@ export default function AlertSyncPage() {
   );
 
   const selectedSource = sources.find((row) => row.id === form.getFieldValue('dataSourceId')) ?? sources[0];
-  const selectedIsDemo = isDemoSource(selectedSource);
   const activeChannels = channels.filter((row) => row.enabled).length;
   const highRiskAlerts = alerts.filter((row) => row.severity === 'critical' || row.severity === 'high').length;
   const todayKey = new Date().toISOString().slice(0, 10);
@@ -265,7 +253,7 @@ export default function AlertSyncPage() {
         <div>
           <strong>{title}</strong>
           <span className="table-subtext">
-            {row.source_system || 'external'} / {row.alert_type || 'standard'}
+            {alertSourceLabel(row.source_system)} / {getEventTypeLabel(row.alert_type)}
           </span>
         </div>
       ),
@@ -289,7 +277,15 @@ export default function AlertSyncPage() {
     },
     { title: '策略', dataIndex: 'policy_name', width: 200, render: (value) => value || '-' },
     { title: '发生时间', dataIndex: 'occurred_at', width: 150, render: formatTime },
-    { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag>{value || '-'}</Tag> },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (value) => {
+        const display = getAlertStatus(value);
+        return <Tag color={display.color}>{display.label}</Tag>;
+      },
+    },
   ];
 
   return (
@@ -297,7 +293,7 @@ export default function AlertSyncPage() {
       <div className="ops-heading">
         <div>
           <h3 className="ant-typography">外部系统接入</h3>
-          <span>连接本地化系统数据库，持续心跳检测、采集预警并推送通知</span>
+          <span>连接本地化系统数据库，持续检测连接状态、采集预警并进入运营处置流程</span>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={loadBaseData}>
@@ -312,11 +308,17 @@ export default function AlertSyncPage() {
         </Space>
       </div>
 
+      <NextStepHint
+        type="info"
+        message="演示建议"
+        description="先选择数据源做一次心跳检测，再执行采集。通道状态只展示当前通知配置是否可用于后续演示。"
+      />
+
       <div className="integration-status-grid">
         <Card className="ops-card integration-status-card">
           <span>外部系统</span>
           <strong>{selectedSource?.name || '未配置'}</strong>
-          <small>{selectedSource?.source_type || '-'} / {selectedSource?.connection_kind || '-'}</small>
+          <small>{getDataSourceTypeLabel(selectedSource?.source_type)} / {getConnectionKindLabel(selectedSource?.connection_kind)}</small>
           <div>{statusTag(heartbeat?.status || selectedSource?.status)}</div>
         </Card>
         <Card className="ops-card integration-status-card">
@@ -416,7 +418,7 @@ export default function AlertSyncPage() {
                 icon: <SafetyCertificateOutlined />,
               },
               {
-                title: '通知推送',
+                title: '通知准备',
                 description: activeChannels > 0 ? `已启用 ${activeChannels} 个通知通道` : '等待配置通知通道',
                 icon: <SendOutlined />,
               },

@@ -1,4 +1,6 @@
-from app.models import AgentRunRequest
+from datetime import UTC, datetime
+
+from app.models import AgentRunRequest, ProviderTestResponse
 from app.providers.base import Provider
 
 
@@ -24,4 +26,13 @@ class FallbackProvider(Provider):
             {"title": "通知准备度", "content": f"已记录通知投递 {metrics.notificationDeliveryCount} 条。本分析不会自动发送通知。"},
             {"title": "建议动作", "content": "优先人工复核高危开放告警，并检查失败决策和 warning 同步运行。"},
         ]
+
+    def test_connection(self, display_name: str) -> ProviderTestResponse:
+        return ProviderTestResponse(
+            providerKey=self.key,
+            displayName=display_name,
+            status="passed",
+            message="安全模板可用。",
+            testedAt=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
 

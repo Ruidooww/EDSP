@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 
+from app import main
 from app.main import app
 from app.safety.redaction import redact
 from app.safety.response_guard import validate_sections
+from app.providers.registry import ProviderRegistry
 from app.providers.openai_compatible import OpenAiCompatibleProvider
 from app.settings import Settings
 
@@ -83,3 +85,84 @@ def test_local_provider_rejects_remote_endpoint_by_default():
         settings.local_openai_base_url, "", "local-model", settings,
     )
     assert provider.descriptor()["enabled"] is False
+
+
+def test_provider_test_unknown_returns_400():
+    response = client.post("/agent/providers/unknown/test")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_ai_provider_key"
+
+
+def test_provider_test_fallback_returns_passed_without_secret_fields():
+    response = client.post("/agent/providers/fallback-template/test")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["providerKey"] == "fallback-template"
+    assert payload["status"] == "passed"
+    serialized = str(payload).lower()
+    assert "api_key" not in serialized
+    assert "authorization" not in serialized
+    assert "bearer" not in serialized
+    assert "sk-" not in serialized
+
+
+def test_provider_test_cloud_missing_api_key_returns_sanitized_failed_message():
+    old_registry = main.registry
+    main.registry = ProviderRegistry(Settings(
+        cloud_openai_enabled=True,
+        cloud_openai_base_url="https://model.example/v1/chat/completions",
+        cloud_openai_api_key="",
+        cloud_openai_model="secure-model",
+    ))
+    try:
+        response = client.post("/agent/providers/cloud-openai-compatible/test")
+    finally:
+        main.registry = old_registry
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    serialized = str(payload).lower()
+    assert "api_key" not in serialized
+    assert "authorization" not in serialized
+    assert "bearer" not in serialized
+    assert "sk-" not in serialized
+
+
+def test_provider_test_cloud_success_uses_minimal_prompt_without_leaking_key(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    def fake_post(url, headers, json, timeout):
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("app.providers.openai_compatible.httpx.post", fake_post)
+    old_registry = main.registry
+    main.registry = ProviderRegistry(Settings(
+        cloud_openai_enabled=True,
+        cloud_openai_base_url="https://model.example/v1/chat/completions",
+        cloud_openai_api_key="demo-key",
+        cloud_openai_model="secure-model",
+    ))
+    try:
+        response = client.post("/agent/providers/cloud-openai-compatible/test")
+    finally:
+        main.registry = old_registry
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "passed"
+    assert calls[0]["headers"]["Authorization"] == "Bearer demo-key"
+    assert calls[0]["json"]["messages"][0]["content"] == "Return OK only."
+    serialized = str(payload).lower()
+    assert "demo-key" not in serialized
+    assert "authorization" not in serialized
+    assert "https://model.example" not in serialized

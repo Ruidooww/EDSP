@@ -103,7 +103,7 @@ function renderPage(page: PageKey, onNavigate: (page: PageKey) => void) {
     case 'aiAgents':
       return <AiAgentPage />;
     case 'settings':
-      return <SettingsPage />;
+      return <SettingsPage onNavigate={onNavigate} />;
     default:
       return <DashboardPage onNavigate={onNavigate} />;
   }

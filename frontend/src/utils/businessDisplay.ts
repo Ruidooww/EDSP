@@ -85,6 +85,28 @@ export function getAiRunStatus(status?: string): StatusDisplay {
   return statuses[status || ''] ?? { label: '状态待确认', color: 'default' };
 }
 
+export function getProviderConfigStatus(configured: boolean): StatusDisplay {
+  return configured
+    ? { label: '已配置', color: 'success' }
+    : { label: '未配置', color: 'warning' };
+}
+
+export function getProviderEnabledStatus(enabled: boolean): StatusDisplay {
+  return enabled
+    ? { label: '已启用', color: 'success' }
+    : { label: '未启用', color: 'default' };
+}
+
+export function getProviderTestStatus(status?: string): StatusDisplay {
+  const statuses: Record<string, StatusDisplay> = {
+    passed: { label: '测试通过', color: 'success' },
+    failed: { label: '测试失败', color: 'error' },
+    unknown: { label: '尚未测试', color: 'default' },
+    testing: { label: '测试中', color: 'processing' },
+  };
+  return statuses[status || ''] ?? { label: '尚未测试', color: 'default' };
+}
+
 export function getPeriodLabel(period?: string) {
   return {
     today: '今日',

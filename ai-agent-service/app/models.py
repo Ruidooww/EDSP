@@ -56,3 +56,11 @@ class AgentRunResponse(BaseModel):
     sections: list[Section]
     warnings: list[str] = []
 
+
+class ProviderTestResponse(BaseModel):
+    providerKey: str
+    displayName: str
+    status: Literal["passed", "failed"]
+    message: str
+    testedAt: str
+

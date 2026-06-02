@@ -4,10 +4,13 @@ import com.edsp.core.config.AiAgentProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -20,6 +23,10 @@ public class PythonAiAgentClient {
         "(?i)(https?://|select\\s+.+\\s+from|insert\\s+into|update\\s+\\w+\\s+set|delete\\s+from|"
             + "token\\s*[:=]|secret\\s*[:=]|password\\s*[:=]|api[_-]?key\\s*[:=]|authorization\\s*[:=]|"
             + "已执行|已关闭告警|已发送通知)"
+    );
+    private static final Pattern UNSAFE_MESSAGE_PATTERN = Pattern.compile(
+        "(?i)(https?://\\S+|authorization\\b\\S*|bearer\\s+\\S+|sk-[a-z0-9._-]+|"
+            + "api[_-]?key\\s*[:=]?\\s*\\S+|token\\s*[:=]\\s*\\S+|secret\\s*[:=]\\s*\\S+|password\\s*[:=]\\s*\\S+)"
     );
 
     private final ObjectMapper objectMapper;
@@ -71,6 +78,56 @@ public class PythonAiAgentClient {
 
     private boolean flag(Object value) {
         return Boolean.TRUE.equals(value);
+    }
+
+    public ProviderTestResult testProvider(String providerKey) {
+        try {
+            var encodedKey = URLEncoder.encode(providerKey, StandardCharsets.UTF_8);
+            var httpRequest = HttpRequest.newBuilder(URI.create(properties.baseUrl() + "/agent/providers/" + encodedKey + "/test"))
+                .timeout(Duration.ofMillis(properties.timeoutMs()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                .build();
+            var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() / 100 != 2) {
+                return providerTestFailed(providerKey);
+            }
+            var payload = objectMapper.readValue(response.body(), MAP_TYPE);
+            return safeProviderTest(providerKey, payload);
+        } catch (Exception ex) {
+            return providerTestFailed(providerKey);
+        }
+    }
+
+    private ProviderTestResult safeProviderTest(String providerKey, Map<String, Object> payload) {
+        var status = "passed".equals(string(payload.get("status"))) ? "passed" : "failed";
+        var responseProviderKey = string(payload.get("providerKey"));
+        var testedAt = string(payload.get("testedAt"));
+        return new ProviderTestResult(
+            responseProviderKey.isBlank() ? providerKey : responseProviderKey,
+            string(payload.get("displayName")),
+            status,
+            sanitizeMessage(string(payload.get("message"))),
+            testedAt.isBlank() ? Instant.now().toString() : testedAt
+        );
+    }
+
+    private ProviderTestResult providerTestFailed(String providerKey) {
+        return new ProviderTestResult(
+            providerKey,
+            "",
+            "failed",
+            "模型连接测试暂不可用，请稍后重试。",
+            Instant.now().toString()
+        );
+    }
+
+    private String sanitizeMessage(String message) {
+        var text = message == null || message.isBlank()
+            ? "模型连接测试失败，请检查配置。"
+            : message;
+        var sanitized = UNSAFE_MESSAGE_PATTERN.matcher(text).replaceAll("[redacted]");
+        return sanitized.isBlank() ? "模型连接测试失败，请检查配置。" : sanitized;
     }
 
     public AgentResponse run(AgentRequest request) {
@@ -145,5 +202,13 @@ public class PythonAiAgentClient {
         String status,
         List<Section> sections,
         List<String> warnings
+    ) {}
+
+    public record ProviderTestResult(
+        String providerKey,
+        String displayName,
+        String status,
+        String message,
+        String testedAt
     ) {}
 }

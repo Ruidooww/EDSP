@@ -1,12 +1,28 @@
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
-export interface AiAgentProvider {
-  key: string;
-  type: string;
+export interface AiAgentProviderConfig {
+  providerKey: string;
+  displayName: string;
+  providerType: string;
   enabled: boolean;
   baseUrlConfigured: boolean;
   apiKeyConfigured: boolean;
+  apiKeyMask: string;
   modelConfigured: boolean;
+  modelDisplay: string;
+  lastTestStatus: 'passed' | 'failed' | 'unknown';
+  lastTestMessage: string;
+  editableInUi: boolean;
+  configureHint: string;
+  testable: boolean;
+}
+
+export interface AiAgentProviderTestResult {
+  providerKey: string;
+  displayName: string;
+  status: 'passed' | 'failed';
+  message: string;
+  testedAt: string;
 }
 
 export interface AiAgentSection {

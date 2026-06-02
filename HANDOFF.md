@@ -1297,3 +1297,57 @@ Suggested focus areas:
   - historical rows created before this stage do not contain section titles; the UI intentionally degrades to `暂无章节标题`
   - local and enterprise cloud provider availability still depends on external OpenAI-compatible service readiness
 - Recommended next stage: `AI Agent Security Review / Prompt Injection Guard MVP`, focused on explicit policy categories, prompt injection corpus coverage, response safety fallback, no unsafe persistence, and audit-safe warning codes.
+
+## Current Stage Status (latest)
+
+- Current stable branch: `master`
+- Current stage: `AI Agent Security Review / Prompt Injection Guard MVP`
+- Latest feature merge commit: `4ce1d53 merge: ai agent security prompt injection guard mvp`
+- Latest HANDOFF docs commit: this commit `docs: update handoff for ai agent security prompt injection guard mvp`
+- Stage branch: `codex/ai-agent-security-prompt-injection-guard-mvp`
+- PR: `https://github.com/Ruidooww/EDSP/pull/27`
+- Stage result: hardened the existing read-only AI analysis path with explicit Python safety policy categories, prompt injection corpus coverage, redaction, response fallback, and a Java persistence guard without adding AI capabilities.
+- Python safety policy:
+  - added explicit categories for secret exfiltration, endpoint exposure, raw payload requests, SQL generation, action execution claims, file access requests, shell execution requests, notification triggers, lifecycle mutation requests, unsupported identity claims, and unsafe URL output
+  - prompt construction permits allowlisted aggregate count keys only
+  - unsafe model output uses the existing safe template fallback with fixed warning code `provider_fallback_used`
+  - redaction covers credentials, bearer tokens, endpoint assignments, HTTP URLs, JDBC URLs, payload JSON, and config JSON
+  - safe negative summaries such as `No raw payload data was exposed.` remain allowed
+- Java persistence guard:
+  - `AiAgentRunService` validates response metadata alignment, allowed source and status values, section count, title and content length, unsafe summary patterns, and warning-code format before return or persistence
+  - unsafe Python responses are replaced with static safe sections
+  - Java fallback persists fixed warning and error code `ai_agent_response_guard_fallback`
+  - unsafe model text is not persisted in `ai_agent_runs`
+- Attack corpus:
+  - covers API key and bearer exfiltration, SQL and raw payload requests, notification triggers, alert lifecycle mutation, file and shell access, endpoint and JDBC URL exposure, action execution claims, and unsupported administrator identity claims
+  - includes regression coverage for safe negative raw-payload summary wording
+- Logging boundary:
+  - no new logging was added
+  - raw prompt text, raw model response bodies, provider endpoints, API keys, payload JSON, config JSON, and secret-bearing stack traces remain outside logs
+- Scope boundary:
+  - no migration
+  - no `docker-compose.yml` changes
+  - no workflow changes
+  - no frontend changes
+  - no alert lifecycle mutation, notification dispatch, RAG, file reading, shell execution, or arbitrary SQL execution capability was added
+- Verification (local):
+  - `python -m compileall .` passed
+  - `python -m pytest` passed (`35 tests`, `4` FastAPI dependency deprecation warnings)
+  - `mvn -pl edsp-core -am test` passed (`202 tests`, `0 failures`, `1 skipped`)
+  - `npm.cmd run build` passed with only the existing Vite chunk-size warning
+  - `docker compose --profile ai -p edsp_ai_security_guard config --quiet` passed
+  - `docker compose --profile ai -p edsp_ai_security_guard build ai-agent-service` passed
+  - `./scripts/verify-ai-agent-runtime-smoke.ps1 -FrontendPort 18240 -AiAgentPort 18245 -MockPort 11436 -CollectLogsOnFailure -FinalAction Stop -ReadyAttempts 90` passed
+  - `git diff --check` passed
+- PR checks:
+  - EDSP CI: success
+  - Docker Compose build: success
+  - Transform Runtime Smoke: success
+  - AI Agent Runtime Smoke: success
+- Review:
+  - no unresolved P0 or P1 findings
+  - CI initially exposed an over-broad raw-payload regex; `7c7f042 fix: allow safe negative raw payload summary` narrowed the rule while preserving real request blocking
+- Known risks:
+  - policy detection remains deterministic pattern-based hardening, not a semantic model-security system
+  - local and enterprise cloud provider availability still depends on external OpenAI-compatible service readiness
+- Recommended next stage: `AI Agent RAG Readiness MVP`, focused on retrieval boundaries, source allowlists, chunk metadata, citation-safe summaries, and keeping all AI actions read-only.

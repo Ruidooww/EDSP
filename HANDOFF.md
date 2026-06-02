@@ -1135,3 +1135,66 @@ Clean master before continuing.
   - Provider-specific text summary storage remains JSON-text compatible; optional JSONB schema hardening should remain a separate migration stage if needed.
   - Local and cloud providers still depend on external OpenAI-compatible service readiness.
 - Recommended next stage: `AI Agent Foundation Hardening MVP`, focused on invalid `providerKey -> 400`, no Python call, no fallback, and targeted regression coverage. Keep optional JSONB schema hardening separate unless explicitly scoped.
+
+## EDSP User Delivery Experience MVP
+
+Status: Completed and merged
+
+PR:
+
+- PR #23: improve EDSP user delivery experience
+- Latest feature merge commit: `d06b777d58f5afaf8afdb0a9387d7f421c1690a1 merge: EDSP user delivery experience mvp`
+
+Scope:
+
+- Converted key frontend pages from engineering/debug wording to delivery-ready business wording.
+- Replaced user-visible provider/status/theme/range/raw labels with customer-facing labels.
+- Moved internal IDs, raw payloads, provider keys, rule/debug metadata, and technical status values into default-collapsed advanced/details sections.
+- Improved AI analysis page display labels, recent run table labels, fallback wording, and empty states.
+- Improved alert detail readability by separating business summary, evidence, status, and technical details.
+- Improved metadata snapshot guidance with clearer next-step language.
+- Improved rule center display so business users see rule purpose, scenario, risk level, and status instead of raw expressions by default.
+- Improved notification and API fallback error wording.
+- Added reusable frontend display helpers and customer-facing UI components.
+
+Important fix after review:
+
+- Notification secret backfill confirmation now uses:
+  - user-facing display phrase: 确认迁移
+  - backend API contract phrase: `EXECUTE_NOTIFICATION_SECRET_BACKFILL`
+- This preserves backend compatibility while keeping the UI customer-facing.
+
+Validation:
+
+- `npm.cmd run build`
+- `mvn -pl edsp-core -am test`
+- `docker compose -p edsp config --quiet`
+- `docker compose --profile ai -p edsp config --quiet`
+- `git diff --check`
+- EDSP CI: success
+- Transform Runtime Smoke: success
+
+Engineering-field audit:
+
+- Task 0 engineering-field audit completed before refactor.
+- Post-fix CodeGraph scan completed over `frontend/src`.
+- Post-fix recursive keyword fallback scan completed over `frontend/src` `.tsx`/`.ts`/`.css` files.
+- No known default-visible engineering-field residuals after review.
+- Remaining technical/API fields are retained only in backend contract code, frontend DTOs, mapping helpers, or default-collapsed advanced/admin details.
+
+Known optional follow-up:
+
+- Notification retry toast still displays internal record number, for example: `投递记录 #id`.
+- This is non-blocking and can be handled in a later UI polish pass.
+
+Next recommended stage:
+
+- AI Agent Foundation Contract Hardening MVP
+
+Suggested focus areas:
+
+- invalid `providerKey` should return clear 400 semantics
+- AI provider contract validation
+- safer request/response boundary
+- provider/fallback behavior should remain auditable
+- no backend behavior expansion beyond contract hardening

@@ -1,4 +1,4 @@
-import { ReloadOutlined, RobotOutlined } from '@ant-design/icons';
+import { HistoryOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Col, Form, Row, Select, Space, Table, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../api';
@@ -42,7 +42,7 @@ function providerReady(provider: AiAgentProviderConfig) {
   return true;
 }
 
-export default function AiAgentPage() {
+export default function AiAgentPage({ onNavigate }: { onNavigate?: (page: 'aiAgentHistory') => void }) {
   const [providers, setProviders] = useState<AiAgentProviderConfig[]>([]);
   const [recent, setRecent] = useState<AiAgentRecentRun[]>([]);
   const [result, setResult] = useState<AiAgentRunResult>();
@@ -94,7 +94,10 @@ export default function AiAgentPage() {
             基于安全告警、规则决策和同步链路生成只读运营建议，不会修改告警状态，也不会发送通知。
           </Typography.Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+        <Space>
+          <Button icon={<HistoryOutlined />} onClick={() => onNavigate?.('aiAgentHistory')}>查看运行记录</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+        </Space>
       </div>
 
       <Alert type="info" showIcon message="智能体只读取聚合指标，不会修改告警状态，也不会发送通知。" />

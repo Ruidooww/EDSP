@@ -9,6 +9,7 @@ import {
   DatabaseOutlined,
   DownOutlined,
   FileExcelOutlined,
+  HistoryOutlined,
   LockOutlined,
   LoginOutlined,
   NotificationOutlined,
@@ -33,6 +34,7 @@ import DataSourcesPage from './pages/DataSourcesPage';
 import NotificationsPage from './pages/NotificationsPage';
 import ReportsPage from './pages/ReportsPage';
 import AiAgentPage from './pages/AiAgentPage';
+import AiAgentRunHistoryPage from './pages/AiAgentRunHistoryPage';
 import RulesPage from './pages/RulesPage';
 import SchemaPage from './pages/SchemaPage';
 import SettingsPage from './pages/SettingsPage';
@@ -51,6 +53,7 @@ type PageKey =
   | 'rules'
   | 'notifications'
   | 'aiAgents'
+  | 'aiAgentHistory'
   | 'reports'
   | 'settings';
 
@@ -71,6 +74,7 @@ const navItems: MenuProps['items'] = [
   { key: 'rules', icon: <AuditOutlined />, label: '规则中心' },
   { key: 'notifications', icon: <NotificationOutlined />, label: '通知中心' },
   { key: 'aiAgents', icon: <RobotOutlined />, label: 'AI 运营建议' },
+  { key: 'aiAgentHistory', icon: <HistoryOutlined />, label: 'AI 分析记录' },
   { key: 'reports', icon: <FileExcelOutlined />, label: '报表交付' },
   { key: 'settings', icon: <SettingOutlined />, label: '设置' },
 ];
@@ -101,7 +105,9 @@ function renderPage(page: PageKey, onNavigate: (page: PageKey) => void) {
     case 'reports':
       return <ReportsPage />;
     case 'aiAgents':
-      return <AiAgentPage />;
+      return <AiAgentPage onNavigate={onNavigate} />;
+    case 'aiAgentHistory':
+      return <AiAgentRunHistoryPage />;
     case 'settings':
       return <SettingsPage onNavigate={onNavigate} />;
     default:

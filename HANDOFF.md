@@ -1584,3 +1584,208 @@ Suggested next-stage focus:
 - Review:
   - no unresolved P0 or P1 findings
 - Recommended next stage: `AI Risk Scoring To Alert Decisions MVP`, gated on an approved deterministic entity and aggregate feature contract and preserving the rule that alerts are not written directly.
+
+## AI Agent RAG Readiness Assessment
+
+Status: Completed and merged
+
+PR:
+
+- PR #29: docs: assess AI agent RAG readiness
+
+Merge commit:
+
+- 28af43ca5916ab9b164856d440739edc5dbd585d
+
+Scope:
+
+- Assessed AI Agent RAG readiness without implementing ingestion or retrieval.
+- Defined curated source allowlist.
+- Defined forbidden source boundaries.
+- Defined document classification expectations.
+- Defined redaction requirements for retrieved context.
+- Defined provenance and source reference direction.
+- Defined retrieval audit requirements.
+- Defined prompt-injection-through-retrieved-context handling.
+- Compared storage options.
+- Recommended a later curated-docs implementation path under `docs/knowledge-base/**`.
+
+Explicitly not implemented:
+
+- No vector database.
+- No embeddings.
+- No RAG runtime.
+- No file ingestion or upload.
+- No RAG API endpoints.
+- No database migration.
+- No Docker Compose vector service.
+- No workflow changes.
+- No production AI runtime change.
+
+Safe source contract:
+
+- Allowed sources must be reviewed public or internal-sanitized project documentation.
+- Forbidden sources include `.env`, secrets, raw source configs, database dumps, raw event payloads, private files, complete logs, notification endpoints, webhook URLs, authorization headers, payload JSON, config JSON, raw prompts, and raw model responses.
+
+Recommended future RAG implementation path:
+
+- Keep runtime implementation separate from readiness assessment.
+- Start with curated docs under `docs/knowledge-base/**`.
+- Prefer PostgreSQL `pgvector` only after explicit migration approval.
+- Preserve read-only AI behavior.
+- Reuse existing prompt guard, response guard, redaction guard, and persistence guard.
+- Treat retrieved context as untrusted data, not system instruction.
+
+Validation:
+
+- `mvn -pl edsp-core -am test`: `202 tests`, `0 failures`, `1 skipped`
+- `npm.cmd run build`
+- `docker compose -p edsp config --quiet`
+- `git diff --check`
+- docs-only boundary: `docs/ai-agent-rag-readiness.md`
+
+Known constraints:
+
+- RAG is not available as a production runtime capability yet.
+- There is no vector database or embedding pipeline yet.
+- There is no document upload or ingestion flow yet.
+- There is no RAG preview API yet.
+- There is no sourceReferences UI yet.
+- RAG must remain a separate explicitly approved implementation stage.
+
+## User Behavior Baseline Readiness Assessment
+
+Status: Completed and merged
+
+PR:
+
+- PR #30: docs: assess user behavior baseline readiness
+
+Merge commit:
+
+- dfcfc07ee60dff8ed5350752686671271b345cc1
+
+Scope:
+
+- Documented User Behavior Baseline Readiness MVP.
+- Inventoried current normalized event fields.
+- Identified candidate entity keys for behavior baseline analysis.
+- Defined safe deterministic aggregate candidates.
+- Defined forbidden inputs.
+- Recommended SQL validation before production implementation.
+- Recommended Java-owned idempotent daily aggregates after explicit contract and migration approval.
+
+Explicitly not implemented:
+
+- No baseline computation job.
+- No AI scoring.
+- No scoring endpoint.
+- No alert decision write path.
+- No database migration.
+- No workflow changes.
+- No Docker Compose changes.
+- No ai-agent-service changes.
+- No raw payload exposure.
+- No raw timeline exposure.
+- No PII enrichment.
+
+Readiness direction:
+
+- Future baseline work should use sanitized and normalized standard event fields.
+- Future baseline work should avoid raw payloads and raw timeline reconstruction.
+- Future baseline work should be deterministic and explainable before AI scoring is introduced.
+- Future baseline aggregates should be idempotent.
+- Future baseline persistence requires explicit migration approval.
+
+Forbidden inputs:
+
+- raw payload
+- raw timeline
+- PII enrichment
+- secrets
+- data source configs
+- notification endpoint configs
+- raw prompts
+- raw model responses
+- unreviewed free-text content
+- arbitrary SQL
+- AI-generated scoring as source of truth
+
+Validation:
+
+- `mvn -pl edsp-core -am test`
+- `npm.cmd run build`
+- `docker compose -p edsp config --quiet`
+- `git diff --check`
+
+Known constraints:
+
+- User behavior baseline is not available as a production computation job yet.
+- There is no baseline persistence table yet.
+- There is no baseline API yet.
+- There is no baseline UI yet.
+- There is no AI risk scoring integration yet.
+- There is no alert decision write path from baseline output.
+
+## Current AI Roadmap Status After PR #29 and PR #30
+
+Completed implementation stages:
+
+- AI Agent Platform Foundation Compose MVP
+- AI Agent Runtime Smoke Verification MVP
+- AI Agent Provider Configuration Readiness UI MVP
+- AI Agent Run History UI MVP
+- AI Agent Security Guard MVP
+
+Completed readiness assessment stages:
+
+- AI Agent RAG Readiness Assessment
+- User Behavior Baseline Readiness Assessment
+
+Important clarification:
+
+- PR #29 and PR #30 were docs-only readiness assessment PRs.
+- They did not add production RAG APIs, vector storage, embeddings, baseline computation jobs, baseline APIs, or baseline UI.
+- They should be treated as design and boundary preparation, not runtime feature completion.
+
+Current AI Agent platform capabilities:
+
+- AI platform foundation service is available.
+- AI provider configuration readiness UI is available.
+- AI runtime smoke verification is available.
+- AI run history list and detail view are available.
+- AI run history stores and displays only safe summaries.
+- Prompt injection guardrails are in place.
+- Unsafe response guardrails are in place.
+- Secret redaction guardrails are in place.
+- Java final-response validation protects persisted AI run history.
+- AI remains read-only and cannot close alerts, send notifications, mutate rules, execute SQL, or perform automated actions.
+
+Next recommended stage:
+
+- AI Risk Scoring To Alert Decisions Design MVP
+
+Suggested next-stage focus:
+
+- Produce a design-only PR before any production implementation.
+- Define risk scoring inputs.
+- Define dependency on User Behavior Baseline implementation.
+- Define dependency on rule decisions and alert decisions.
+- Define AI-allowed and AI-forbidden scoring boundaries.
+- Define explainability requirements.
+- Define audit requirements.
+- Define rollback and feature flag strategy.
+- Define why AI must not directly mutate alert decisions.
+- Define required future migrations separately.
+- Do not implement production risk scoring until baseline computation contract is approved.
+
+Recommended implementation guardrail:
+
+- Do not start production AI risk scoring directly after docs-only readiness.
+- First create a design PR for `AI Risk Scoring To Alert Decisions Design MVP`.
+- Production implementation should wait until:
+  - baseline aggregate contract is approved
+  - scoring input contract is approved
+  - alert decision write boundary is approved
+  - migration plan is approved
+  - safety review is approved
